@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -x \"${CLAUDE_PROJECT_DIR:-.}/bin/yactt\" ] || (cd \"${CLAUDE_PROJECT_DIR:-.}\" && go build -o bin/yactt ./cmd/yactt)"
+            "command": "if ! command -v yactt >/dev/null 2>&1 && [ ! -x \"${CLAUDE_PROJECT_DIR:-.}/bin/yactt\" ]; then (cd \"${CLAUDE_PROJECT_DIR:-.}\" && go build -o bin/yactt ./cmd/yactt); fi"
           }
         ]
       }

@@ -104,9 +104,8 @@ go.work.sum
 # env file
 .env
 
-# Local build artifacts for MCP wiring (see .mcp.json)
+# Local build artifact (SessionStart hook builds here if PATH lookup fails)
 /bin/yactt
-/bin/yactt-mcp-test
 
 ### macOS template
 # General
