@@ -162,7 +162,11 @@ func (r *Repo) LocateSymbol(nodeID id.ID) (file string, sym parser.Symbol, found
 		if len(entries) == 0 {
 			return "", parser.Symbol{}, false, ErrNotFound
 		}
-		// Find a method inside the class's source range.
+		// Find a method with the requested name *and* the requested receiver
+		// in the class's file. Two types in the same file can each declare a
+		// same-named method (e.g. `func (a *Alpha) Ping()` and
+		// `func (b *Beta) Ping()`); without the receiver check we'd return
+		// whichever the iteration order hit first.
 		for _, e := range entries {
 			if e.Sym.Kind != "type_declaration" {
 				continue
@@ -171,10 +175,7 @@ func (r *Repo) LocateSymbol(nodeID id.ID) (file string, sym parser.Symbol, found
 				continue
 			}
 			for _, m := range r.Symbols(e.File) {
-				if m.Kind != "method_declaration" || m.Name != name {
-					continue
-				}
-				if m.StartRow >= e.Sym.StartRow && m.EndRow <= e.Sym.EndRow {
+				if m.Kind == "method_declaration" && m.Name == name && m.Receiver == e.Sym.Name {
 					return e.File, m, true, nil
 				}
 			}

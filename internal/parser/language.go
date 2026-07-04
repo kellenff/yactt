@@ -113,7 +113,7 @@ func (Go) ModulePath(root *sitter.Node, source []byte) string {
 				continue
 			}
 			if gc.Type() == "package_identifier" {
-				return ch.Child(j + 1).Content(source)
+				return gc.Content(source)
 			}
 		}
 	}

@@ -182,6 +182,40 @@ func (r *Repo) Symbols(path string) []parser.Symbol {
 	return r.symbolsByPath[path]
 }
 
+// DocComment returns the contiguous `//` doc block immediately above the
+// symbol's declaration, or "" if there isn't one. Callers that need docs for
+// every symbol in a file should prefer DocComments — it amortizes the per-file
+// load across the whole declaration list.
+func (r *Repo) DocComment(path string, sym parser.Symbol) string {
+	f, err := r.CachedFile(path)
+	if err != nil {
+		return ""
+	}
+	return extractDocComment(f, sym)
+}
+
+// DocComments returns the doc block for every declaration in decls, keyed by
+// symbol name. Performs one CachedFile load for the whole batch so callers
+// iterating many symbols per path don't pay one os.Stat per symbol.
+//
+// Returns an empty map when the file can't be loaded; callers can treat the
+// result as "no doc available" without a separate error path. The map is
+// freshly allocated and safe for the caller to retain.
+func (r *Repo) DocComments(path string, decls []parser.Symbol) map[string]string {
+	out := make(map[string]string, len(decls))
+	f, err := r.CachedFile(path)
+	if err != nil {
+		return out
+	}
+	for _, sym := range decls {
+		if sym.Name == "" {
+			continue
+		}
+		out[sym.Name] = extractDocComment(f, sym)
+	}
+	return out
+}
+
 // SymbolsByPath returns a snapshot of every file's symbols.
 func (r *Repo) SymbolsByPath() map[string][]parser.Symbol {
 	r.mu.RLock()

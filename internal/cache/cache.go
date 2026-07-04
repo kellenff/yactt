@@ -41,6 +41,11 @@ type Cache struct {
 	semanticTTL time.Duration
 	summaryTTL  time.Duration
 
+	// now returns the current wall-clock time. Production callers see
+	// time.Now; tests in the same package can override it to drive TTL
+	// behaviour without sleeping.
+	now func() time.Time
+
 	files     map[string]*list.Element // path -> entry
 	fileOrder *list.List               // LRU; front = most-recently-used
 
@@ -82,6 +87,7 @@ func NewSized(fileCap, layerCap int) *Cache {
 		layerCap:    layerCap,
 		semanticTTL: DefaultSemanticTTL,
 		summaryTTL:  DefaultSummaryTTL,
+		now:         time.Now,
 		files:       make(map[string]*list.Element),
 		fileOrder:   list.New(),
 		layers:      make(map[layerKey]*list.Element),
@@ -148,7 +154,7 @@ func (c *Cache) GetLayer(nodeID, layer string) ([]byte, error) {
 	if layer == "summary" {
 		ttl = c.summaryTTL
 	}
-	if time.Since(entry.ts) > ttl {
+	if c.now().Sub(entry.ts) > ttl {
 		// Expired.
 		c.layerOrder.Remove(el)
 		delete(c.layers, entry.key)
@@ -168,11 +174,11 @@ func (c *Cache) PutLayer(nodeID, layer string, value []byte) {
 	if el, ok := c.layers[key]; ok {
 		entry := el.Value.(*layerEntry)
 		entry.value = value
-		entry.ts = time.Now()
+		entry.ts = c.now()
 		c.layerOrder.MoveToFront(el)
 		return
 	}
-	el := c.layerOrder.PushFront(&layerEntry{key: key, value: value, ts: time.Now()})
+	el := c.layerOrder.PushFront(&layerEntry{key: key, value: value, ts: c.now()})
 	c.layers[key] = el
 	if c.layerOrder.Len() > c.layerCap {
 		back := c.layerOrder.Back()

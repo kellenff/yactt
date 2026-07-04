@@ -80,9 +80,81 @@ func goFunctionSymbol(node *sitter.Node, source []byte, isMethod bool) (Symbol, 
 	start := int(node.StartPoint().Row)
 	end := int(node.EndPoint().Row) + 1
 	if isMethod {
-		return Symbol{Kind: "method_declaration", Name: name, StartRow: start, EndRow: end}, true
+		return Symbol{
+			Kind:     "method_declaration",
+			Name:     name,
+			StartRow: start,
+			EndRow:   end,
+			Receiver: goMethodReceiver(node, source),
+		}, true
 	}
 	return Symbol{Kind: "function_declaration", Name: name, StartRow: start, EndRow: end}, true
+}
+
+// goMethodReceiver extracts the local name of the receiver type from a
+// method_declaration node. It walks the FIRST parameter_list child (the
+// receiver — tree-sitter-go does not tag it with a field name; it's just the
+// parameter_list that comes before the function name), picks the first
+// `parameter_declaration`'s `type` field, and resolves it to a local
+// identifier. pointer_type indirection is followed; qualified_type yields the
+// rightmost identifier (the package prefix is discarded — receivers in this
+// package can only ever resolve against a local type_declaration). Returns ""
+// if the receiver shape is unrecognized.
+func goMethodReceiver(node *sitter.Node, source []byte) string {
+	if node == nil {
+		return ""
+	}
+	var recv *sitter.Node
+	for i := 0; i < int(node.ChildCount()); i++ {
+		if c := node.Child(i); c != nil && c.Type() == "parameter_list" {
+			recv = c
+			break
+		}
+	}
+	if recv == nil {
+		return ""
+	}
+	var param *sitter.Node
+	for i := 0; i < int(recv.ChildCount()); i++ {
+		if c := recv.Child(i); c != nil && c.Type() == "parameter_declaration" {
+			param = c
+			break
+		}
+	}
+	if param == nil {
+		return ""
+	}
+	return baseTypeName(param.ChildByFieldName("type"), source)
+}
+
+// baseTypeName resolves a tree-sitter type expression to its innermost
+// identifier. Handles type_identifier (bare T), pointer_type (*T, *pkg.T via
+// recursion), and qualified_type (pkg.T → T). Returns "" for any other shape.
+//
+// Note on pointer_type: tree-sitter-go does NOT tag its only named child
+// (the pointee) with a "type" field name — it's just an unnamed child after
+// the "*" token. We can't rely on ChildByFieldName; iterate the named
+// children and recurse on the first one that isn't a punctuation leaf.
+func baseTypeName(n *sitter.Node, source []byte) string {
+	if n == nil {
+		return ""
+	}
+	switch n.Type() {
+	case "type_identifier":
+		return n.Content(source)
+	case "pointer_type":
+		for i := 0; i < int(n.NamedChildCount()); i++ {
+			if c := n.NamedChild(i); c != nil {
+				return baseTypeName(c, source)
+			}
+		}
+	case "qualified_type":
+		// pkg.Name — take the rightmost type_identifier (the "name" field).
+		if name := n.ChildByFieldName("name"); name != nil {
+			return name.Content(source)
+		}
+	}
+	return ""
 }
 
 // goTypeSymbol reads a type_declaration node and extracts the type_spec child

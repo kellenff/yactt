@@ -20,6 +20,12 @@ type Symbol struct {
 	Name     string
 	StartRow int // 0-based byte row (tree-sitter convention)
 	EndRow   int // 0-based, exclusive
+
+	// Receiver is the local name of the receiver type, populated only for
+	// method_declaration symbols. For `func (s *Server) M()`, Receiver is
+	// "Server" — the package-qualified prefix (e.g. `pkg.Server`) is
+	// stripped, since cross-package resolution is out of scope for MVP.
+	Receiver string
 }
 
 // SymbolKind maps a parser.Symbol's grammar kind to the canonical

@@ -55,11 +55,14 @@ func Search(r *store.Repo, q Query) []Result {
 			continue
 		}
 		pkg := store.PackagePath(r.Root(), path)
+		// Bulk-fetch the doc for every symbol in this file in one CachedFile
+		// call. DocComment-per-symbol would stat the file N times per path.
+		docs := r.DocComments(path, decls)
 		for _, sym := range decls {
 			if !kindMatches(sym, q.Kind) {
 				continue
 			}
-			score, matched := scoreSymbol(sym, q, path, pkg)
+			score, matched := scoreSymbol(sym, docs[sym.Name], q, path, pkg)
 			if !matched {
 				continue
 			}
@@ -103,18 +106,31 @@ func kindMatches(s parser.Symbol, kf []domain.NodeKind) bool {
 //   - substring match in name → ~0.6 + length-proximity bonus
 //   - regex match on name OR doc-comment → 0.5
 //   - path substring match → 0.2 bonus (path-proximity)
-func scoreSymbol(s parser.Symbol, q Query, path, pkg string) (float64, bool) {
+func scoreSymbol(s parser.Symbol, doc string, q Query, path, pkg string) (float64, bool) {
 	if s.Name == "" {
 		return 0, false
 	}
 	name := strings.ToLower(s.Name)
-	doc := ""
+	docLow := strings.ToLower(doc)
 	pathLow := strings.ToLower(path)
 
 	var (
 		matched bool
 		score   float64
 	)
+
+	// Regex-only queries: the term loop would be a no-op, so evaluate the
+	// regex directly against name / doc / path.
+	if len(q.Terms) == 0 && q.Regex != nil {
+		if q.Regex.MatchString(s.Name) || q.Regex.MatchString(docLow) || q.Regex.MatchString(pathLow) {
+			matched = true
+			score = 0.5
+		}
+		if !matched {
+			return 0, false
+		}
+		return score, true
+	}
 
 	// Term loop: take the best signal across all terms.
 	for _, term := range q.Terms {
@@ -134,7 +150,7 @@ func scoreSymbol(s parser.Symbol, q Query, path, pkg string) (float64, bool) {
 			if s > score {
 				score = s
 			}
-		case strings.Contains(doc, t):
+		case strings.Contains(docLow, t):
 			matched = true
 			if s := 0.4; s > score {
 				score = s
@@ -145,7 +161,7 @@ func scoreSymbol(s parser.Symbol, q Query, path, pkg string) (float64, bool) {
 				score = s
 			}
 		case q.Regex != nil:
-			if q.Regex.MatchString(s.Name) || q.Regex.MatchString(doc) || q.Regex.MatchString(pathLow) {
+			if q.Regex.MatchString(s.Name) || q.Regex.MatchString(docLow) || q.Regex.MatchString(pathLow) {
 				matched = true
 				if s := 0.5; s > score {
 					score = s
@@ -180,10 +196,10 @@ func buildID(s parser.Symbol, pkg string) string {
 	case "function_declaration":
 		return id.Function(pkg, "", s.Name).String()
 	case "method_declaration":
-		// Without a reliable receiver class name at this layer, we surface the
-		// best-effort id. Tools refine via find_symbol; this id works for
-		// callers that re-resolve with the summary.
-		return id.Method(pkg, "", s.Name).String()
+		// The receiver is captured at parse time; an empty receiver means the
+		// grammar didn't yield one (e.g. a non-Go language or an unusual shape).
+		// Tools can still re-resolve via find_symbol with the summary.
+		return id.Method(pkg, s.Receiver, s.Name).String()
 	case "type_declaration":
 		return id.Class(pkg, s.Name).String()
 	}
