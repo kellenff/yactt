@@ -104,6 +104,10 @@ go.work.sum
 # env file
 .env
 
+# Local build artifacts for MCP wiring (see .mcp.json)
+/bin/yactt
+/bin/yactt-mcp-test
+
 ### macOS template
 # General
 .DS_Store

@@ -1,0 +1,8 @@
+#!/bin/bash
+# MCP wrapper for the yactt stdio server.
+# Resolves the project root from this script's own location so the launcher's
+# CWD and CLAUDE_PROJECT_DIR don't matter.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+exec "$HERE/yactt" mcp serve "$ROOT" "$@"
