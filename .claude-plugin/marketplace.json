@@ -1,0 +1,28 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "yactt",
+  "owner": {
+    "name": "Kellen Frodelius-Fujimoto"
+  },
+  "description": "Federated code-intelligence MCP server for Claude Code.",
+  "homepage": "https://github.com/kellenff/yactt",
+  "repository": "https://github.com/kellenff/yactt",
+  "plugins": [
+    {
+      "name": "yactt",
+      "description": "Walk the tree, choose your layer. 10 MCP tools for lossless source, typed structure, cross-references, and rename impact analysis.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Kellen Frodelius-Fujimoto"
+      },
+      "license": "Apache-2.0",
+      "keywords": ["code-intelligence", "tree-sitter", "mcp", "go"],
+      "tags": ["development"],
+      "category": "development",
+      "source": "./plugins/yactt",
+      "homepage": "https://github.com/kellenff/yactt#readme",
+      "repository": "https://github.com/kellenff/yactt",
+      "strict": false
+    }
+  ]
+}

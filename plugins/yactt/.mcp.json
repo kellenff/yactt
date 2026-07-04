@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "yactt": {
+      "type": "stdio",
+      "command": "yactt",
+      "args": ["mcp", "serve", "${CLAUDE_PROJECT_DIR}"],
+      "timeout": 30000
+    }
+  }
+}
