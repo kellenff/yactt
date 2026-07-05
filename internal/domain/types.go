@@ -121,14 +121,18 @@ func TreeSitterProvenancePtr() *Provenance {
 }
 
 // LSPProvenance returns the standard LSP provenance for layers answered by
-// the language server (gopls for now). The version comes from the server's
-// `initialize` reply; "unknown" is the fallback when the server did not
-// report one.
-func LSPProvenance(version string) Provenance {
+// a language server. `tool` names the server ("gopls",
+// "typescript-language-server", ...) so consumers can tell which subgraph
+// answered the question. `version` comes from the server's `initialize`
+// reply; "unknown" is the fallback when the server didn't report one.
+func LSPProvenance(tool, version string) Provenance {
+	if tool == "" {
+		tool = "lsp"
+	}
 	if version == "" {
 		version = "unknown"
 	}
-	return NewProvenance("gopls", version)
+	return NewProvenance(tool, version)
 }
 
 // Signature is the typed signature layer.

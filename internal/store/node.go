@@ -142,26 +142,27 @@ func MaterializeNode(r *Repo, nodeID id.ID, layerSet map[domain.LayerName]bool) 
 
 // signatureMaterializer is the Tier-1-or-tree-sitter signature path.
 //
-// When `r.lsp` is wired and the symbol's name is on a known row, we ask
-// gopls's `textDocument/hover` for the typed answer and stamp provenance
-// `Tool: "gopls"`. When the request errors or times out, we stamp
+// When an LSP client is wired for the file's language, we ask its
+// `textDocument/hover` for the typed answer and stamp provenance
+// `Tool: <server-name>` (gopls for Go, typescript-language-server for
+// TS/JS). When the request errors or times out, we stamp
 // `Tool: "tree-sitter", FallbackUsed: "lsp-timeout"` (or `"lsp-error"`).
-// When `r.lsp == nil`, we stamp the existing `Tool: "tree-sitter",
-// FallbackUsed: "no-lsp-installed"` marker.
+// When no client is wired for the file's language, we stamp the existing
+// `Tool: "tree-sitter", FallbackUsed: "no-lsp-installed"` marker.
 //
 // Returns the signature text, an optional parameter/result-types map (LSP
 // only; nil otherwise), and the provenance line.
 func (r *Repo) signatureMaterializer(f *source.File, sym parser.Symbol) (string, map[string]any, *domain.Provenance) {
-	// Tier 1 attempt.
-	if r.lsp != nil {
+	client, tool, version := r.LSPForFile(f.Path)
+	if client != nil {
 		col, ok := symbolNameColumn(f, sym)
 		if ok {
 			ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
 			defer cancel()
-			h, herr := r.lsp.Hover(ctx, f.Path, sym.StartRow, col)
+			h, herr := client.Hover(ctx, f.Path, sym.StartRow, col)
 			if herr == nil && h.Contents.Value != "" {
 				types := parseHoverTypes(h.Contents.Value)
-				return strings.TrimRight(h.Contents.Value, "\n"), types, domain.LSPProvenance(r.lspVersion).Ptr()
+				return strings.TrimRight(h.Contents.Value, "\n"), types, domain.LSPProvenance(tool, version).Ptr()
 			} else if herr != nil {
 				// Honest about the failure: tree-sitter fallback
 				// with the LSP fallback marker stamped on.
@@ -181,19 +182,20 @@ func (r *Repo) signatureMaterializer(f *source.File, sym parser.Symbol) (string,
 // Call-site ref resolution is deferred to `scanCallers`/`scanCallees` in
 // the tool layer.
 func (r *Repo) bodyMaterializer(f *source.File, sym parser.Symbol) ([]domain.Stmt, map[string]any, string, *domain.Provenance) {
-	if r.lsp != nil {
+	client, tool, version := r.LSPForFile(f.Path)
+	if client != nil {
 		col, ok := symbolNameColumn(f, sym)
 		if ok {
 			ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
 			defer cancel()
-			h, herr := r.lsp.Hover(ctx, f.Path, sym.StartRow, col)
+			h, herr := client.Hover(ctx, f.Path, sym.StartRow, col)
 			if herr == nil && h.Contents.Value != "" {
 				stmts, ctrl, _ := treeSitterStmts(f, sym)
 				types := map[string]any{}
 				if t := parseHoverTypes(h.Contents.Value); t != nil {
 					types = t
 				}
-				return stmts, types, ctrl, domain.LSPProvenance(r.lspVersion).Ptr()
+				return stmts, types, ctrl, domain.LSPProvenance(tool, version).Ptr()
 			}
 		}
 	}

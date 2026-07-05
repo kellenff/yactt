@@ -36,7 +36,8 @@ func SymbolKind(s Symbol) domain.NodeKind {
 		return domain.KindFunction
 	case "method_declaration":
 		return domain.KindMethod
-	case "type_declaration":
+	case "type_declaration", "class_declaration",
+		"interface_declaration", "type_alias_declaration", "enum_declaration":
 		return domain.KindClass
 	}
 	return domain.KindModule
@@ -54,7 +55,8 @@ func kindLabel(kind string) string {
 		return "Function"
 	case "method_declaration":
 		return "Method"
-	case "type_declaration":
+	case "type_declaration", "class_declaration",
+		"interface_declaration", "type_alias_declaration", "enum_declaration":
 		return "Class"
 	}
 	return "Symbol"
@@ -63,8 +65,13 @@ func kindLabel(kind string) string {
 // ExtractSymbols walks the parsed tree and returns top-level declarations.
 // Returns ErrUnsupported if the language has no wired extractor.
 func ExtractSymbols(lang Language, root *sitter.Node, source []byte) ([]Symbol, error) {
-	if _, ok := lang.(Go); !ok {
-		return nil, ErrUnsupported
+	switch lang.(type) {
+	case Go:
+		return extractGoSymbols(root, source), nil
+	case TypeScript:
+		return extractTypeScriptSymbols(root, source), nil
+	case JavaScript:
+		return extractJavaScriptSymbols(root, source), nil
 	}
-	return extractGoSymbols(root, source), nil
+	return nil, ErrUnsupported
 }

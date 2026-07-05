@@ -38,9 +38,16 @@ var ErrNotFound = errors.New("store: not found")
 // Repo is the per-root load of a code repository. It is safe for concurrent
 // use — symbol/file accessors take the internal mutex.
 //
-// When the load can locate a language server (gopls) on PATH, the repo
-// carries a live *lsp.Client on `lsp`. Materializers consult it first per
-// layer; tree-sitter is the unconditional floor.
+// When the load can locate one or more language servers (gopls for Go,
+// typescript-language-server for TS/JS) on PATH, the repo carries live
+// *lsp.Client entries in `lsp`, keyed by parser.Name. Materializers consult
+// the right client per file; tree-sitter is the unconditional floor.
+//
+// A nil entry (or absent key) for a language means "no server for this
+// language at Load time" — materializers fall through to tree-sitter with
+// the existing `no-lsp-installed` marker. The single-slot `LSP()` /
+// `LSPVersion()` accessors preserve the original Go-only contract and are
+// the legacy shortcut to `lsp[parser.LangGo]`.
 type Repo struct {
 	root          string
 	cache         *cache.Cache
@@ -51,12 +58,13 @@ type Repo struct {
 	rootPkg       string
 	prov          domain.Provenance
 
-	// LSP subgraph (Tier 1). Nil when the language server was not on
-	// PATH at Load time, or when startup failed. Materializers must
-	// treat `r.lsp == nil` as "tree-sitter only with the
-	// `no-lsp-installed` fallback marker".
-	lsp        *lsp.Client
-	lspVersion string
+	// LSP subgraph (Tier 1). Each map is keyed by parser.Name; the keys
+	// present at any time are the languages whose server started
+	// successfully. Nil keys (or absent entries) mean "no server for
+	// that language" — materializers fall through to tree-sitter.
+	lsp         map[parser.Name]*lsp.Client
+	lspTools    map[parser.Name]string // "gopls" / "typescript-language-server" / ...
+	lspVersions map[parser.Name]string
 }
 
 // Load scans root, parses each source file matching a known language, and
@@ -81,6 +89,9 @@ func Load(root string) (*Repo, []error, error) {
 		files:         make(map[string]*source.File),
 		symbolsByPath: make(map[string][]parser.Symbol),
 		prov:          domain.NewProvenance("tree-sitter", "v0.0.0-20240827"),
+		lsp:           make(map[parser.Name]*lsp.Client),
+		lspTools:      make(map[parser.Name]string),
+		lspVersions:   make(map[parser.Name]string),
 	}
 
 	var (
@@ -137,114 +148,187 @@ func Load(root string) (*Repo, []error, error) {
 
 	r.rebuildIndex()
 
-	// Opportunistic LSP startup. Successful start attaches `r.lsp` and
-	// captures the server version; any error (gopls missing, handshake
-	// failure, etc.) leaves `r.lsp == nil` so materializers fall
-	// through to tree-sitter with the existing `no-lsp-installed`
-	// marker. We use a short timeout because a hung gopls (slow
-	// indexing, etc.) shouldn't stall Load.
+	// Opportunistic LSP startup. Each supported server is tried in turn;
+	// successful starts populate the per-language maps, failures leave
+	// the corresponding slot nil so materializers fall through to
+	// tree-sitter with the existing `no-lsp-installed` marker. We use
+	// a short overall timeout because a hung server (slow indexing,
+	// etc.) shouldn't stall Load.
 	startCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	client, err := lsp.Start(startCtx, abs, lsp.Options{
+
+	logf := func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, "lsp: "+format+"\n", args...)
+	}
+
+	tryStart := func(lang parser.Name, toolName string, start func(context.Context, string, lsp.Options) (*lsp.Client, error)) {
+		client, err := start(startCtx, abs, lsp.Options{
+			Timeout:      500 * time.Millisecond,
+			Concurrency:  8,
+			CloseTimeout: 5 * time.Second,
+			Logf:         logf,
+		})
+		if err != nil {
+			logf("startup declined for %s: %v", toolName, err)
+			return
+		}
+		r.lsp[lang] = client
+		r.lspTools[lang] = toolName
+		r.lspVersions[lang] = client.Version()
+	}
+
+	tryStart(parser.LangGo, "gopls", lsp.Start)
+	// typescript-language-server speaks both TypeScript and JavaScript
+	// from a single workspace — register both keys against the same
+	// client so a `.ts` file and a `.js` file both route to it.
+	if tsClient, err := lsp.StartTypeScript(startCtx, abs, lsp.Options{
 		Timeout:      500 * time.Millisecond,
 		Concurrency:  8,
 		CloseTimeout: 5 * time.Second,
-		Logf: func(format string, args ...any) {
-			fmt.Fprintf(os.Stderr, "lsp: "+format+"\n", args...)
-		},
-	})
-	if err != nil {
-		// Expected when gopls is missing or fails to start. Surface to
-		// stderr at low volume so CI logs show "LSP not available"
-		// without polluting otherwise-quiet runs.
-		fmt.Fprintf(os.Stderr, "lsp: startup declined: %v\n", err)
+		Logf:         logf,
+	}); err != nil {
+		logf("startup declined for typescript-language-server: %v", err)
 	} else {
-		r.lsp = client
-		r.lspVersion = client.Version()
+		r.lsp[parser.LangTypeScript] = tsClient
+		r.lsp[parser.LangJavaScript] = tsClient
+		r.lspTools[parser.LangTypeScript] = "typescript-language-server"
+		r.lspTools[parser.LangJavaScript] = "typescript-language-server"
+		r.lspVersions[parser.LangTypeScript] = tsClient.Version()
+		r.lspVersions[parser.LangJavaScript] = tsClient.Version()
+	}
 
-		// Eagerly open every parsed Go file in gopls so the first
-		// hover after Load hits a warm cache. Without this, gopls
-		// lazily indexes on the first request and that request can
-		// exceed the 500ms per-request budget. We use a 5-second
-		// per-file deadline: the first request against an unindexed
-		// file routinely takes 1–3 s while gopls parses and
-		// type-checks, well past the production 500 ms budget.
-		warmCtx, warmCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		files := make([]lsp.OpenFile, 0, len(r.files))
+	// Eagerly open every parsed file in the server that knows about its
+	// language. Without this warm-up, both gopls and typescript-language-
+	// server lazily index on the first request and that request can
+	// exceed the 500ms per-request budget. We use a 5-second per-file
+	// deadline: the first request against an unindexed file routinely
+	// takes 1–3 s while the server parses and type-checks, well past the
+	// production 500 ms budget.
+	warmCtx, warmCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer warmCancel()
+	warmFilesFor := func(client *lsp.Client, accept func(string) (lspLang string, ok bool)) {
+		if client == nil {
+			return
+		}
+		var files []lsp.OpenFile
 		for p, f := range r.files {
-			if !strings.HasSuffix(p, ".go") {
+			langID, ok := accept(p)
+			if !ok {
 				continue
 			}
 			files = append(files, lsp.OpenFile{
 				Path:     p,
-				Language: "go",
+				Language: langID,
 				Text:     string(f.Bytes),
 			})
 		}
 		if n := lsp.OpenWorkspace(warmCtx, client, files, lsp.OpenWorkspaceOptions{
 			PerFileTimeout: 5 * time.Second,
-			Logf: func(format string, args ...any) {
-				fmt.Fprintf(os.Stderr, "lsp: "+format+"\n", args...)
-			},
+			Logf:           logf,
 		}); n > 0 {
-			fmt.Fprintf(os.Stderr, "lsp: warmed %d files\n", n)
+			logf("warmed %d files", n)
 		}
-		warmCancel()
+	}
+	warmFilesFor(r.lsp[parser.LangGo], func(p string) (string, bool) {
+		if strings.HasSuffix(p, ".go") {
+			return "go", true
+		}
+		return "", false
+	})
+	if tsClient := r.lsp[parser.LangTypeScript]; tsClient != nil {
+		warmFilesFor(tsClient, func(p string) (string, bool) {
+			switch ext := strings.ToLower(filepath.Ext(p)); ext {
+			case ".ts", ".tsx", ".mts", ".cts":
+				return "typescript", true
+			case ".js", ".jsx", ".mjs", ".cjs":
+				return "javascript", true
+			}
+			return "", false
+		})
 	}
 
 	return r, errs, nil
 }
 
-// LSP returns the live *lsp.Client, or nil when the language server was
-// not available at Load time. Tests use this to inject a stub.
-func (r *Repo) LSP() *lsp.Client { return r.lsp }
+// LSP returns the live *lsp.Client for Go (gopls), or nil when the
+// server was not available at Load time. Legacy single-language
+// accessor preserved for backward compatibility — tests that inject a
+// stub gopls use this to confirm the Tier-1 path.
+func (r *Repo) LSP() *lsp.Client { return r.lsp[parser.LangGo] }
 
-// LSPVersion returns the version pinned during the LSP initialize
-// handshake, or "" when `r.lsp == nil`.
-func (r *Repo) LSPVersion() string { return r.lspVersion }
+// LSPVersion returns the gopls version pinned during the LSP initialize
+// handshake, or "" when no gopls is wired. Legacy accessor.
+func (r *Repo) LSPVersion() string { return r.lspVersions[parser.LangGo] }
 
-// Close shuts the LSP client down cleanly (sends LSP shutdown + exit
-// notifications, kills the child on timeout). Idempotent. Safe to call
-// when `r.lsp == nil` (no-op).
+// LSPForLang returns the (client, tool, version) triple for the named
+// language, or (nil, "", "") when no server is wired for that language.
+// The tool name ("gopls", "typescript-language-server", ...) is what
+// downstream consumers stamp into `Provenance.Tool`.
+func (r *Repo) LSPForLang(lang parser.Name) (*lsp.Client, string, string) {
+	return r.lsp[lang], r.lspTools[lang], r.lspVersions[lang]
+}
+
+// LSPForFile looks up the LSP client by the file's detected language.
+// Returns (nil, "", "") for files outside any supported language or
+// when no server is wired. Used by materializers and edge scanners that
+// route per-file.
+func (r *Repo) LSPForFile(path string) (*lsp.Client, string, string) {
+	lang, err := parser.Detect(path)
+	if err != nil {
+		return nil, "", ""
+	}
+	return r.LSPForLang(lang.Name())
+}
+
+// Close shuts every wired LSP client down cleanly (sends LSP shutdown +
+// exit notifications, kills the child on timeout). Idempotent. Safe to
+// call when no clients are wired.
 //
-// Callers should defer `r.Close()` right after `store.Load` so the gopls
-// child is always reaped, regardless of the exit path.
+// Callers should defer `r.Close()` right after `store.Load` so server
+// children are always reaped, regardless of the exit path.
 func (r *Repo) Close() error {
-	c := r.lsp
-	if c == nil {
-		return nil
+	var firstErr error
+	for _, c := range r.lsp {
+		if c == nil {
+			continue
+		}
+		if err := c.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	r.lsp = nil
-	return c.Close()
+	r.lspTools = nil
+	r.lspVersions = nil
+	return firstErr
 }
 
-// DetachLSPForTest removes the LSP client from the repo. Used only in
-// acceptance tests that need to assert the tree-sitter fallback path
-// independent of whether gopls happens to be on PATH.
+// DetachLSPForTest removes the gopls LSP client from the repo. Used
+// only in acceptance tests that need to assert the tree-sitter fallback
+// path independent of whether gopls happens to be on PATH.
 //
-// Not thread-safe — callers should serialize. Production code should use
-// Close().
+// Not thread-safe — callers should serialize. Production code should
+// use Close().
 func (r *Repo) DetachLSPForTest() {
-	if r.lsp == nil {
-		return
+	if c := r.lsp[parser.LangGo]; c != nil {
+		_ = c.Close()
 	}
-	_ = r.lsp.Close()
-	r.lsp = nil
-	r.lspVersion = ""
+	delete(r.lsp, parser.LangGo)
+	delete(r.lspTools, parser.LangGo)
+	delete(r.lspVersions, parser.LangGo)
 }
 
-// AttachLSPForTest attaches a pre-built LSP client to the repo. Used
-// only in acceptance tests. The client is owned by the repo afterwards
-// (Close will shut it down).
+// AttachLSPForTest attaches a pre-built gopls stub to the repo. The
+// client is owned by the repo afterwards (Close will shut it down).
 func (r *Repo) AttachLSPForTest(c *lsp.Client) {
 	if c == nil {
 		return
 	}
-	if r.lsp != nil {
-		_ = r.lsp.Close()
+	if old := r.lsp[parser.LangGo]; old != nil {
+		_ = old.Close()
 	}
-	r.lsp = c
-	r.lspVersion = c.Version()
+	r.lsp[parser.LangGo] = c
+	r.lspTools[parser.LangGo] = "gopls"
+	r.lspVersions[parser.LangGo] = c.Version()
 }
 
 // Root returns the absolute path of the repository root.

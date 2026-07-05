@@ -175,12 +175,12 @@ func scanCallers(repo *store.Repo, file string, sym parser.Symbol, limit int, p 
 	}
 	// Tier 1 attempt. If it produces any callers, return those — the
 	// tree-sitter scan on the same set of files would only add noise.
-	if lspClients := repo.LSP(); lspClients != nil {
+	if client, _, _ := repo.LSPForFile(file); client != nil {
 		if col, ok := nameColumnFor(repo, file, sym); ok {
-			refs, rerr := lspClients.References(referencesCtx(), file, sym.StartRow, col, true)
+			refs, rerr := client.References(referencesCtx(), file, sym.StartRow, col, true)
 			if rerr == nil && len(refs) > 0 {
 				out := make([]NodeEdgesResult, 0, len(refs))
-				lprov := lspProvenance(repo)
+				lprov := lspProvenance(repo, file)
 				for _, ref := range refs {
 					if len(out) >= limit {
 						break
@@ -312,10 +312,12 @@ func callerIDAt(path string, line, col int, repo *store.Repo) (string, bool) {
 	return "", false
 }
 
-// lspProvenance returns the canonical "gopls" provenance for edges
-// emitted via the Tier-1 path. Version captured at Load.
-func lspProvenance(repo *store.Repo) domain.Provenance {
-	return domain.LSPProvenance(repo.LSPVersion())
+// lspProvenance returns the canonical LSP provenance for edges emitted via
+// the Tier-1 path. Tool name (gopls / typescript-language-server) and
+// version are captured at Load.
+func lspProvenance(repo *store.Repo, file string) domain.Provenance {
+	_, tool, version := repo.LSPForFile(file)
+	return domain.LSPProvenance(tool, version)
 }
 
 // storeNameColumn is an exported re-export for the in-package symbol

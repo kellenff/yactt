@@ -10,6 +10,7 @@ import (
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/lsp"
+	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/store/repofixture"
 )
 
@@ -42,27 +43,35 @@ func stubSourceDir() string {
 	return filepath.Join("..", "lsp", "internal", "stubserver")
 }
 
-// attachLSP is a test-only helper that swaps Repo.lsp to a fresh client
-// using the binary at `binPath`. We keep this unexported (and the test
-// file is `package store`, not `store_test`) so production code can't
-// reach it.
+// attachLSP is a test-only helper that swaps Repo.lsp[parser.LangGo] to a
+// fresh client using the binary at `binPath`. We keep this unexported (and
+// the test file is `package store`, not `store_test`) so production code
+// can't reach it.
 //
-// Closes any client already on the repo so the test fixture replaces
+// Closes any client already on the Go slot so the test fixture replaces
 // opportunistic-startup's first attempt (which may have attached a real
 // gopls on machines where it is on PATH).
 func (r *Repo) attachLSP(t *testing.T, binPath string, opts lsp.Options) *lsp.Client {
 	t.Helper()
-	if r.lsp != nil {
-		_ = r.lsp.Close()
-		r.lsp = nil
+	return r.attachLSPFor(t, parser.LangGo, "gopls", binPath, opts)
+}
+
+// attachLSPFor is the language-agnostic variant. `lang` selects which slot
+// in the per-language map gets the client; `tool` is what gets stamped
+// into `Provenance.Tool` (e.g. "gopls", "typescript-language-server").
+func (r *Repo) attachLSPFor(t *testing.T, lang parser.Name, tool string, binPath string, opts lsp.Options) *lsp.Client {
+	t.Helper()
+	if old := r.lsp[lang]; old != nil {
+		_ = old.Close()
 	}
 	args := []string{binPath}
 	c, err := lsp.StartCommand(context.Background(), args, opts)
 	if err != nil {
-		t.Fatalf("attachLSP: %v", err)
+		t.Fatalf("attachLSPFor(%s): %v", lang, err)
 	}
-	r.lsp = c
-	r.lspVersion = c.Version()
+	r.lsp[lang] = c
+	r.lspTools[lang] = tool
+	r.lspVersions[lang] = c.Version()
 	return c
 }
 
@@ -163,8 +172,9 @@ func TestSignature_LSPTimeout_TaggedFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("attach: %v", err)
 	}
-	r.lsp = c
-	r.lspVersion = c.Version()
+	r.lsp[parser.LangGo] = c
+	r.lspTools[parser.LangGo] = "gopls"
+	r.lspVersions[parser.LangGo] = c.Version()
 
 	nodeID := id.Function("auth", "", "Login")
 	n, err := MaterializeNode(r, nodeID, map[domain.LayerName]bool{domain.LayerSignature: true})
@@ -199,6 +209,85 @@ func TestStart_LSPAbsent_RepoLSPNil(t *testing.T) {
 	// Idempotent: a second call is also a no-op.
 	if err := r.Close(); err != nil {
 		t.Errorf("second Close: %v", err)
+	}
+}
+
+// TestLSPForFile_RoutingPerLanguage is the wire-up test for multi-client
+// LSP. It attaches a stubserver as the TypeScript server, then verifies
+// that `LSPForFile` routes `.ts` and `.js` files to the same client
+// (typescript-language-server speaks both), while `.go` and unknown
+// extensions return nil.
+//
+// Detaches the Go slot first so opportunistic gopls startup on this
+// machine doesn't pre-populate the map and mask routing bugs.
+func TestLSPForFile_RoutingPerLanguage(t *testing.T) {
+	r, _ := loadFixture(t)
+	defer func() { _ = r.Close() }()
+	r.DetachLSPForTest() // ignore opportunistic gopls startup
+
+	bin := buildStubserverBin(t)
+	opts := lsp.Options{
+		Timeout:      time.Second,
+		Concurrency:  4,
+		CloseTimeout: time.Second,
+		RootURI:      "file://" + r.Root(),
+		Logf: func(format string, args ...any) {
+			t.Logf("stub: "+format, args...)
+		},
+	}
+	r.attachLSPFor(t, parser.LangTypeScript, "typescript-language-server", bin, opts)
+	// Mirror production Load: typescript-language-server handles both
+	// TS and JS, so both slots point at the same client.
+	r.lsp[parser.LangJavaScript] = r.lsp[parser.LangTypeScript]
+	r.lspTools[parser.LangJavaScript] = r.lspTools[parser.LangTypeScript]
+	r.lspVersions[parser.LangJavaScript] = r.lspVersions[parser.LangTypeScript]
+
+	// TS files route to the tsserver slot.
+	tsClient, tsTool, _ := r.LSPForFile("/abs/path/foo.ts")
+	if tsClient == nil {
+		t.Fatal("LSPForFile(foo.ts) returned nil client")
+	}
+	if tsTool != "typescript-language-server" {
+		t.Errorf("LSPForFile(foo.ts) tool = %q, want typescript-language-server", tsTool)
+	}
+
+	// JS files share the same client (typescript-language-server
+	// handles both languages from one process).
+	jsClient, jsTool, _ := r.LSPForFile("/abs/path/bar.js")
+	if jsClient == nil {
+		t.Fatal("LSPForFile(bar.js) returned nil client")
+	}
+	if jsClient != tsClient {
+		t.Error("LSPForFile(.js) returned a different client than LSPForFile(.ts)")
+	}
+	if jsTool != "typescript-language-server" {
+		t.Errorf("LSPForFile(bar.js) tool = %q, want typescript-language-server", jsTool)
+	}
+
+	// Go files don't route through tsserver.
+	if c, _, _ := r.LSPForFile("/abs/path/foo.go"); c != nil {
+		t.Error("LSPForFile(foo.go) returned a client; expected nil (Go slot detached)")
+	}
+
+	// Unknown extension returns nil.
+	if c, _, _ := r.LSPForFile("/abs/path/foo.py"); c != nil {
+		t.Error("LSPForFile(foo.py) returned a client; expected nil")
+	}
+
+	// LangGo still reports nil since we detached.
+	if c, _, _ := r.LSPForLang(parser.LangGo); c != nil {
+		t.Error("LSPForLang(go) returned a client; expected nil (detached)")
+	}
+
+	// LangTypeScript and LangJavaScript both resolve to the same client
+	// via direct lookup.
+	directTS, _, _ := r.LSPForLang(parser.LangTypeScript)
+	directJS, _, _ := r.LSPForLang(parser.LangJavaScript)
+	if directTS == nil || directJS == nil {
+		t.Fatalf("LSPForLang returned nil: ts=%v js=%v", directTS, directJS)
+	}
+	if directTS != directJS {
+		t.Error("LSPForLang(ts) and LSPForLang(js) returned different clients")
 	}
 }
 

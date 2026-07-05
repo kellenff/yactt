@@ -27,6 +27,34 @@ func parseGo(t *testing.T, src string) *sitter.Node {
 	return root
 }
 
+// parseTS runs the TypeScript grammar against an inline source snippet.
+func parseTS(t *testing.T, src string) *sitter.Node {
+	t.Helper()
+	lang := parser.TypeScript{}
+	root, err := sitter.ParseCtx(context.Background(), []byte(src), lang.Grammar())
+	if err != nil {
+		t.Fatalf("ParseCtx: %v", err)
+	}
+	if root == nil {
+		t.Fatal("ParseCtx returned nil root")
+	}
+	return root
+}
+
+// parseJS runs the JavaScript grammar against an inline source snippet.
+func parseJS(t *testing.T, src string) *sitter.Node {
+	t.Helper()
+	lang := parser.JavaScript{}
+	root, err := sitter.ParseCtx(context.Background(), []byte(src), lang.Grammar())
+	if err != nil {
+		t.Fatalf("ParseCtx: %v", err)
+	}
+	if root == nil {
+		t.Fatal("ParseCtx returned nil root")
+	}
+	return root
+}
+
 func TestDetectGo(t *testing.T) {
 	cases := []string{"/abs/path/foo.go", "relative/bar.go", "CamelCase.GO"}
 	for _, p := range cases {
@@ -54,32 +82,39 @@ func TestDetectUnknownExtension(t *testing.T) {
 }
 
 func TestByName(t *testing.T) {
-	got, err := parser.ByName(parser.LangGo)
-	if err != nil {
-		t.Fatalf("ByName(go): %v", err)
+	for _, name := range []parser.Name{
+		parser.LangGo,
+		parser.LangTypeScript,
+		parser.LangJavaScript,
+	} {
+		t.Run(string(name), func(t *testing.T) {
+			lang, err := parser.ByName(name)
+			if err != nil {
+				t.Fatalf("ByName(%q): %v", name, err)
+			}
+			if lang.Name() != name {
+				t.Errorf("Name = %q, want %q", lang.Name(), name)
+			}
+		})
 	}
-	if got.Name() != parser.LangGo {
-		t.Errorf("Name = %q, want go", got.Name())
-	}
-	if _, err := parser.ByName(parser.Name("typescript")); !errors.Is(err, parser.ErrUnsupported) {
-		t.Errorf("unknown lang err = %v, want ErrUnsupported", err)
+	if _, err := parser.ByName(parser.Name("python")); !errors.Is(err, parser.ErrUnsupported) {
+		t.Errorf("unsupported lang err = %v, want ErrUnsupported", err)
 	}
 }
 
-func TestAllContainsGo(t *testing.T) {
+func TestAllContainsKnown(t *testing.T) {
 	all := parser.All()
 	if len(all) == 0 {
 		t.Fatal("All() returned empty")
 	}
-	var found bool
+	names := map[parser.Name]bool{}
 	for _, l := range all {
-		if l.Name() == parser.LangGo {
-			found = true
-			break
-		}
+		names[l.Name()] = true
 	}
-	if !found {
-		t.Errorf("All() missing Go: %v", all)
+	for _, want := range []parser.Name{parser.LangGo, parser.LangTypeScript, parser.LangJavaScript} {
+		if !names[want] {
+			t.Errorf("All() missing %q: %v", want, all)
+		}
 	}
 }
 
@@ -272,6 +307,10 @@ func TestSymbolKindMapping(t *testing.T) {
 		{"function_declaration", domain.KindFunction},
 		{"method_declaration", domain.KindMethod},
 		{"type_declaration", domain.KindClass},
+		{"class_declaration", domain.KindClass},
+		{"interface_declaration", domain.KindClass},
+		{"type_alias_declaration", domain.KindClass},
+		{"enum_declaration", domain.KindClass},
 		{"something_else", domain.KindModule}, // default
 		{"", domain.KindModule},
 	}
@@ -293,6 +332,10 @@ func TestSymbolSummaryFormat(t *testing.T) {
 		{parser.Symbol{Kind: "function_declaration", Name: "Login"}, "Function: Login"},
 		{parser.Symbol{Kind: "method_declaration", Name: "Greet"}, "Method: Greet"},
 		{parser.Symbol{Kind: "type_declaration", Name: "Session"}, "Class: Session"},
+		{parser.Symbol{Kind: "class_declaration", Name: "User"}, "Class: User"},
+		{parser.Symbol{Kind: "interface_declaration", Name: "Repo"}, "Class: Repo"},
+		{parser.Symbol{Kind: "type_alias_declaration", Name: "UserId"}, "Class: UserId"},
+		{parser.Symbol{Kind: "enum_declaration", Name: "Color"}, "Class: Color"},
 		{parser.Symbol{Kind: "unknown", Name: "X"}, "Symbol: X"},
 		{parser.Symbol{Kind: "function_declaration", Name: ""}, "Function:"},
 	}
@@ -518,5 +561,353 @@ func TestDetect_Dotfile(t *testing.T) {
 	_, err := parser.Detect(".hidden")
 	if !errors.Is(err, parser.ErrUnsupported) {
 		t.Errorf("err = %v, want ErrUnsupported", err)
+	}
+}
+
+// --- TypeScript --------------------------------------------------------
+
+func TestDetectTS(t *testing.T) {
+	cases := []string{
+		"/abs/path/foo.ts", "relative/bar.ts", "CamelCase.TS",
+		"ui/component.tsx", "mod.mts", "lib.cts",
+	}
+	for _, p := range cases {
+		t.Run(p, func(t *testing.T) {
+			lang, err := parser.Detect(p)
+			if err != nil {
+				t.Fatalf("Detect(%q): %v", p, err)
+			}
+			if lang.Name() != parser.LangTypeScript {
+				t.Errorf("Name = %q, want %q", lang.Name(), parser.LangTypeScript)
+			}
+		})
+	}
+}
+
+func TestModulePathTS(t *testing.T) {
+	// TypeScript has no file-local module name — always "".
+	for _, src := range []string{
+		"",
+		"export function login() {}\n",
+		"import x from 'y'\nexport class Foo {}\n",
+	} {
+		t.Run(src, func(t *testing.T) {
+			var lang parser.Language = parser.TypeScript{}
+			if got := lang.ModulePath(nil, []byte(src)); got != "" {
+				t.Errorf("ModulePath = %q, want empty", got)
+			}
+		})
+	}
+}
+
+func TestExtractSymbolsTSFunction(t *testing.T) {
+	src := `export function login(user: string): void {}
+function logout(user: string): void {}
+`
+	root := parseTS(t, src)
+	syms, err := parser.ExtractSymbols(parser.TypeScript{}, root, []byte(src))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	if len(syms) != 2 {
+		t.Fatalf("got %d symbols, want 2: %+v", len(syms), syms)
+	}
+	names := map[string]string{}
+	for _, s := range syms {
+		if s.Kind != "function_declaration" {
+			t.Errorf("Kind = %q, want function_declaration", s.Kind)
+		}
+		names[s.Name] = s.Kind
+	}
+	if names["login"] != "function_declaration" || names["logout"] != "function_declaration" {
+		t.Errorf("names = %v, want both function_declaration", names)
+	}
+}
+
+func TestExtractSymbolsTSClass(t *testing.T) {
+	src := `export class Foo {
+  greet(): string { return 'hi' }
+}
+class Bar {}
+`
+	root := parseTS(t, src)
+	syms, err := parser.ExtractSymbols(parser.TypeScript{}, root, []byte(src))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	counts := map[string]int{}
+	for _, s := range syms {
+		counts[s.Kind]++
+	}
+	if counts["class_declaration"] != 2 {
+		t.Errorf("class_declaration count = %d, want 2 (syms=%+v)", counts["class_declaration"], syms)
+	}
+	if counts["method_declaration"] != 1 {
+		t.Errorf("method_declaration count = %d, want 1 (syms=%+v)", counts["method_declaration"], syms)
+	}
+}
+
+func TestExtractSymbolsTSInterface(t *testing.T) {
+	src := `export interface IUser { id: string }
+interface Repo<T> { find(id: string): T | null }
+`
+	root := parseTS(t, src)
+	syms, err := parser.ExtractSymbols(parser.TypeScript{}, root, []byte(src))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	if len(syms) != 2 {
+		t.Fatalf("got %d symbols, want 2: %+v", len(syms), syms)
+	}
+	for _, s := range syms {
+		if s.Kind != "class_declaration" {
+			t.Errorf("Kind = %q, want class_declaration (interfaces map to KindClass)", s.Kind)
+		}
+	}
+	names := map[string]bool{}
+	for _, s := range syms {
+		names[s.Name] = true
+	}
+	if !names["IUser"] || !names["Repo"] {
+		t.Errorf("missing IUser or Repo: %+v", names)
+	}
+}
+
+func TestExtractSymbolsTSTypeAlias(t *testing.T) {
+	src := `export type UserId = string
+type Maybe<T> = T | null
+`
+	root := parseTS(t, src)
+	syms, err := parser.ExtractSymbols(parser.TypeScript{}, root, []byte(src))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	if len(syms) != 2 {
+		t.Fatalf("got %d symbols, want 2: %+v", len(syms), syms)
+	}
+	for _, s := range syms {
+		if s.Kind != "class_declaration" {
+			t.Errorf("Kind = %q, want class_declaration (type aliases map to KindClass)", s.Kind)
+		}
+	}
+}
+
+func TestExtractSymbolsTSEnum(t *testing.T) {
+	src := `export enum Color { Red, Green, Blue }
+enum Direction { Up, Down }
+`
+	root := parseTS(t, src)
+	syms, err := parser.ExtractSymbols(parser.TypeScript{}, root, []byte(src))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	if len(syms) != 2 {
+		t.Fatalf("got %d symbols, want 2: %+v", len(syms), syms)
+	}
+	for _, s := range syms {
+		if s.Kind != "class_declaration" {
+			t.Errorf("Kind = %q, want class_declaration (enums map to KindClass)", s.Kind)
+		}
+	}
+}
+
+func TestExtractSymbolsTSMethodReceiver(t *testing.T) {
+	src := `class Server {
+  login(): void {}
+  static create(): Server { return new Server() }
+}
+`
+	root := parseTS(t, src)
+	syms, err := parser.ExtractSymbols(parser.TypeScript{}, root, []byte(src))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	var methods []parser.Symbol
+	for _, s := range syms {
+		if s.Kind == "method_declaration" {
+			methods = append(methods, s)
+		}
+	}
+	if len(methods) != 2 {
+		t.Fatalf("got %d methods, want 2: %+v", len(methods), syms)
+	}
+	for _, m := range methods {
+		if m.Receiver != "Server" {
+			t.Errorf("method %q Receiver = %q, want Server", m.Name, m.Receiver)
+		}
+	}
+}
+
+func TestExtractSymbolsTSNilRoot(t *testing.T) {
+	syms, err := parser.ExtractSymbols(parser.TypeScript{}, nil, nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(syms) != 0 {
+		t.Errorf("got %d symbols, want 0", len(syms))
+	}
+}
+
+// --- JavaScript --------------------------------------------------------
+
+func TestDetectJS(t *testing.T) {
+	cases := []string{
+		"/abs/path/foo.js", "relative/bar.js", "CamelCase.JS",
+		"ui/component.jsx", "mod.mjs", "cli.cjs",
+	}
+	for _, p := range cases {
+		t.Run(p, func(t *testing.T) {
+			lang, err := parser.Detect(p)
+			if err != nil {
+				t.Fatalf("Detect(%q): %v", p, err)
+			}
+			if lang.Name() != parser.LangJavaScript {
+				t.Errorf("Name = %q, want %q", lang.Name(), parser.LangJavaScript)
+			}
+		})
+	}
+}
+
+func TestModulePathJS(t *testing.T) {
+	// JavaScript has no file-local module name — always "".
+	for _, src := range []string{
+		"",
+		"function foo() {}\n",
+		"export class Bar {}\n",
+	} {
+		t.Run(src, func(t *testing.T) {
+			var lang parser.Language = parser.JavaScript{}
+			if got := lang.ModulePath(nil, []byte(src)); got != "" {
+				t.Errorf("ModulePath = %q, want empty", got)
+			}
+		})
+	}
+}
+
+func TestExtractSymbolsJSFunction(t *testing.T) {
+	src := `export function login(user) {}
+function logout(user) {}
+`
+	root := parseJS(t, src)
+	syms, err := parser.ExtractSymbols(parser.JavaScript{}, root, []byte(src))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	if len(syms) != 2 {
+		t.Fatalf("got %d symbols, want 2: %+v", len(syms), syms)
+	}
+	names := map[string]string{}
+	for _, s := range syms {
+		if s.Kind != "function_declaration" {
+			t.Errorf("Kind = %q, want function_declaration", s.Kind)
+		}
+		names[s.Name] = s.Kind
+	}
+	if names["login"] != "function_declaration" || names["logout"] != "function_declaration" {
+		t.Errorf("names = %v, want both function_declaration", names)
+	}
+}
+
+func TestExtractSymbolsJSClass(t *testing.T) {
+	src := `export class Foo {
+  greet() { return 'hi' }
+}
+class Bar {}
+`
+	root := parseJS(t, src)
+	syms, err := parser.ExtractSymbols(parser.JavaScript{}, root, []byte(src))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	counts := map[string]int{}
+	for _, s := range syms {
+		counts[s.Kind]++
+	}
+	if counts["class_declaration"] != 2 {
+		t.Errorf("class_declaration count = %d, want 2 (syms=%+v)", counts["class_declaration"], syms)
+	}
+	if counts["method_declaration"] != 1 {
+		t.Errorf("method_declaration count = %d, want 1 (syms=%+v)", counts["method_declaration"], syms)
+	}
+}
+
+func TestExtractSymbolsJSMethodReceiver(t *testing.T) {
+	src := `class Server {
+  login() {}
+  static create() { return new Server() }
+}
+`
+	root := parseJS(t, src)
+	syms, err := parser.ExtractSymbols(parser.JavaScript{}, root, []byte(src))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	var methods []parser.Symbol
+	for _, s := range syms {
+		if s.Kind == "method_declaration" {
+			methods = append(methods, s)
+		}
+	}
+	if len(methods) != 2 {
+		t.Fatalf("got %d methods, want 2: %+v", len(methods), syms)
+	}
+	for _, m := range methods {
+		if m.Receiver != "Server" {
+			t.Errorf("method %q Receiver = %q, want Server", m.Name, m.Receiver)
+		}
+	}
+}
+
+func TestExtractSymbolsJSNilRoot(t *testing.T) {
+	syms, err := parser.ExtractSymbols(parser.JavaScript{}, nil, nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(syms) != 0 {
+		t.Errorf("got %d symbols, want 0", len(syms))
+	}
+}
+
+func TestExtractSymbolsMixedFile(t *testing.T) {
+	// A realistic mixed declaration file — exercises the dispatch's ability
+	// to extract multiple kinds at once and the export_statement peeling.
+	src := `import express from 'express'
+
+interface IUser { id: string }
+type UserId = string
+enum Role { Admin, User }
+
+export class Server {
+  login(user: UserId): void {}
+  static create(): Server { return new Server() }
+}
+
+export function main() {}
+function helper() {}
+`
+	root := parseTS(t, src)
+	syms, err := parser.ExtractSymbols(parser.TypeScript{}, root, []byte(src))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	counts := map[string]int{}
+	receivers := map[string]string{}
+	for _, s := range syms {
+		counts[s.Kind]++
+		if s.Kind == "method_declaration" && s.Receiver != "" {
+			receivers[s.Name] = s.Receiver
+		}
+	}
+	if counts["class_declaration"] != 4 { // IUser, UserId, Role, Server
+		t.Errorf("class_declaration count = %d, want 4: %+v", counts["class_declaration"], syms)
+	}
+	if counts["function_declaration"] != 2 { // main, helper
+		t.Errorf("function_declaration count = %d, want 2: %+v", counts["function_declaration"], syms)
+	}
+	if counts["method_declaration"] != 2 { // login, create
+		t.Errorf("method_declaration count = %d, want 2: %+v", counts["method_declaration"], syms)
+	}
+	if receivers["login"] != "Server" || receivers["create"] != "Server" {
+		t.Errorf("receiver disambiguation failed: %+v", receivers)
 	}
 }
