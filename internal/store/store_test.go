@@ -511,3 +511,80 @@ func TestReloadInvalidateRebuilds(t *testing.T) {
 		t.Errorf(`EdgesByCaller(LoginPath, "Authenticate") empty after ReloadInvalidate`)
 	}
 }
+
+// TestImportsIn_PersistsBuildTime pins the Tier-0 imports-by-file index.
+// Synthesizes a file with two imports, loads the repo, and asserts
+// `Repo.ImportsIn(file)` returns the expected paths with non-zero
+// row ranges anchored on the import declarations.
+func TestImportsIn_PersistsBuildTime(t *testing.T) {
+	r, fix := loadFixture(t)
+
+	// Synthesize a file with imports under the fixture's auth dir.
+	src := []byte(`package auth
+
+import "fmt"
+import "github.com/foo/bar"
+
+func UseImports() {}
+`)
+	path := fix.Root + string(filepath.Separator) + "auth" + string(filepath.Separator) + "with_imports_test.go"
+	if err := os.WriteFile(path, src, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := r.ReloadInvalidate(path); err != nil {
+		t.Fatalf("ReloadInvalidate: %v", err)
+	}
+
+	entries := r.ImportsIn(path)
+	if len(entries) != 2 {
+		t.Fatalf("ImportsIn(%q) = %d entries, want 2: %+v", path, len(entries), entries)
+	}
+
+	got := map[string]store.ImportEntry{}
+	for _, e := range entries {
+		got[e.Path] = e
+	}
+	for _, want := range []string{"fmt", "github.com/foo/bar"} {
+		e, ok := got[want]
+		if !ok {
+			t.Errorf("ImportsIn missing %q; got %+v", want, entries)
+			continue
+		}
+		if e.StartRow < 2 || e.EndRow <= e.StartRow {
+			t.Errorf("entry for %q has bad rows: StartRow=%d EndRow=%d", want, e.StartRow, e.EndRow)
+		}
+	}
+}
+
+// TestImportsIn_RebuildOnInvalidate confirms the imports index is
+// repopulated after ReloadInvalidate — same contract as
+// TestReloadInvalidateRebuilds for the call-edge index.
+func TestImportsIn_RebuildOnInvalidate(t *testing.T) {
+	r, fix := loadFixture(t)
+
+	// Add an import to the fixture's login.go.
+	if err := os.WriteFile(fix.LoginPath, []byte(`package auth
+
+import "fmt"
+
+func Login(user, pass string) (Session, error) {
+	return Session{}, nil
+}
+`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := r.ReloadInvalidate(fix.LoginPath); err != nil {
+		t.Fatalf("ReloadInvalidate: %v", err)
+	}
+
+	entries := r.ImportsIn(fix.LoginPath)
+	var sawFmt bool
+	for _, e := range entries {
+		if e.Path == "fmt" {
+			sawFmt = true
+		}
+	}
+	if !sawFmt {
+		t.Errorf(`ImportsIn(LoginPath) missing "fmt" after ReloadInvalidate; got %+v`, entries)
+	}
+}

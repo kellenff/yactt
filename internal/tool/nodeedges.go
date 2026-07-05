@@ -443,11 +443,16 @@ func scanTests(repo *store.Repo, _ string, sym parser.Symbol, limit int, p *doma
 	return out
 }
 
-// scanImports walks the top level of the node's containing file and
-// emits one IMPORTS edge per imported package. Syntactic only — no
-// cross-package resolution to local files or `pkg:` indexes, so
-// confidence sits at 0.4 (lower than CALLEES's 0.5 because we don't
-// even attempt identifier lookup against the symbol index).
+// scanImports emits one IMPORTS edge per imported package in the
+// node's containing file. Syntactic only — no cross-package
+// resolution to local files or `pkg:` indexes, so confidence sits
+// at 0.4 (lower than CALLEES's 0.5 because we don't even attempt
+// identifier lookup against the symbol index).
+//
+// Tier 0: persisted imports-by-file index built at `rebuildIndex`
+// time. Tier 1 (fallback): live tree-sitter walk when the file has
+// no indexed entries (e.g. edited after Load without
+// ReloadInvalidate).
 //
 // The target ID is `pkg:<import-path>` regardless of whether the path
 // resolves to anything in the repo — the wire format keeps the path
@@ -457,12 +462,38 @@ func scanTests(repo *store.Repo, _ string, sym parser.Symbol, limit int, p *doma
 // Deduplicates by path within a single file — grouped `import ("a"; "a")`
 // in Go or duplicate specifiers in TS produce one edge per unique path.
 func scanImports(repo *store.Repo, file string, _ parser.Symbol, limit int, p *domain.Provenance) []NodeEdgesResult {
+	out := []NodeEdgesResult{}
+	seen := make(map[string]bool)
+
+	// Tier 0: persisted index.
+	for _, e := range repo.ImportsIn(file) {
+		if seen[e.Path] {
+			continue
+		}
+		seen[e.Path] = true
+		out = append(out, NodeEdgesResult{
+			EdgeKind:      domain.EdgeImports,
+			TargetID:      "pkg:" + e.Path,
+			TargetKind:    domain.KindPackage,
+			TargetSummary: e.Path,
+			Location:      location(file, e.StartRow, e.EndRow),
+			Confidence:    0.4,
+			Provenance:    *p,
+		})
+		if len(out) >= limit {
+			return out
+		}
+	}
+	if len(out) > 0 {
+		return out
+	}
+
+	// Tier 1: live tree-sitter fallback for files with no persisted
+	// entries (e.g. edited since Load).
 	f, err := repo.CachedFile(file)
 	if err != nil || f.Root == nil {
 		return nil
 	}
-	out := []NodeEdgesResult{}
-	seen := make(map[string]bool)
 	root := f.Root
 	for i := 0; i < int(root.ChildCount()); i++ {
 		ch := root.Child(i)

@@ -66,3 +66,16 @@ func stripImportQuotes(s string) string {
 	}
 	return s
 }
+
+// ImportEntry is one record in the persisted imports-by-file index,
+// built at `rebuildIndex` time by walking each parsed file's
+// top-level imports. Path is the bare import path (quotes stripped).
+// StartRow/EndRow are tree-sitter row indices for the enclosing
+// import declaration (inclusive / exclusive); scanImports anchors
+// the emitted `Location` field on these so the wire shape matches
+// what the live walker produced.
+type ImportEntry struct {
+	Path     string
+	StartRow int
+	EndRow   int
+}

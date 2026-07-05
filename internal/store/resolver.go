@@ -41,8 +41,9 @@ func toLookup(e symbolEntry) SymbolLookup { return SymbolLookup{File: e.file, Sy
 // symIndex is an immutable-once-built index of every declaration in the repo.
 // We rebuild it on full Load and on ReloadInvalidate; reads are lockless.
 type symIndex struct {
-	byName     map[symbolKey][]symbolEntry
-	byCallEdge map[edgeKey][]EdgeEntry
+	byName        map[symbolKey][]symbolEntry
+	byCallEdge    map[edgeKey][]EdgeEntry
+	importsByFile map[string][]ImportEntry
 }
 
 func (r *Repo) rebuildIndex() {
@@ -58,8 +59,9 @@ func (r *Repo) rebuildIndex() {
 	r.mu.RUnlock()
 
 	idx := &symIndex{
-		byName:     make(map[symbolKey][]symbolEntry, len(snapshot)*4),
-		byCallEdge: make(map[edgeKey][]EdgeEntry),
+		byName:        make(map[symbolKey][]symbolEntry, len(snapshot)*4),
+		byCallEdge:    make(map[edgeKey][]EdgeEntry),
+		importsByFile: make(map[string][]ImportEntry),
 	}
 	for path, syms := range snapshot {
 		pkg := pkgFromPath(r.root, path, r.rootPkg)
@@ -121,9 +123,56 @@ func (r *Repo) rebuildIndex() {
 		}
 	}
 
+	// Imports pass: walk each parsed file once and populate
+	// importsByFile. Mirrors the call-edge pass — Tier 0 in the
+	// scanImports dispatch.
+	importPaths := make([]string, 0, len(snapshot))
+	for path := range snapshot {
+		importPaths = append(importPaths, path)
+	}
+	r.buildImports(idx, importPaths)
+
 	r.mu.Lock()
 	r.index = idx
 	r.mu.Unlock()
+}
+
+// buildImports walks each parsed file's top-level imports once at
+// rebuild time and emits one ImportEntry per unique path per file.
+// Dedups within a file — grouped `import ("a"; "a")` in Go or
+// duplicate specifiers in TS produce one entry per unique path.
+func (r *Repo) buildImports(idx *symIndex, paths []string) {
+	for _, path := range paths {
+		cf, err := r.CachedFile(path)
+		if err != nil || cf == nil || cf.Root == nil {
+			continue
+		}
+		var entries []ImportEntry
+		seen := make(map[string]bool)
+		root := cf.Root
+		for i := 0; i < int(root.ChildCount()); i++ {
+			ch := root.Child(i)
+			if ch == nil {
+				continue
+			}
+			if ch.Type() != "import_declaration" && ch.Type() != "import_statement" {
+				continue
+			}
+			ipath := ExtractImportPath(ch, cf.Bytes)
+			if ipath == "" || seen[ipath] {
+				continue
+			}
+			seen[ipath] = true
+			entries = append(entries, ImportEntry{
+				Path:     ipath,
+				StartRow: int(ch.StartPoint().Row),
+				EndRow:   int(ch.EndPoint().Row) + 1,
+			})
+		}
+		if len(entries) > 0 {
+			idx.importsByFile[path] = entries
+		}
+	}
 }
 
 // pkgFromPath infers the (Go) package name for a file under root. Thin alias
@@ -244,6 +293,30 @@ func callerEdgeKey(file string, s parser.Symbol) string {
 		return file + "::" + s.Receiver + "." + s.Name
 	}
 	return file + "::" + s.Name
+}
+
+// ImportsIn returns the persisted import entries for `file`, or nil
+// when the file has no imports or no entries have been indexed yet.
+// The result is a defensive copy — callers may mutate freely without
+// racing the index. Tier 0 in the scanImports dispatch; the live
+// walker is the unconditional fallback.
+func (r *Repo) ImportsIn(file string) []ImportEntry {
+	if file == "" {
+		return nil
+	}
+	r.mu.RLock()
+	idx := r.index
+	r.mu.RUnlock()
+	if idx == nil {
+		return nil
+	}
+	raw := idx.importsByFile[file]
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]ImportEntry, len(raw))
+	copy(out, raw)
+	return out
 }
 
 // LocateSymbol returns the (file, Symbol) for an id.ID of code-kind. File-
