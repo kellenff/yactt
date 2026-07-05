@@ -36,7 +36,23 @@ type TreeOverviewResult struct {
 	Summary    string               `json:"summary,omitempty"`
 	Provenance *domain.Provenance   `json:"provenance,omitempty"`
 	Children   []TreeOverviewResult `json:"children,omitempty"`
+	// Warning is set on the root only, when buildOverviewTree had to stop
+	// descending because the response would have exceeded maxResponseBytes.
+	// ponytail: this exists because callers need a "I missed something" signal
+	// that survives json round-trip; lift to a richer truncation object only if
+	// the budget starts truncating on real repos in surprising places.
+	Warning string `json:"warning,omitempty"`
 }
+
+// maxResponseBytes caps the JSON size of a single tree_overview response.
+// Var (not const) so tests can shrink it. ponytail: 16KB ≈ 4K tokens by
+// len(json)/4 rule. Lift to a tool argument when a caller actually needs to
+// tune it — none have yet.
+var maxResponseBytes = 16 * 1024
+
+// truncatedWarning is the fixed string stamped on root.Warning when the
+// budget causes the tree to be cut short. Constant so tests can match exactly.
+const truncatedWarning = "tree_overview: response truncated at 16KB budget; reduce depth or scope to see more"
 
 // TreeOverviewSchema is the JSON Schema for tree_overview. Mirrors the
 // design's spec in §4.1.
@@ -77,9 +93,12 @@ func TreeOverview(repo *store.Repo) func(ctx context.Context, args json.RawMessa
 		if a.Depth > 6 {
 			a.Depth = 6
 		}
-		root, err := buildOverviewTree(repo, repo.Root(), a.Depth)
+		root, truncated, err := buildOverviewTree(repo, repo.Root(), a.Depth)
 		if err != nil {
 			return nil, err
+		}
+		if truncated {
+			root.Warning = truncatedWarning
 		}
 		return root, nil
 	}
@@ -89,15 +108,67 @@ func TreeOverview(repo *store.Repo) func(ctx context.Context, args json.RawMessa
 // depth=1 means "repo + children" but not their children; depth=2 adds one
 // more level (files + functions). We do this synthetically since the repo
 // index only stores (file, symbols[]) pairs.
-func buildOverviewTree(repo *store.Repo, rootPath string, depth int) (TreeOverviewResult, error) {
-	root := TreeOverviewResult{
-		ID:         "repo:" + rootPath,
-		Kind:       domain.KindRepo,
-		Summary:    "Repository: " + rootPath,
+//
+// Returns the tree plus a `truncated` flag; the handler stamps the warning
+// onto the root when the budget ran out.
+func buildOverviewTree(repo *store.Repo, rootPath string, depth int) (TreeOverviewResult, bool, error) {
+	b := &overviewBuilder{budget: maxResponseBytes}
+	root, err := b.build(repo, rootPath, rootPath, depth, domain.KindRepo, "Repository: "+rootPath)
+	if err != nil {
+		return TreeOverviewResult{}, false, err
+	}
+	return root, b.truncated, nil
+}
+
+// overviewBuilder tracks the JSON-byte budget as a depth-N tree is built
+// synthetically. ponytail: global lock around the byte counter is fine —
+// tree_overview is request-scoped and serialized per MCP call.
+type overviewBuilder struct {
+	budget    int
+	used      int
+	truncated bool
+}
+
+// nodeOverhead is the fixed per-node JSON cost we charge before adding a
+// child: id + summary text + kind enum + provenance object + children
+// container + object wrapper. ponytail: this is a hand-tuned constant, not
+// a real marshal. Good enough because truncation only needs to be
+// approximate, never precise.
+const nodeOverhead = 256
+
+// reserve estimates the JSON bytes a node will cost, charges them up front,
+// and reports whether they fit. If not, it flips b.truncated and returns false.
+// The caller drops the child in that case.
+func (b *overviewBuilder) reserve(id, summary string) bool {
+	if b.truncated {
+		return false
+	}
+	cost := len(id) + len(summary) + nodeOverhead
+	if b.used+cost > b.budget {
+		b.truncated = true
+		return false
+	}
+	b.used += cost
+	return true
+}
+
+// build constructs one node and (when allowed by depth) its children.
+// `pathID` becomes the node ID; `kind` and `summary` come from the caller.
+// When depth < 1 the function returns a leaf-shaped node with no children.
+// The root node is reserved against the budget so the size estimate stays
+// honest at the top of the tree.
+func (b *overviewBuilder) build(repo *store.Repo, rootPath, nodePath string, depth int, kind domain.NodeKind, summary string) (TreeOverviewResult, error) {
+	n := TreeOverviewResult{
+		ID:         nodePath,
+		Kind:       kind,
+		Summary:    summary,
 		Provenance: prov(),
 	}
 	if depth < 1 {
-		return root, nil
+		return n, nil
+	}
+	if !b.reserve(nodePath, summary) {
+		return n, nil
 	}
 	// Group files by package (their parent directory under root).
 	pkgMap := make(map[string][]string)
@@ -106,19 +177,26 @@ func buildOverviewTree(repo *store.Repo, rootPath string, depth int) (TreeOvervi
 		pkgMap[pkg] = append(pkgMap[pkg], p)
 	}
 	for pkg, files := range pkgMap {
-		pkgID := fmt.Sprintf("pkg:%s", pkg)
+		pkgID := pkg
 		if pkg == "" {
-			pkgID = fmt.Sprintf("pkg:%s", rootPath)
+			pkgID = rootPath
+		}
+		if !b.reserve("pkg:"+pkgID, "Package: "+pkg) {
+			break
 		}
 		child := TreeOverviewResult{
-			ID:         pkgID,
+			ID:         "pkg:" + pkgID,
 			Kind:       domain.KindPackage,
 			Summary:    "Package: " + pkg,
 			Provenance: prov(),
 		}
 		for _, f := range files {
+			fileID := "file:" + relPath(rootPath, f)
+			if !b.reserve(fileID, "File: "+baseName(f)) {
+				break
+			}
 			fileNode := TreeOverviewResult{
-				ID:         "file:" + relPath(rootPath, f),
+				ID:         fileID,
 				Kind:       domain.KindFile,
 				Summary:    "File: " + baseName(f),
 				Provenance: prov(),
@@ -126,8 +204,12 @@ func buildOverviewTree(repo *store.Repo, rootPath string, depth int) (TreeOvervi
 			if depth >= 2 {
 				syms := repo.Symbols(f)
 				for _, s := range syms {
+					symID := symbolID(f, s, rootPath)
+					if !b.reserve(symID, symbolSummary(s)) {
+						break
+					}
 					symNode := TreeOverviewResult{
-						ID:         symbolID(f, s, rootPath),
+						ID:         symID,
 						Kind:       symbolKind(s),
 						Summary:    symbolSummary(s),
 						Provenance: prov(),
@@ -137,7 +219,7 @@ func buildOverviewTree(repo *store.Repo, rootPath string, depth int) (TreeOvervi
 			}
 			child.Children = append(child.Children, fileNode)
 		}
-		root.Children = append(root.Children, child)
+		n.Children = append(n.Children, child)
 	}
-	return root, nil
+	return n, nil
 }
