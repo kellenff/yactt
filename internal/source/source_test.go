@@ -341,3 +341,167 @@ func TestTokensEmptyLeafDropped(t *testing.T) {
 		}
 	}
 }
+
+// TestSlice_StartEqualsLineCount covers the boundary
+// `r.Start >= len(lines)` at line 81. Start exactly at len(lines)
+// (i.e. one past the last line) with End > Start must reject via
+// ErrRangeOOB — the live code is `>=` so Start==len(lines) is rejected.
+func TestSlice_StartEqualsLineCount(t *testing.T) {
+	p := writeFile(t, smallGoSource)
+	f, _ := source.LoadFile(p, goLang)
+	_, err := f.Slice(domain.LineRange{Start: f.LineCount(), End: f.LineCount() + 1})
+	if !errors.Is(err, source.ErrRangeOOB) {
+		t.Errorf("start == LineCount with End > Start: err = %v, want ErrRangeOOB", err)
+	}
+}
+
+// TestSlice_EndEqualsLineCount covers the boundary `end > len(lines)`
+// at line 85. End exactly at len(lines) is the inclusive-exclusive last
+// line; live code accepts, mutated `>=` would reject.
+func TestSlice_EndEqualsLineCount(t *testing.T) {
+	p := writeFile(t, smallGoSource)
+	f, _ := source.LoadFile(p, goLang)
+	got, err := f.Slice(domain.LineRange{Start: 0, End: f.LineCount()})
+	if err != nil {
+		t.Fatalf("end == LineCount: err = %v, want nil", err)
+	}
+	if got == "" {
+		t.Errorf("end == LineCount produced empty slice")
+	}
+}
+
+// TestSliceWithTrivia_StartAtZero covers the boundary `start > 0` at
+// line 107. When start == 0 the loop never runs, so no upward
+// extension. A mutation to `>=` would index lines[-1] and panic.
+func TestSliceWithTrivia_StartAtZero(t *testing.T) {
+	const file = "package x\n\nfunc F() {}\n"
+	p := writeFile(t, file)
+	f, _ := source.LoadFile(p, goLang)
+
+	// Lines: 0=package x, 1="", 2=func F() {}. Range [2,3) extends
+	// upward to include the blank line at 1.
+	got, err := f.SliceWithTrivia(domain.LineRange{Start: 2, End: 3})
+	if err != nil {
+		t.Fatalf("SliceWithTrivia: %v", err)
+	}
+	if !strings.Contains(got, "func F() {}") {
+		t.Errorf("got %q, missing func body", got)
+	}
+}
+
+// TestSliceWithTrivia_EndAtLineCount covers the boundary `end < len(lines)`
+// at line 111. When end == len(lines), the loop must NOT run (otherwise
+// we'd index out of bounds).
+func TestSliceWithTrivia_EndAtLineCount(t *testing.T) {
+	const file = "package x\n\nfunc F() {}\n"
+	p := writeFile(t, file)
+	f, _ := source.LoadFile(p, goLang)
+
+	// Range [2, 3) — end is at the last line. SliceWithTrivia must
+	// not panic trying to read lines[len(lines)].
+	_, err := f.SliceWithTrivia(domain.LineRange{Start: 2, End: 3})
+	if err != nil {
+		t.Fatalf("SliceWithTrivia at end-of-file: %v", err)
+	}
+}
+
+// TestSliceWithTrivia_AdjacentLineConcatenation covers the boundary
+// `r.Start < r.End` at line 120. When the range has at least one line,
+// a newline is inserted between head + body + tail. Pin the exact
+// output.
+func TestSliceWithTrivia_AdjacentLineConcatenation(t *testing.T) {
+	const file = "package x\n\n\nfunc F() {}\n\n"
+	p := writeFile(t, file)
+	f, _ := source.LoadFile(p, goLang)
+
+	// Range [3, 4] is the func line. Upward extension includes line 2
+	// (blank, whitespace). Result must contain the blank line followed
+	// by the func line, joined by \n.
+	got, err := f.SliceWithTrivia(domain.LineRange{Start: 3, End: 4})
+	if err != nil {
+		t.Fatalf("SliceWithTrivia: %v", err)
+	}
+	if !strings.Contains(got, "\nfunc F() {}") {
+		t.Errorf("got %q, want head+newline+body", got)
+	}
+}
+
+// TestLines_EmptyFile covers the boundary `len(raw) > 0` at line 134.
+// An empty file (zero bytes) returns an empty slice, not a panic.
+func TestLines_EmptyFile(t *testing.T) {
+	p := writeFile(t, "")
+	f, _ := source.LoadFile(p, goLang)
+	lines, err := f.Lines()
+	if err != nil {
+		t.Fatalf("Lines: %v", err)
+	}
+	if len(lines) != 0 {
+		t.Errorf("empty file lines = %d, want 0", len(lines))
+	}
+}
+
+// TestTokens_DefaultRangeAtZero covers the boundary
+// `filterEnd <= filterStart` at line 171. When Start == End == 0, the
+// default-range branch must fire (not the zero-range filter).
+func TestTokens_DefaultRangeAtZero(t *testing.T) {
+	p := writeFile(t, smallGoSource)
+	f, _ := source.LoadFile(p, goLang)
+
+	all, _ := f.Tokens(domain.LineRange{Start: 0, End: f.LineCount()})
+	def, err := f.Tokens(domain.LineRange{Start: 0, End: 0})
+	if err != nil {
+		t.Fatalf("Tokens default: %v", err)
+	}
+	if len(def) != len(all) {
+		t.Errorf("default-range at zero = %d, want %d (whole file)", len(def), len(all))
+	}
+}
+
+// TestWalkTokens_RangeBoundary covers the line-range filter in
+// walkTokens (line 186: `er <= lineStart || sr >= lineEnd`). A token
+// whose start row equals lineEnd is rejected.
+func TestWalkTokens_RangeBoundary(t *testing.T) {
+	p := writeFile(t, smallGoSource)
+	f, _ := source.LoadFile(p, goLang)
+
+	// Restrict to line 2 (the func declaration). A token whose start
+	// row is 2 and end row is also 2 (single-line token) must still be
+	// included (since er=2 > lineStart=2 is false, sr=2 < lineEnd=3 is true).
+	restricted, err := f.Tokens(domain.LineRange{Start: 2, End: 3})
+	if err != nil {
+		t.Fatalf("Tokens: %v", err)
+	}
+	if len(restricted) == 0 {
+		t.Fatalf("no tokens on line 2")
+	}
+	// And restricting to [3, 4) (line 3 = `\treturn nil`) must include
+	// tokens with sr=3.
+	rets, err := f.Tokens(domain.LineRange{Start: 3, End: 4})
+	if err != nil {
+		t.Fatalf("Tokens: %v", err)
+	}
+	if len(rets) == 0 {
+		t.Fatalf("no tokens on line 3")
+	}
+}
+
+// TestWalkTokens_ClampLowerBound covers the clamp helper at line 200
+// (`if v < lineStart`). For a token starting on line 0 with lineStart
+// == 2, the start must clamp to 2.
+func TestWalkTokens_ClampLowerBound(t *testing.T) {
+	const file = "package x\n\nfunc F() {\n\tdoStuff()\n}\n"
+	p := writeFile(t, file)
+	f, _ := source.LoadFile(p, goLang)
+
+	// Restrict to lines 3..5. Tokens on line 2 (the `func F()` line)
+	// have sr=2 — clamp should bring it to 3.
+	out, err := f.Tokens(domain.LineRange{Start: 3, End: 5})
+	if err != nil {
+		t.Fatalf("Tokens: %v", err)
+	}
+	for _, tok := range out {
+		if tok.LineRange.Start < 3 {
+			t.Errorf("token %+v: start < 3, clamp failed", tok)
+		}
+	}
+}

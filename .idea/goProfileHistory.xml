@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="GoProfileHistory">
+    <profile entry="$USER_HOME$/GoLandProfiles/go_test_github_com_kellenff_yactt_tests_acceptance-cpu_profile-2026-07-04-215301-518.pprof">
+      <GoProfileMapEntry>
+        <option name="buildAnchorMillis" value="1783227181584" />
+        <option name="file" value="go_test_github_com_kellenff_yactt_tests_acceptance-cpu_profile-2026-07-04-215301-518.pprof" />
+        <option name="ours" value="true" />
+      </GoProfileMapEntry>
+    </profile>
+    <profile entry="$USER_HOME$/GoLandProfiles/TestTreeOverviewAcceptance_in_github_com_kellenff_yactt_tests_acceptance-cpu_profile-2026-07-04-215406-795.pprof">
+      <GoProfileMapEntry>
+        <option name="buildAnchorMillis" value="1783227246857" />
+        <option name="file" value="TestTreeOverviewAcceptance_in_github_com_kellenff_yactt_tests_acceptance-cpu_profile-2026-07-04-215406-795.pprof" />
+        <option name="ours" value="true" />
+      </GoProfileMapEntry>
+    </profile>
+    <profile entry="$USER_HOME$/GoLandProfiles/TestTreeOverviewAcceptance_in_github_com_kellenff_yactt_tests_acceptance-memory_profile-2026-07-04-215558-488.pprof">
+      <GoProfileMapEntry>
+        <option name="buildAnchorMillis" value="1783227358589" />
+        <option name="file" value="TestTreeOverviewAcceptance_in_github_com_kellenff_yactt_tests_acceptance-memory_profile-2026-07-04-215558-488.pprof" />
+        <option name="ours" value="true" />
+      </GoProfileMapEntry>
+    </profile>
+    <profile entry="$USER_HOME$/GoLandProfiles/TestTreeOverviewAcceptance_in_github_com_kellenff_yactt_tests_acceptance-blocking_profile-2026-07-04-215620-552.pprof">
+      <GoProfileMapEntry>
+        <option name="buildAnchorMillis" value="1783227380584" />
+        <option name="file" value="TestTreeOverviewAcceptance_in_github_com_kellenff_yactt_tests_acceptance-blocking_profile-2026-07-04-215620-552.pprof" />
+        <option name="ours" value="true" />
+      </GoProfileMapEntry>
+    </profile>
+    <profile entry="$USER_HOME$/GoLandProfiles/TestTreeOverviewAcceptance_in_github_com_kellenff_yactt_tests_acceptance-mutex_profile-2026-07-04-215654-980.pprof">
+      <GoProfileMapEntry>
+        <option name="buildAnchorMillis" value="1783227415049" />
+        <option name="file" value="TestTreeOverviewAcceptance_in_github_com_kellenff_yactt_tests_acceptance-mutex_profile-2026-07-04-215654-980.pprof" />
+        <option name="ours" value="true" />
+      </GoProfileMapEntry>
+    </profile>
+    <profile entry="$USER_HOME$/GoLandProfiles/TestFindSymbol_PrefixGlob_Login_in_github_com_kellenff_yactt_tests_acceptance-cpu_profile-2026-07-04-215721-076.pprof">
+      <GoProfileMapEntry>
+        <option name="buildAnchorMillis" value="1783227441129" />
+        <option name="file" value="TestFindSymbol_PrefixGlob_Login_in_github_com_kellenff_yactt_tests_acceptance-cpu_profile-2026-07-04-215721-076.pprof" />
+        <option name="ours" value="true" />
+      </GoProfileMapEntry>
+    </profile>
+    <profile entry="$USER_HOME$/GoLandProfiles/TestFindCode_RegexPattern_Charge_in_github_com_kellenff_yactt_tests_acceptance-cpu_profile-2026-07-04-215748-406.pprof">
+      <GoProfileMapEntry>
+        <option name="buildAnchorMillis" value="1783227468467" />
+        <option name="file" value="TestFindCode_RegexPattern_Charge_in_github_com_kellenff_yactt_tests_acceptance-cpu_profile-2026-07-04-215748-406.pprof" />
+        <option name="ours" value="true" />
+      </GoProfileMapEntry>
+    </profile>
+    <profile entry="$USER_HOME$/GoLandProfiles/TestFindReferencingSymbols_CrossPackage_Charge_in_github_com_kellenff_yactt_tests_acceptance-cpu_profile-2026-07-04-215843-391.pprof">
+      <GoProfileMapEntry>
+        <option name="buildAnchorMillis" value="1783227523470" />
+        <option name="file" value="TestFindReferencingSymbols_CrossPackage_Charge_in_github_com_kellenff_yactt_tests_acceptance-cpu_profile-2026-07-04-215843-391.pprof" />
+        <option name="ours" value="true" />
+      </GoProfileMapEntry>
+    </profile>
+    <profile entry="$USER_HOME$/GoLandProfiles/go_test_github_com_kellenff_yactt_internal_search-cpu_profile-2026-07-04-220444-628.pprof">
+      <GoProfileMapEntry>
+        <option name="buildAnchorMillis" value="1783227884680" />
+        <option name="file" value="go_test_github_com_kellenff_yactt_internal_search-cpu_profile-2026-07-04-220444-628.pprof" />
+        <option name="ours" value="true" />
+      </GoProfileMapEntry>
+    </profile>
+    <profile entry="$USER_HOME$/GoLandProfiles/go_test_github_com_kellenff_yactt_internal_search-blocking_profile-2026-07-04-220506-808.pprof">
+      <GoProfileMapEntry>
+        <option name="buildAnchorMillis" value="1783227906876" />
+        <option name="file" value="go_test_github_com_kellenff_yactt_internal_search-blocking_profile-2026-07-04-220506-808.pprof" />
+        <option name="ours" value="true" />
+      </GoProfileMapEntry>
+    </profile>
+    <profile entry="$USER_HOME$/GoLandProfiles/go_test_github_com_kellenff_yactt_internal_search-mutex_profile-2026-07-04-220536-282.pprof">
+      <GoProfileMapEntry>
+        <option name="buildAnchorMillis" value="1783227936348" />
+        <option name="file" value="go_test_github_com_kellenff_yactt_internal_search-mutex_profile-2026-07-04-220536-282.pprof" />
+        <option name="ours" value="true" />
+      </GoProfileMapEntry>
+    </profile>
+  </component>
+</project>

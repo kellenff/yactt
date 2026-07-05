@@ -76,6 +76,7 @@ func runOverview(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load: %w", err)
 	}
+	defer func() { _ = repo.Close() }()
 	if len(errs) > 0 {
 		fmt.Fprintf(os.Stderr, "load: %d file errors\n", len(errs))
 	}
@@ -104,6 +105,7 @@ func runMCPServe(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load: %w", err)
 	}
+	defer func() { _ = repo.Close() }()
 	if len(errs) > 0 {
 		fmt.Fprintf(os.Stderr, "warning: %d file errors during load\n", len(errs))
 	}

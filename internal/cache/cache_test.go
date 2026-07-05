@@ -255,3 +255,135 @@ func itoa(i int) string {
 	}
 	return string(buf[pos:])
 }
+
+// TestNew_UsesDefaultConstants asserts that the default constructor picks the
+// documented constants — guards the ARITHMETIC_BASE mutations on the
+// DefaultLayerCap and DefaultSummaryTTL constant declarations. A bare
+// `New()` cache must satisfy capacities and TTLs derived from the public
+// constants.
+func TestNew_UsesDefaultConstants(t *testing.T) {
+	c := New()
+	if c.fileCap != DefaultFileCap {
+		t.Errorf("fileCap = %d, want DefaultFileCap (%d)", c.fileCap, DefaultFileCap)
+	}
+	if c.layerCap != DefaultLayerCap {
+		t.Errorf("layerCap = %d, want DefaultLayerCap (%d)", c.layerCap, DefaultLayerCap)
+	}
+	if c.semanticTTL != DefaultSemanticTTL {
+		t.Errorf("semanticTTL = %v, want DefaultSemanticTTL (%v)", c.semanticTTL, DefaultSemanticTTL)
+	}
+	if c.summaryTTL != DefaultSummaryTTL {
+		t.Errorf("summaryTTL = %v, want DefaultSummaryTTL (%v)", c.summaryTTL, DefaultSummaryTTL)
+	}
+
+	// Round-trip a single file and a single layer to confirm defaults are
+	// wired through (capacity+TTL machinery actually works).
+	c.PutFile(mkFile("/a.go", 1))
+	if _, err := c.GetFile("/a.go", 1); err != nil {
+		t.Errorf("GetFile under defaults: %v", err)
+	}
+	c.PutLayer("n", "summary", []byte("v"))
+	if got, err := c.GetLayer("n", "summary"); err != nil || string(got) != "v" {
+		t.Errorf("GetLayer under defaults: got=%q err=%v", got, err)
+	}
+}
+
+// TestNewSized_ZeroFileCapFallsBackToDefault exercises the `fileCap <= 0`
+// branch. Without this test the boundary mutation `fileCap < 0` (instead of
+// `<=`) cannot be distinguished from the live code.
+func TestNewSized_ZeroFileCapFallsBackToDefault(t *testing.T) {
+	c := NewSized(0, 5)
+	if c.fileCap != DefaultFileCap {
+		t.Errorf("fileCap = %d, want DefaultFileCap (%d)", c.fileCap, DefaultFileCap)
+	}
+}
+
+// TestNewSized_NegativeFileCapFallsBackToDefault is the `< 0` half of the
+// boundary — the canonical "negative sentinel" form. Cache must still be
+// usable.
+func TestNewSized_NegativeFileCapFallsBackToDefault(t *testing.T) {
+	c := NewSized(-3, 5)
+	if c.fileCap != DefaultFileCap {
+		t.Errorf("fileCap = %d, want DefaultFileCap (%d)", c.fileCap, DefaultFileCap)
+	}
+	// And the cache must still work end-to-end.
+	c.PutFile(mkFile("/a.go", 1))
+	if _, err := c.GetFile("/a.go", 1); err != nil {
+		t.Errorf("GetFile under negative fileCap: %v", err)
+	}
+}
+
+// TestNewSized_ZeroLayerCapFallsBackToDefault covers the `layerCap <= 0`
+// branch. Mirrors the file-cap test above.
+func TestNewSized_ZeroLayerCapFallsBackToDefault(t *testing.T) {
+	c := NewSized(5, 0)
+	if c.layerCap != DefaultLayerCap {
+		t.Errorf("layerCap = %d, want DefaultLayerCap (%d)", c.layerCap, DefaultLayerCap)
+	}
+}
+
+// TestNewSized_NegativeLayerCapFallsBackToDefault is the `< 0` half.
+func TestNewSized_NegativeLayerCapFallsBackToDefault(t *testing.T) {
+	c := NewSized(5, -7)
+	if c.layerCap != DefaultLayerCap {
+		t.Errorf("layerCap = %d, want DefaultLayerCap (%d)", c.layerCap, DefaultLayerCap)
+	}
+	c.PutLayer("n", "signature", []byte("v"))
+	if got, err := c.GetLayer("n", "signature"); err != nil || string(got) != "v" {
+		t.Errorf("GetLayer under negative layerCap: got=%q err=%v", got, err)
+	}
+}
+
+// TestCacheLayerTTLBoundary_ExactlyAtExpiry sits precisely on the
+// `now().Sub(ts) > ttl` boundary. The mutation that flips `>` to `>=`
+// would make a value written exactly TTL ago still live; the live code
+// expires it. We assert the entry is gone after exactly TTL elapses.
+func TestCacheLayerTTLBoundary_ExactlyAtExpiry(t *testing.T) {
+	c, clk := newCacheWithClock()
+	c.PutLayer("n", "signature", []byte("v"))
+
+	// Advance by exactly the TTL. The contract is "expired at or past TTL":
+	// since the comparison is strict `>`, an exact-TTL entry is still live.
+	clk.advance(DefaultSemanticTTL)
+	if got, err := c.GetLayer("n", "signature"); err != nil || string(got) != "v" {
+		t.Fatalf("at exact TTL: got=%q err=%v want live entry", got, err)
+	}
+
+	// One nanosecond past TTL: must be expired.
+	clk.advance(time.Nanosecond)
+	if _, err := c.GetLayer("n", "signature"); !errors.Is(err, ErrMiss) {
+		t.Errorf("one nanosecond past TTL: err = %v, want ErrMiss", err)
+	}
+}
+
+// TestCacheLayerTTLBoundary_SummaryExactlyAtExpiry is the same boundary
+// guard for the summary layer (24h TTL). The summary path uses a different
+// `ttl` variable, so the boundary check applies independently.
+func TestCacheLayerTTLBoundary_SummaryExactlyAtExpiry(t *testing.T) {
+	c, clk := newCacheWithClock()
+	c.PutLayer("n", "summary", []byte("v"))
+
+	// Exactly at summary TTL: still live (strict >).
+	clk.advance(DefaultSummaryTTL)
+	if got, err := c.GetLayer("n", "summary"); err != nil || string(got) != "v" {
+		t.Fatalf("at exact summary TTL: got=%q err=%v want live", got, err)
+	}
+	// One ns past: expired.
+	clk.advance(time.Nanosecond)
+	if _, err := c.GetLayer("n", "summary"); !errors.Is(err, ErrMiss) {
+		t.Errorf("one ns past summary TTL: err = %v, want ErrMiss", err)
+	}
+}
+
+// TestCacheFileMtimeBoundary_ExactMatch asserts that a currentMTime equal
+// to the cached mtime is a hit (the live comparison is strict `!=`).
+// Mirrors the layer TTL boundary: a mutation to `==` would silently
+// invalidate on every read.
+func TestCacheFileMtimeBoundary_ExactMatch(t *testing.T) {
+	c := NewSized(4, 4)
+	c.PutFile(mkFile("/a.go", 42))
+	// Exact match: hit.
+	if _, err := c.GetFile("/a.go", 42); err != nil {
+		t.Fatalf("exact-mtime GetFile: %v", err)
+	}
+}

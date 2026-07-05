@@ -129,3 +129,33 @@ func TestFirstLineLeadingSpaceInContent(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// TestFirstLineBlockComment_EmptyBetweenMarkers covers the boundary
+// `if idx := strings.Index(line, "*/"); idx >= 0` at summarizer.go:66.
+// When the `*/` is at position 0 (e.g. `/**/`), the live code trims to
+// empty (the comment body is empty). A mutation to `> 0` would skip
+// the trim — but the trailing `*/` would remain and `Index` on the
+// next iteration would find it again, producing "*/" in the output.
+// Pin the live contract: empty between markers.
+func TestFirstLineBlockComment_EmptyBetweenMarkers(t *testing.T) {
+	if got := summarizer.FirstLine("/**/"); got != "" {
+		t.Errorf("FirstLine(/**/) = %q, want empty (no content between markers)", got)
+	}
+}
+
+// TestFirstLineBlockComment_AdjacentMarkers exercises the boundary
+// case where the body starts with whitespace (" ") after the opening
+// "/*". The live code trims both the leading whitespace (via TrimSpace)
+// and the trailing `*/` (idx >= 0 fires at idx 0 when the body is empty).
+// A mutation to `> 0` would leave `*/` in place — pin the live contract.
+func TestFirstLineBlockComment_AdjacentMarkers(t *testing.T) {
+	// `/**/` after TrimSpace → `/**/`. After TrimPrefix("/*") → `*/`.
+	// Index("*/") = 0. Trims to "" → trimmed empty → continue → return "".
+	if got := summarizer.FirstLine("/**/"); got != "" {
+		t.Errorf("FirstLine(/**/) = %q, want empty (live code trims to empty body)", got)
+	}
+	// `/* content */` — standard case — must keep "content".
+	if got, want := summarizer.FirstLine("/* content */"), "content"; got != want {
+		t.Errorf("FirstLine(/* content */) = %q, want %q", got, want)
+	}
+}

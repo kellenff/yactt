@@ -82,6 +82,10 @@ func TestMaterializeNodeSummaryFromDocComment(t *testing.T) {
 
 func TestMaterializeNodeSignatureMultiLine(t *testing.T) {
 	r, _ := loadFixture(t)
+	// Detach LSP so this test exercises the tree-sitter (Tier-2) signature
+	// path. The full tree-sitter body is the slice between StartRow and
+	// EndRow; gopls would emit only the typed header line, masking it.
+	r.DetachLSPForTest()
 	// Login's signature is multi-line: header + body lines.
 	nodeID := id.Function("auth", "", "Login")
 	n, err := store.MaterializeNode(r, nodeID, map[domain.LayerName]bool{domain.LayerSignature: true})
@@ -265,6 +269,10 @@ func TestBodyForInvalidID(t *testing.T) {
 
 func TestProvenanceOnLayers(t *testing.T) {
 	r, _ := loadFixture(t)
+	// Detach LSP so this test exercises the tree-sitter (Tier-2) path for
+	// signature and body layers — its assertions are about the floor
+	// behaviour, not Tier-1.
+	r.DetachLSPForTest()
 	nodeID := id.Function("auth", "", "Login")
 	layers := map[domain.LayerName]bool{
 		domain.LayerSummary:   true,

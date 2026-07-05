@@ -15,6 +15,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -22,9 +23,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kellenff/yactt/internal/cache"
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/lsp"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/source"
 )
@@ -34,6 +37,10 @@ var ErrNotFound = errors.New("store: not found")
 
 // Repo is the per-root load of a code repository. It is safe for concurrent
 // use — symbol/file accessors take the internal mutex.
+//
+// When the load can locate a language server (gopls) on PATH, the repo
+// carries a live *lsp.Client on `lsp`. Materializers consult it first per
+// layer; tree-sitter is the unconditional floor.
 type Repo struct {
 	root          string
 	cache         *cache.Cache
@@ -43,6 +50,13 @@ type Repo struct {
 	index         *symIndex
 	rootPkg       string
 	prov          domain.Provenance
+
+	// LSP subgraph (Tier 1). Nil when the language server was not on
+	// PATH at Load time, or when startup failed. Materializers must
+	// treat `r.lsp == nil` as "tree-sitter only with the
+	// `no-lsp-installed` fallback marker".
+	lsp        *lsp.Client
+	lspVersion string
 }
 
 // Load scans root, parses each source file matching a known language, and
@@ -123,7 +137,114 @@ func Load(root string) (*Repo, []error, error) {
 
 	r.rebuildIndex()
 
+	// Opportunistic LSP startup. Successful start attaches `r.lsp` and
+	// captures the server version; any error (gopls missing, handshake
+	// failure, etc.) leaves `r.lsp == nil` so materializers fall
+	// through to tree-sitter with the existing `no-lsp-installed`
+	// marker. We use a short timeout because a hung gopls (slow
+	// indexing, etc.) shouldn't stall Load.
+	startCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	client, err := lsp.Start(startCtx, abs, lsp.Options{
+		Timeout:      500 * time.Millisecond,
+		Concurrency:  8,
+		CloseTimeout: 5 * time.Second,
+		Logf: func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "lsp: "+format+"\n", args...)
+		},
+	})
+	if err != nil {
+		// Expected when gopls is missing or fails to start. Surface to
+		// stderr at low volume so CI logs show "LSP not available"
+		// without polluting otherwise-quiet runs.
+		fmt.Fprintf(os.Stderr, "lsp: startup declined: %v\n", err)
+	} else {
+		r.lsp = client
+		r.lspVersion = client.Version()
+
+		// Eagerly open every parsed Go file in gopls so the first
+		// hover after Load hits a warm cache. Without this, gopls
+		// lazily indexes on the first request and that request can
+		// exceed the 500ms per-request budget. We use a 5-second
+		// per-file deadline: the first request against an unindexed
+		// file routinely takes 1–3 s while gopls parses and
+		// type-checks, well past the production 500 ms budget.
+		warmCtx, warmCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		files := make([]lsp.OpenFile, 0, len(r.files))
+		for p, f := range r.files {
+			if !strings.HasSuffix(p, ".go") {
+				continue
+			}
+			files = append(files, lsp.OpenFile{
+				Path:     p,
+				Language: "go",
+				Text:     string(f.Bytes),
+			})
+		}
+		if n := lsp.OpenWorkspace(warmCtx, client, files, lsp.OpenWorkspaceOptions{
+			PerFileTimeout: 5 * time.Second,
+			Logf: func(format string, args ...any) {
+				fmt.Fprintf(os.Stderr, "lsp: "+format+"\n", args...)
+			},
+		}); n > 0 {
+			fmt.Fprintf(os.Stderr, "lsp: warmed %d files\n", n)
+		}
+		warmCancel()
+	}
+
 	return r, errs, nil
+}
+
+// LSP returns the live *lsp.Client, or nil when the language server was
+// not available at Load time. Tests use this to inject a stub.
+func (r *Repo) LSP() *lsp.Client { return r.lsp }
+
+// LSPVersion returns the version pinned during the LSP initialize
+// handshake, or "" when `r.lsp == nil`.
+func (r *Repo) LSPVersion() string { return r.lspVersion }
+
+// Close shuts the LSP client down cleanly (sends LSP shutdown + exit
+// notifications, kills the child on timeout). Idempotent. Safe to call
+// when `r.lsp == nil` (no-op).
+//
+// Callers should defer `r.Close()` right after `store.Load` so the gopls
+// child is always reaped, regardless of the exit path.
+func (r *Repo) Close() error {
+	c := r.lsp
+	if c == nil {
+		return nil
+	}
+	r.lsp = nil
+	return c.Close()
+}
+
+// DetachLSPForTest removes the LSP client from the repo. Used only in
+// acceptance tests that need to assert the tree-sitter fallback path
+// independent of whether gopls happens to be on PATH.
+//
+// Not thread-safe — callers should serialize. Production code should use
+// Close().
+func (r *Repo) DetachLSPForTest() {
+	if r.lsp == nil {
+		return
+	}
+	_ = r.lsp.Close()
+	r.lsp = nil
+	r.lspVersion = ""
+}
+
+// AttachLSPForTest attaches a pre-built LSP client to the repo. Used
+// only in acceptance tests. The client is owned by the repo afterwards
+// (Close will shut it down).
+func (r *Repo) AttachLSPForTest(c *lsp.Client) {
+	if c == nil {
+		return
+	}
+	if r.lsp != nil {
+		_ = r.lsp.Close()
+	}
+	r.lsp = c
+	r.lspVersion = c.Version()
 }
 
 // Root returns the absolute path of the repository root.

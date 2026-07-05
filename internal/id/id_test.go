@@ -274,3 +274,67 @@ func TestMustParseOK(t *testing.T) {
 		t.Errorf("MustParse = %+v, want {Function, auth.Login}", got)
 	}
 }
+
+// TestFunction_EmptyReceiverOmitsMiddleSegment is the regression guard for
+// the `receiver == ""` branch in Function(). A mutation that flips the
+// condition would emit `pkg + "." + "" + "." + name` ("auth..Login") for
+// the empty-receiver case. The round-trip via Parse is lenient so the
+// round-trip in TestConstructorsRoundTrip might survive a subtle mutation;
+// this test pins the exact rendered Body.
+func TestFunction_EmptyReceiverOmitsMiddleSegment(t *testing.T) {
+	got := id.Function("auth", "", "Login")
+	want := id.ID{Kind: id.KindFunction, Body: "auth.Login"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Function(empty receiver) = %+v, want %+v", got, want)
+	}
+	// And the String form has exactly one dot, not two.
+	if s := got.String(); s != "fn:auth.Login" {
+		t.Errorf("String() = %q, want fn:auth.Login (no empty middle segment)", s)
+	}
+}
+
+// TestFunction_NonEmptyReceiverIncludesMiddleSegment covers the
+// non-empty-receiver branch — protects against a flipped condition
+// dropping the receiver entirely.
+func TestFunction_NonEmptyReceiverIncludesMiddleSegment(t *testing.T) {
+	got := id.Function("auth", "Server", "Login")
+	want := id.ID{Kind: id.KindFunction, Body: "auth.Server.Login"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Function(non-empty receiver) = %+v, want %+v", got, want)
+	}
+	if s := got.String(); s != "fn:auth.Server.Login" {
+		t.Errorf("String() = %q, want fn:auth.Server.Login", s)
+	}
+}
+
+// TestFunctionParts_BodyWithLeadingDot covers the boundary case for
+// `last := strings.LastIndexByte(...)`. When the body has a leading dot
+// (e.g. ".Login"), `last == 0` — strictly greater than -1, so the live
+// code treats it as a valid name. A mutation flipping `<` to `<=` would
+// reject this input as malformed. This test pins the live behaviour.
+func TestFunctionParts_BodyWithLeadingDot(t *testing.T) {
+	i := id.ID{Kind: id.KindFunction, Body: ".Login"}
+	pkg, recv, name, err := i.FunctionParts()
+	if err != nil {
+		t.Fatalf("FunctionParts(.Login) error: %v", err)
+	}
+	if pkg != "" || recv != "" || name != "Login" {
+		t.Errorf("parts = (%q, %q, %q), want (\"\", \"\", \"Login\")", pkg, recv, name)
+	}
+}
+
+// TestFunctionParts_HeadWithLeadingDot covers the boundary for
+// `mid := strings.LastIndexByte(head, '.')`. When the head has a leading
+// dot (e.g. body ".X.Y" → head=".X", mid==0), the live code keeps going
+// because `mid < 0` is false at 0. A mutation to `<=` would reject this
+// as malformed. Pin the live behaviour.
+func TestFunctionParts_HeadWithLeadingDot(t *testing.T) {
+	i := id.ID{Kind: id.KindFunction, Body: ".X.Y"}
+	pkg, recv, name, err := i.FunctionParts()
+	if err != nil {
+		t.Fatalf("FunctionParts(.X.Y) error: %v", err)
+	}
+	if pkg != "" || recv != "X" || name != "Y" {
+		t.Errorf("parts = (%q, %q, %q), want (\"\", \"X\", \"Y\")", pkg, recv, name)
+	}
+}

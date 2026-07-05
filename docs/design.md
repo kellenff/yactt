@@ -848,15 +848,26 @@ Same as `node_edges` + ~50 ms for the resolution step when `symbol` is a name_pa
 | Tool | Latency (warm) | Primary backend | Fallback | Purpose |
 |---|---|---|---|---|
 | `tree_overview` | 50–200 ms | tree-sitter | — | Repo orientation |
-| `node_get` | 100–500 ms | LSP | tree-sitter (no types) | Drill into a node's layers |
+| `node_get` | <100 ms warm / 1–3 s cold | LSP | tree-sitter (no types) | Drill into a node's layers |
 | `node_source` | <10 ms | tree-sitter | — | Lossless source slice |
-| `node_edges` | 5–50 ms | SCIP | LSP `references` | Cross-references (node-addressed) |
+| `node_edges` | <100 ms warm / 1–3 s cold | LSP `references` | tree-sitter (syntactic, conf 0.5) | Cross-references (node-addressed) |
 | `search` | ~100 ms | tree-sitter + fuzzy | LSP `workspace/symbol` | Find by name/doc-comment |
 | `edit_impact` | 200–500 ms | composed | — | Pre-flight rename impact |
 | `find_symbol` | <100 ms | SCIP | LSP `workspace/symbol` | Locate by qualified path + globs |
 | `get_symbols_overview` | <10 ms | tree-sitter | — | Top-level outline of a file |
 | `find_code` | 1–60 s | ripgrep / tree-sitter | — | AST-aware pattern search |
-| `find_referencing_symbols` | 5–50 ms | SCIP | LSP `references` | Cross-references (symbol-addressed) |
+| `find_referencing_symbols` | <100 ms warm | LSP `references` | tree-sitter (syntactic, conf 0.5) | Cross-references (symbol-addressed) |
+
+> **Cold-start footnote for `node_get` and `node_edges`.** The Tier-1
+> (gopls) path pays a 1–3 s first-hit cost when gopls finishes indexing
+> the workspace at `Load` time. Subsequent calls land at sub-100 ms.
+> We do not pre-warm gopls in the background because `Load` is already
+> I/O-bound; adding another process spawn would push startup latency
+> above the design's budget. Agents see the latency on the first call
+> after `yactt mcp serve` boots and steady-state perf afterwards.
+> When gopls is missing from PATH, every request falls through to
+> tree-sitter (`FallbackUsed: "no-lsp-installed"`) and the latency
+> table above reduces by the LSP round-trip cost.
 
 ### 5.2 Layered cache
 

@@ -396,3 +396,115 @@ func TestServerServeRejectsBadStdin(t *testing.T) {
 		t.Fatal("expected error when stdin reader fails")
 	}
 }
+
+// TestServerInitialize_WithParams covers the `len(req.Params) > 0`
+// branch (line 124) — initialize with non-empty params must still
+// produce a valid InitializeResult. A mutation flipping `>` to `<=`
+// would parse empty params; this test pins the non-empty case.
+func TestServerInitialize_WithParams(t *testing.T) {
+	s, stdin, stdout := newServer(t)
+	stdin.WriteString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"x"}}}` + "\n")
+	if err := s.Serve(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var resp mcp.Response
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+	if resp.ID == nil {
+		t.Errorf("response ID nil")
+	}
+}
+
+// TestServerInitialize_EmptyParams exercises the `len(req.Params) == 0`
+// branch (the inverse). With empty params, the live code skips the
+// json.Unmarshal call; the mutation `<=` would attempt unmarshal of
+// empty bytes. The response must still be valid.
+func TestServerInitialize_EmptyParams(t *testing.T) {
+	s, stdin, stdout := newServer(t)
+	stdin.WriteString(`{"jsonrpc":"2.0","id":1,"method":"initialize"}` + "\n")
+	if err := s.Serve(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var resp mcp.Response
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+	// Result must still be a valid InitializeResult.
+	init, ok := resp.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("Result = %T, want map[string]any", resp.Result)
+	}
+	if _, ok := init["protocolVersion"]; !ok {
+		t.Errorf("Result missing protocolVersion: %+v", init)
+	}
+}
+
+// TestServerWriteStdoutError covers the `s.stdout.Write(b)` error
+// branch at line 207. When stdout.Write returns an error, Serve
+// silently drops the frame (doesn't crash, doesn't retry). Pin the
+// "best-effort" contract.
+func TestServerWriteStdoutError(t *testing.T) {
+	stdin := &bytes.Buffer{}
+	errWriter := &errWriter{}
+	s := mcp.NewServer("y", "v", "p", errWriter, func() (io.Reader, error) {
+		return stdin, nil
+	})
+	stdin.WriteString(`{"jsonrpc":"2.0","id":1,"method":"initialize"}` + "\n")
+	// Serve must not panic / error out on a write failure.
+	err := s.Serve(context.Background())
+	if err != nil && !errors.Is(err, io.EOF) {
+		// EOF is acceptable — bufio scanner returns EOF when stdin is exhausted.
+		// Anything else is a real failure.
+		t.Errorf("Serve with failing stdout: %v", err)
+	}
+}
+
+// errWriter is an io.Writer that always returns an error. Used to drive
+// the "stdout write failed" path in server.write.
+type errWriter struct{}
+
+func (errWriter) Write(_ []byte) (int, error) {
+	return 0, errors.New("write failed")
+}
+
+// TestServerToolsCall_NilResult covers the `if result != nil` guard
+// at line 178. When the handler returns (nil, nil), the response must
+// still be a valid CallToolResult with empty content.
+func TestServerToolsCall_NilResult(t *testing.T) {
+	stub := &stubHandler{ret: nil, err: nil}
+	s, stdin, stdout := newServer(t,
+		mcp.ToolDef{
+			Name:        "nil_result",
+			InputSchema: json.RawMessage(`{}`),
+			Handler:     stub.Handle,
+		},
+	)
+	stdin.WriteString(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"nil_result"}}` + "\n")
+	if err := s.Serve(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var resp mcp.Response
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+	// The result should be a CallToolResult with empty text payload.
+	ctr, ok := resp.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("Result = %T, want map[string]any", resp.Result)
+	}
+	// Content is the wire-shape TextContent(payload). payload is "" since
+	// result was nil — the marshal produced "content":[] or "content":""?
+	if len(ctr) == 0 {
+		t.Errorf("Result empty: %+v", ctr)
+	}
+}

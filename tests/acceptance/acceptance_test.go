@@ -260,3 +260,159 @@ func TestNodeEdgesAcceptance(t *testing.T) {
 		t.Fatal("expected callees for Login")
 	}
 }
+
+// TestNodeGet_CrossPackage_Charge confirms that node_get returns the
+// signature + body layers for `fn:payments.Charge` and that the body
+// stmts mention the function name. This is the cross-package node the
+// smoke test surfaced; without LSP materialization it still works via
+// the tree-sitter pass.
+func TestNodeGet_CrossPackage_Charge(t *testing.T) {
+	repo := loadRepo(t)
+	out := callJSON(t, tool.GetNode(repo), `{"id":"fn:payments.Charge","layers":["signature","body"]}`)
+	n, ok := out.(*domain.Node)
+	if !ok {
+		t.Fatalf("node_get type: got %T", out)
+	}
+	if n == nil {
+		t.Fatal("node_get returned nil")
+	}
+	if n.ID != "fn:payments.Charge" {
+		t.Fatalf("id=%q want fn:payments.Charge", n.ID)
+	}
+	if n.Signature == nil || !strings.Contains(n.Signature.Text, "Charge") {
+		t.Fatalf("signature missing or empty: %+v", n.Signature)
+	}
+	if n.Body == nil || len(n.Body.Stmts) == 0 {
+		t.Fatalf("body missing or empty: %+v", n.Body)
+	}
+}
+
+// TestNodeGet_CrossPackage_Login_BodyMentionsCharge confirms that the
+// body of `auth.Login` references `payments.Charge` somewhere in its
+// statements. Without the field_identifier fix in extractCalleeName,
+// the body would still serialise (it just wouldn't link across
+// packages); the substantive regression this catches is that the
+// body layer is *not* accidentally empty for cross-package callers.
+func TestNodeGet_CrossPackage_Login_BodyMentionsCharge(t *testing.T) {
+	repo := loadRepo(t)
+	out := callJSON(t, tool.GetNode(repo), `{"id":"fn:auth.Login","layers":["body"]}`)
+	n, ok := out.(*domain.Node)
+	if !ok {
+		t.Fatalf("node_get type: got %T", out)
+	}
+	if n == nil || n.Body == nil {
+		t.Fatal("node_get returned nil or body layer nil")
+	}
+	mentions := false
+	for _, stmt := range n.Body.Stmts {
+		if strings.Contains(stmt.Text, "payments.Charge") {
+			mentions = true
+			break
+		}
+	}
+	if !mentions {
+		t.Fatalf("expected a body stmt mentioning payments.Charge, got %+v", n.Body.Stmts)
+	}
+}
+
+// TestFindSymbol_ExactNamePath exercises the name-path matching path of
+// find_symbol. The slash-separated path "auth/Login" resolves to the
+// package prefix "auth." plus the symbol-name pattern "Login", so the
+// matcher can land on `auth.Login` without wildcards. Catches regressions
+// in the segment-splitting logic of findsymbol.go.
+func TestFindSymbol_ExactNamePath(t *testing.T) {
+	repo := loadRepo(t)
+	out := callJSON(t, tool.FindSymbol(repo), `{"name_path":"auth/Login","limit":5,"include_body":false}`)
+	hits, ok := out.([]tool.FindSymbolResult)
+	if !ok {
+		t.Fatalf("find_symbol type: got %T", out)
+	}
+	if len(hits) == 0 {
+		t.Fatal("expected at least one match for auth/Login")
+	}
+	if hits[0].Node == nil || hits[0].Node.ID != "fn:auth.Login" {
+		t.Fatalf("first hit node id=%q want fn:auth.Login", hits[0].Node.ID)
+	}
+}
+
+// TestFindSymbol_PrefixGlob_Login documents the prefix-glob behaviour:
+// `auth/Login*` is the package hint + a glob pattern; it should resolve
+// to `Login` (the function under test) without picking up unrelated
+// entries in the same package. This is the matchByNamePattern contract
+// the smoke test relied on.
+func TestFindSymbol_PrefixGlob_Login(t *testing.T) {
+	repo := loadRepo(t)
+	out := callJSON(t, tool.FindSymbol(repo), `{"name_path":"auth/Login*","limit":10,"include_body":false}`)
+	hits, ok := out.([]tool.FindSymbolResult)
+	if !ok {
+		t.Fatalf("find_symbol type: got %T", out)
+	}
+	if len(hits) == 0 {
+		t.Fatal("expected at least one match for auth/Login*")
+	}
+	loginHit := false
+	for _, h := range hits {
+		if h.Node != nil && h.Node.ID == "fn:auth.Login" {
+			loginHit = true
+			break
+		}
+	}
+	if !loginHit {
+		t.Fatalf("expected fn:auth.Login in prefix-glob hits, got %+v", hits)
+	}
+}
+
+// TestFindCode_RegexPattern_Charge verifies the regex pattern_kind of
+// find_code against the cross-package fixture. The smoke test attempted
+// `pattern_kind=substring` which the schema does not list as a valid
+// value; the regression we guard here is that the regex engine still
+// returns the cross-package call site (auth/login.go: `payments.Charge(sess)`).
+func TestFindCode_RegexPattern_Charge(t *testing.T) {
+	repo := loadRepo(t)
+	out := callJSON(t, tool.FindCode(repo), `{"pattern":"payments\\.Charge","pattern_kind":"regex","limit":20}`)
+	hits, ok := out.([]tool.FindCodeMatch)
+	if !ok {
+		t.Fatalf("find_code type: got %T", out)
+	}
+	if len(hits) == 0 {
+		t.Fatal("expected at least one regex match for payments.Charge")
+	}
+	loginHit := false
+	for _, h := range hits {
+		if strings.Contains(h.File, "auth/login.go") {
+			loginHit = true
+			break
+		}
+	}
+	if !loginHit {
+		t.Fatalf("expected a hit in auth/login.go for payments.Charge, got %+v", hits)
+	}
+}
+
+// TestFindReferencingSymbols_CrossPackage_Charge is the substantive
+// regression guard for the field_identifier fix: callers of
+// `payments.Charge` include `auth.Login` (the cross-package caller the
+// Tier-1 LSP path also resolves, but Tier-2 must still catch it on
+// machines without gopls).
+func TestFindReferencingSymbols_CrossPackage_Charge(t *testing.T) {
+	repo := loadRepo(t)
+	out := callAsMap(t, tool.FindReferencingSymbols(repo), `{"symbol":"fn:payments.Charge","kinds":["calls"]}`)
+	edges, ok := out.([]any)
+	if !ok {
+		t.Fatalf("find_referencing_symbols type: got %T", out)
+	}
+	if len(edges) == 0 {
+		t.Fatal("expected at least one caller of payments.Charge")
+	}
+	loginHit := false
+	for _, e := range edges {
+		m, _ := e.(map[string]any)
+		if id, _ := m["targetId"].(string); id == "fn:auth.Login" {
+			loginHit = true
+			break
+		}
+	}
+	if !loginHit {
+		t.Fatalf("expected fn:auth.Login in callers of payments.Charge, got %+v", edges)
+	}
+}

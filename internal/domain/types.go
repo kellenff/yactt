@@ -120,6 +120,17 @@ func TreeSitterProvenancePtr() *Provenance {
 	return TreeSitterProvenance().WithFallback("no-lsp-installed").Ptr()
 }
 
+// LSPProvenance returns the standard LSP provenance for layers answered by
+// the language server (gopls for now). The version comes from the server's
+// `initialize` reply; "unknown" is the fallback when the server did not
+// report one.
+func LSPProvenance(version string) Provenance {
+	if version == "" {
+		version = "unknown"
+	}
+	return NewProvenance("gopls", version)
+}
+
 // Signature is the typed signature layer.
 type Signature struct {
 	Text       string         `json:"text"`

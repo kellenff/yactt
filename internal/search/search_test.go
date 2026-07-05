@@ -282,3 +282,92 @@ func itoa(i int) string {
 func writeFileFS(dir, name string, content []byte, mode uint32) error {
 	return os.WriteFile(filepath.Join(dir, name), content, os.FileMode(mode))
 }
+
+// TestSearch_LimitBoundary constructs a fixture with exactly N symbols
+// matching a term, then asks for Limit=N. The live code keeps all N
+// (the comparison is strict `>`); a mutation to `>=` would drop one
+// and return N-1 results.
+func TestSearch_LimitBoundary(t *testing.T) {
+	dir := t.TempDir()
+	src := "package x\n"
+	for i := 0; i < 5; i++ {
+		src += "func Func" + itoa(i) + "() {}\n"
+	}
+	if err := writeFileFS(dir, "many.go", []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, _, err := store.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// All 5 functions contain "Func"; we ask for exactly 5 results.
+	res := search.Search(r, search.Query{Terms: []string{"Func"}, Limit: 5})
+	if len(res) != 5 {
+		t.Errorf("Limit=5 with 5 matches: got %d, want 5", len(res))
+	}
+}
+
+// TestSearch_PathProximityBonus verifies the +0.15 path-proximity
+// bonus (line 184) actually fires when a term matches the file path.
+// The fixture's `payments/pay.go` contains "Charge"; a term of
+// "payments" matches the path and bumps the score.
+func TestSearch_PathProximityBonus(t *testing.T) {
+	r, _ := loadRepo(t)
+	res := search.Search(r, search.Query{
+		Terms: []string{"Charge", "payments"},
+	})
+	if len(res) == 0 {
+		t.Fatal("no results for Charge+payments")
+	}
+	// Score must include the +0.15 path-proximity bonus on top of
+	// the substring base (0.6 + 0.1*8/6 ≈ 0.733).
+	hit := findResult(t, res, "Charge")
+	if hit.Score < 0.85 {
+		t.Errorf("Charge with 'payments' term: score = %v, want >= 0.85 (substring + path bonus)", hit.Score)
+	}
+}
+
+// TestSearch_ScoreCapAtOne verifies the `if score > 1` cap at line 187.
+// A result with multiple bonuses stacked must clamp to 1.0.
+func TestSearch_ScoreCapAtOne(t *testing.T) {
+	r, _ := loadRepo(t)
+	// "auth" appears in the doc-comment path AND in the path itself.
+	// Combined: substring match (~0.6+) + path bonus (+0.15) for each
+	// term that touches the path.
+	res := search.Search(r, search.Query{Terms: []string{"auth", "auth"}})
+	if len(res) == 0 {
+		t.Fatal("expected results")
+	}
+	for _, hit := range res {
+		if hit.Score > 1.0 {
+			t.Errorf("score %v exceeds 1.0 cap", hit.Score)
+		}
+	}
+}
+
+// TestSearch_EmptyTermIsIgnored covers the `if t == ""` guard at line 180.
+// Empty / whitespace-only terms must be skipped (not matched against).
+func TestSearch_EmptyTermIsIgnored(t *testing.T) {
+	r, _ := loadRepo(t)
+	res := search.Search(r, search.Query{Terms: []string{"", "  ", "Login"}})
+	if len(res) == 0 {
+		t.Fatal("expected Login results")
+	}
+	// All returned hits should have a non-zero score.
+	for _, hit := range res {
+		if hit.Score <= 0 {
+			t.Errorf("hit %+v has non-positive score", hit)
+		}
+	}
+}
+
+// TestSearch_NoTermsNoRegex covers the early-return at line 124-128 when
+// no terms AND no regex are provided.
+func TestSearch_NoTermsNoRegex(t *testing.T) {
+	r, _ := loadRepo(t)
+	res := search.Search(r, search.Query{})
+	// Without terms or regex, no symbol can match the (empty) query.
+	if len(res) != 0 {
+		t.Errorf("empty query: got %d results, want 0", len(res))
+	}
+}

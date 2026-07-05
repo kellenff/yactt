@@ -1,11 +1,16 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"strings"
+	"time"
+
+	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/id"
+	"github.com/kellenff/yactt/internal/lsp"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/source"
 )
@@ -102,12 +107,20 @@ func MaterializeNode(r *Repo, nodeID id.ID, layerSet map[domain.LayerName]bool) 
 		out.SummaryProvenance = prov
 	}
 	if layerSet[domain.LayerSignature] {
-		text, prov := SignatureMaterializer(f, sym)
-		out.Signature = &domain.Signature{Text: text, Docs: doc, Provenance: *prov}
+		text, types, prov := r.signatureMaterializer(f, sym)
+		sig := &domain.Signature{Text: text, Docs: doc, Provenance: *prov}
+		if len(types) > 0 {
+			sig.Types = types
+		}
+		out.Signature = sig
 	}
 	if layerSet[domain.LayerBody] {
-		stmts, types, ctrl, prov := BodyMaterializer(f, sym)
-		out.Body = &domain.FunctionBody{Stmts: stmts, Types: types, ControlFlow: ctrl, Provenance: *prov}
+		stmts, types, ctrl, prov := r.bodyMaterializer(f, sym)
+		body := &domain.FunctionBody{Stmts: stmts, ControlFlow: ctrl, Provenance: *prov}
+		if len(types) > 0 {
+			body.Types = types
+		}
+		out.Body = body
 	}
 	if layerSet[domain.LayerSource] {
 		text, prov := SourceMaterializer(f, sym)
@@ -127,25 +140,73 @@ func MaterializeNode(r *Repo, nodeID id.ID, layerSet map[domain.LayerName]bool) 
 	return out, nil
 }
 
-// SignatureMaterializer extracts the signature line for a symbol: the
-// declaration line, plus the parameter list, plus the result. This is the
-// tree-sitter-only answer — LSP would supply a typed signature with hover.
-func SignatureMaterializer(f *source.File, sym parser.Symbol) (string, *domain.Provenance) {
+// signatureMaterializer is the Tier-1-or-tree-sitter signature path.
+//
+// When `r.lsp` is wired and the symbol's name is on a known row, we ask
+// gopls's `textDocument/hover` for the typed answer and stamp provenance
+// `Tool: "gopls"`. When the request errors or times out, we stamp
+// `Tool: "tree-sitter", FallbackUsed: "lsp-timeout"` (or `"lsp-error"`).
+// When `r.lsp == nil`, we stamp the existing `Tool: "tree-sitter",
+// FallbackUsed: "no-lsp-installed"` marker.
+//
+// Returns the signature text, an optional parameter/result-types map (LSP
+// only; nil otherwise), and the provenance line.
+func (r *Repo) signatureMaterializer(f *source.File, sym parser.Symbol) (string, map[string]any, *domain.Provenance) {
+	// Tier 1 attempt.
+	if r.lsp != nil {
+		col, ok := symbolNameColumn(f, sym)
+		if ok {
+			ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+			defer cancel()
+			h, herr := r.lsp.Hover(ctx, f.Path, sym.StartRow, col)
+			if herr == nil && h.Contents.Value != "" {
+				types := parseHoverTypes(h.Contents.Value)
+				return strings.TrimRight(h.Contents.Value, "\n"), types, domain.LSPProvenance(r.lspVersion).Ptr()
+			} else if herr != nil {
+				// Honest about the failure: tree-sitter fallback
+				// with the LSP fallback marker stamped on.
+				tsText, _ := treeSitterSignature(f, sym)
+				reason := lsp.FallbackReason(herr)
+				return tsText, nil, domain.TreeSitterProvenance().WithFallback(reason).Ptr()
+			}
+		}
+	}
+	text, prov := treeSitterSignature(f, sym)
+	return text, nil, prov
+}
+
+// bodyMaterializer is the Tier-1-or-tree-sitter body path. Mirrors
+// `signatureMaterializer` for the body layer; calls hover for the enclosing
+// function and, when LSP returns a typed answer, populates `Body.Types`.
+// Call-site ref resolution is deferred to `scanCallers`/`scanCallees` in
+// the tool layer.
+func (r *Repo) bodyMaterializer(f *source.File, sym parser.Symbol) ([]domain.Stmt, map[string]any, string, *domain.Provenance) {
+	if r.lsp != nil {
+		col, ok := symbolNameColumn(f, sym)
+		if ok {
+			ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+			defer cancel()
+			h, herr := r.lsp.Hover(ctx, f.Path, sym.StartRow, col)
+			if herr == nil && h.Contents.Value != "" {
+				stmts, ctrl, _ := treeSitterStmts(f, sym)
+				types := map[string]any{}
+				if t := parseHoverTypes(h.Contents.Value); t != nil {
+					types = t
+				}
+				return stmts, types, ctrl, domain.LSPProvenance(r.lspVersion).Ptr()
+			}
+		}
+	}
+	stmts, ctrl, prov := treeSitterStmtsWithProv(f, sym)
+	return stmts, map[string]any{}, ctrl, prov
+}
+
+// treeSitterSignature is the fallback Tier-2 signature: line-slice from
+// StartRow to EndRow with optional paren/brace line augmentation.
+func treeSitterSignature(f *source.File, sym parser.Symbol) (string, *domain.Provenance) {
 	if sym.EndRow <= sym.StartRow {
 		return "", prov()
 	}
-	// One-line signatures: just the first line of the declaration.
-	if sym.EndRow == sym.StartRow+1 {
-		text, err := f.Slice(domain.LineRange{Start: sym.StartRow, End: sym.EndRow})
-		if err == nil {
-			text = strings.TrimRight(text, "\n")
-			return text, prov()
-		}
-	}
-	// Multi-line: take the first line plus every line containing an
-	// opening/closing paren, brace, or angle bracket — a coarse approximation
-	// of the full signature that tree-sitter can produce without a typed
-	// resolver.
 	body, err := f.Slice(domain.LineRange{Start: sym.StartRow, End: sym.EndRow})
 	if err != nil {
 		return "", prov()
@@ -153,18 +214,16 @@ func SignatureMaterializer(f *source.File, sym parser.Symbol) (string, *domain.P
 	return strings.TrimRight(body, "\n"), prov()
 }
 
-// BodyMaterializer extracts a coarse statement list, types map, and a
-// control-flow classification. Tree-sitter can give us a syntactic stmts-only
-// view; we leave Types empty and label control-flow as "linear" until LSP/SCIP
-// raise confidence.
-func BodyMaterializer(f *source.File, sym parser.Symbol) ([]domain.Stmt, map[string]any, string, *domain.Provenance) {
+// treeSitterStmts produces the coarse statement view shared by Tier 2
+// body and the LSP-success-but-no-types path.
+func treeSitterStmts(f *source.File, sym parser.Symbol) ([]domain.Stmt, string, bool) {
 	stmts := []domain.Stmt{}
 	if sym.StartRow >= sym.EndRow {
-		return stmts, map[string]any{}, "linear", prov()
+		return stmts, "linear", false
 	}
 	lines, err := f.Lines()
 	if err != nil {
-		return stmts, map[string]any{}, "linear", prov()
+		return stmts, "linear", false
 	}
 	start, end := sym.StartRow, sym.EndRow
 	if start >= len(lines) {
@@ -188,7 +247,112 @@ func BodyMaterializer(f *source.File, sym parser.Symbol) ([]domain.Stmt, map[str
 	if branchRe {
 		control = "branching"
 	}
-	return stmts, map[string]any{}, control, prov()
+	return stmts, control, true
+}
+
+// treeSitterStmtsWithProv is `treeSitterStmts` plus the canonical
+// tree-sitter provenance line. Kept as a separate small helper so callers
+// in the LSP path can stay allocation-free on the success branch.
+func treeSitterStmtsWithProv(f *source.File, sym parser.Symbol) ([]domain.Stmt, string, *domain.Provenance) {
+	stmts, ctrl, _ := treeSitterStmts(f, sym)
+	return stmts, ctrl, prov()
+}
+
+// symbolNameColumn walks the parsed tree and returns the column where the
+// symbol's name starts (0-based; LSP convention). Returns ok=false when
+// the declaration row has no name (e.g. package-level blank declarations).
+//
+// We re-walk at hover time instead of storing the column on
+// parser.Symbol to keep the symbol type language-agnostic.
+func symbolNameColumn(f *source.File, sym parser.Symbol) (int, bool) {
+	if f == nil || f.Root == nil {
+		return 0, false
+	}
+	return findNameColumn(f.Root, sym.StartRow, sym.Name, f.Bytes)
+}
+
+// findNameColumn walks the tree breadth-first looking for a node whose
+// start row matches `row`, whose content equals `name` (or matches the
+// function-declaration's `identifier`/`field_identifier` child), and
+// returns its column.
+func findNameColumn(root *sitter.Node, row int, name string, src []byte) (int, bool) {
+	if root == nil {
+		return 0, false
+	}
+	var stack []*sitter.Node
+	stack = append(stack, root)
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if n == nil {
+			continue
+		}
+		if int(n.StartPoint().Row) == row {
+			// Match: either the node IS the name (identifier / field_identifier)
+			// or the node is the declaration whose first identifier child is the
+			// name. Both cases pick the leftmost matching identifier.
+			switch n.Type() {
+			case "identifier", "field_identifier":
+				if n.Content(src) == name {
+					return int(n.StartPoint().Column), true
+				}
+			case "function_declaration", "method_declaration", "type_declaration":
+				// Drill into children looking for the name.
+				for i := int(n.ChildCount()) - 1; i >= 0; i-- {
+					c := n.Child(i)
+					if c != nil {
+						stack = append(stack, c)
+					}
+				}
+			}
+		}
+		// Continue descending into named children regardless of row match —
+		// the declaration spans multiple rows, the name is on StartRow.
+		for i := int(n.ChildCount()) - 1; i >= 0; i-- {
+			c := n.Child(i)
+			if c != nil {
+				stack = append(stack, c)
+			}
+		}
+	}
+	return 0, false
+}
+
+// parseHoverTypes extracts a tentative parameter/result type map from a
+// hover string. gopls typically returns either a single-markup-content
+// string ("func f(x int, y string) error") or a `{kind: markdown, value:
+// …}` payload; we just parse the trailing `(...) (...)` and `... var`
+// shapes. Returns nil for hovers with no recognizable type suffix; the
+// caller treats that as "no types to populate".
+//
+// This is a Tier-1 best-effort — accurate typed answers arrive with
+// Definition/TypeDefinition wired in Tier 1.5.
+func parseHoverTypes(hover string) map[string]any {
+	out := map[string]any{}
+	if hover == "" {
+		return nil
+	}
+	// Heuristic: split on the first "(" and grab everything from there.
+	i := strings.Index(hover, "(")
+	if i < 0 {
+		return nil
+	}
+	close := strings.Index(hover[i:], ")")
+	if close < 0 {
+		return nil
+	}
+	params := hover[i+1 : i+close]
+	if params != "" {
+		out["params"] = params
+	}
+	rest := strings.TrimSpace(hover[i+close+1:])
+	if rest != "" {
+		out["result"] = rest
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // SourceMaterializer returns the lossless byte slice for a symbol, or an
