@@ -264,7 +264,7 @@ func scanCallers(repo *store.Repo, file string, sym parser.Symbol, limit int, p 
 		}
 		entries := repo.Symbols(otherPath)
 		for _, e := range entries {
-			if e.Name == "" || e.Kind != "function_declaration" {
+			if e.Name == "" || (e.Kind != "function_declaration" && e.Kind != "method_declaration") {
 				continue
 			}
 			f, err := repo.CachedFile(otherPath)

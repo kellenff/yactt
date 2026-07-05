@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -33,15 +32,17 @@ func TestLoadWalksGoFiles(t *testing.T) {
 	r, fix := loadFixture(t)
 	files := r.Files()
 
+	// The walker must surface every Go source file under the repo root.
+	// Additional non-Go files (e.g. the TS files in the same fixture) may
+	// also appear; containment is the contract, not exact match.
 	want := []string{fix.LoginPath, fix.PaymentPath, fix.UserPath, fix.MultiPath}
-	sort.Strings(files)
-	sort.Strings(want)
-	if len(files) != len(want) {
-		t.Fatalf("Files() = %v, want %v", files, want)
+	got := make(map[string]bool, len(files))
+	for _, p := range files {
+		got[p] = true
 	}
-	for i, p := range want {
-		if files[i] != p {
-			t.Errorf("files[%d] = %q, want %q", i, files[i], p)
+	for _, p := range want {
+		if !got[p] {
+			t.Errorf("Files() missing %q", p)
 		}
 	}
 
@@ -128,10 +129,12 @@ func TestSymbolsByFile(t *testing.T) {
 func TestSymbolsByPathSnapshot(t *testing.T) {
 	r, _ := loadFixture(t)
 	all := r.SymbolsByPath()
-	// Four files: login.go, user.go, multi.go (auth/multi.go declares two
-	// same-named methods for disambiguation tests), payments/pay.go.
-	if len(all) != 4 {
-		t.Errorf("SymbolsByPath size = %d, want 4", len(all))
+	// Four Go files: login.go, user.go, multi.go (auth/multi.go declares
+	// two same-named methods for disambiguation tests), payments/pay.go.
+	// The fixture also carries TS files; the contract here is "at least
+	// the four Go files surface", not exact count.
+	if len(all) < 4 {
+		t.Errorf("SymbolsByPath size = %d, want >= 4", len(all))
 	}
 	for path, syms := range all {
 		if len(syms) == 0 {
@@ -354,6 +357,65 @@ func TestEdgesByCalleeFixture(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("Authenticate not in callers of Charge; got %+v", entries)
+	}
+}
+
+// TestEdgesByCalleeIncludesMethod confirms the persisted call-edge index
+// now walks method_declaration bodies: User.Refresh in auth/user.go calls
+// Charge, so EdgesByCallee("Charge") must surface it alongside the
+// function-level caller Authenticate.
+func TestEdgesByCalleeIncludesMethod(t *testing.T) {
+	r, fix := loadFixture(t)
+	entries := r.EdgesByCallee("Charge")
+	var sawAuthenticate, sawRefresh bool
+	for _, e := range entries {
+		switch e.Caller.Name {
+		case "Authenticate":
+			sawAuthenticate = true
+		case "Refresh":
+			if e.File != fix.UserPath {
+				t.Errorf("Refresh caller file = %q, want %q", e.File, fix.UserPath)
+			}
+			if e.Caller.Kind != "method_declaration" {
+				t.Errorf("Refresh Caller.Kind = %q, want method_declaration", e.Caller.Kind)
+			}
+			sawRefresh = true
+		}
+	}
+	if !sawAuthenticate {
+		t.Errorf("Authenticate dropped from callers of Charge; got %+v", entries)
+	}
+	if !sawRefresh {
+		t.Errorf(`User.Refresh not in callers of Charge; got %+v`, entries)
+	}
+}
+
+// TestEdgesByCalleeIncludesTSMethod confirms the persisted call-edge
+// index walks TypeScript method_definition bodies. User.refresh in
+// auth/user.ts calls recordUsage in payments/pay.ts; EdgesByCallee must
+// surface the call with Caller.Kind == "method_declaration" and the
+// caller in the TS file. Pins the language-agnostic walker.
+func TestEdgesByCalleeIncludesTSMethod(t *testing.T) {
+	r, fix := loadFixture(t)
+	entries := r.EdgesByCallee("recordUsage")
+	var sawRefresh bool
+	for _, e := range entries {
+		if e.Caller.Name != "refresh" {
+			continue
+		}
+		if e.File != fix.UserTSPath {
+			t.Errorf("refresh caller file = %q, want %q", e.File, fix.UserTSPath)
+		}
+		if e.Caller.Kind != "method_declaration" {
+			t.Errorf("refresh Caller.Kind = %q, want method_declaration", e.Caller.Kind)
+		}
+		if e.Caller.Receiver != "User" {
+			t.Errorf("refresh Caller.Receiver = %q, want User", e.Caller.Receiver)
+		}
+		sawRefresh = true
+	}
+	if !sawRefresh {
+		t.Errorf(`User.refresh not in callers of recordUsage; got %+v`, entries)
 	}
 }
 

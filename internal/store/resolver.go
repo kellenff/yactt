@@ -73,15 +73,15 @@ func (r *Repo) rebuildIndex() {
 		}
 	}
 
-	// Second pass: walk every function_declaration body, extract the bare
-	// callee name from each call_expression, and emit one EdgeEntry per call
-	// site keyed both ways. Methods (method_declaration) are skipped here to
-	// match the existing Tier-2 live walker in tool/nodeedges.go; widening
-	// the set is a separate slice.
+	// Second pass: walk every function_declaration and method_declaration
+	// body, extract the bare callee name from each call_expression, and emit
+	// one EdgeEntry per call site keyed both ways. The Tier-2 live walker in
+	// tool/nodeedges.go mirrors this set (see scanCallers) so the persisted
+	// index and the live fallback agree on what counts as a callable body.
 	for path, syms := range snapshot {
 		var f *source.File
 		for _, s := range syms {
-			if s.Kind != "function_declaration" || s.Name == "" {
+			if (s.Kind != "function_declaration" && s.Kind != "method_declaration") || s.Name == "" {
 				continue
 			}
 			if f == nil {

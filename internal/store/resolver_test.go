@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/kellenff/yactt/internal/id"
@@ -36,15 +37,23 @@ func TestLookupByPkgAndName(t *testing.T) {
 func TestLookupByPkgOnly(t *testing.T) {
 	r, _ := loadFixture(t)
 	hits := r.Lookup("auth", "")
-	// Three auth-package files: login.go (Login + Session), user.go (User +
-	// Greet method), multi.go (Alpha, Beta types and Ping methods). 7
-	// declarations total in the auth package.
+	// Four auth-package source files: login.go (Login + Session), user.go
+	// (User + Greet + Refresh method), multi.go (Alpha, Beta types and Ping
+	// methods), user.ts (User class + greet + refresh methods). At least 7
+	// declarations; extras from the TS file raise the floor.
 	if len(hits) < 7 {
 		t.Errorf("Lookup(auth, \"\") = %d hits, want >=7: %+v", len(hits), hits)
 	}
 	// Every hit must be from the auth package.
 	for _, h := range hits {
-		if !endsWith(h.File, "login.go") && !endsWith(h.File, "user.go") && !endsWith(h.File, "multi.go") {
+		base := h.File
+		if i := strings.LastIndexByte(base, '/'); i >= 0 {
+			base = base[i+1:]
+		}
+		switch base {
+		case "login.go", "user.go", "multi.go", "user.ts":
+			// ok
+		default:
 			t.Errorf("pkg-only hit out of package: %s", h.File)
 		}
 	}
