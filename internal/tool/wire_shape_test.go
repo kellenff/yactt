@@ -1,0 +1,227 @@
+package tool
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"testing"
+
+	"github.com/kellenff/yactt/internal/mcp"
+	"github.com/kellenff/yactt/internal/store"
+	"github.com/kellenff/yactt/internal/store/repofixture"
+)
+
+// wireShapeServer builds an MCP server pointed at in-memory buffers with
+// `tools` registered. Returns the server plus the stdout buffer for the
+// test to assert on the wire frame.
+func wireShapeServer(t *testing.T, tools ...mcp.ToolDef) (*mcp.Server, *bytes.Buffer) {
+	t.Helper()
+	stdin := &bytes.Buffer{}
+	stdout := &bytes.Buffer{}
+	s := mcp.NewServer("wire-shape-test", "0.0.0-test", "2024-11-05", stdout,
+		func() (io.Reader, error) { return stdin, nil },
+	)
+	for _, tc := range tools {
+		s.RegisterTool(tc)
+	}
+	return s, stdout
+}
+
+// assertStructuredContentIsObject parses the server's stdout as a JSON-RPC
+// response and asserts that structuredContent is a JSON object on the
+// wire. This is the MCP contract — non-object shapes get rejected by the
+// host-side schema validator.
+func assertStructuredContentIsObject(t *testing.T, stdout *bytes.Buffer) map[string]any {
+	t.Helper()
+	var frame map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &frame); err != nil {
+		t.Fatalf("unmarshal frame: %v\n%s", err, stdout.String())
+	}
+	if errObj, ok := frame["error"]; ok {
+		t.Fatalf("RPC error: %v", errObj)
+	}
+	result, ok := frame["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("result = %T, want object", frame["result"])
+	}
+	sc, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("structuredContent = %T, want object (the MCP contract); full result = %+v", result["structuredContent"], result)
+	}
+	return sc
+}
+
+// wireShapeCase drives one tool end-to-end through the server wire and
+// asserts the structuredContent shape. Every tool gets one of these —
+// the assertion is the contract that the wire shape is always a JSON
+// object, never an array.
+type wireShapeCase struct {
+	toolName string
+	argsJSON string
+	wantKey  string // the envelope key the handler returns its list under
+}
+
+// runWireShapeCases registers the real handler for each tool with the
+// fixture repo, drives it through the server, and asserts the wire shape.
+func runWireShapeCases(t *testing.T, repo *store.Repo, cases []wireShapeCase) {
+	t.Helper()
+	for _, tc := range cases {
+		t.Run(tc.toolName, func(t *testing.T) {
+			stdin := &bytes.Buffer{}
+			stdout := &bytes.Buffer{}
+			s := mcp.NewServer("wire-shape-test", "0.0.0-test", "2024-11-05", stdout,
+				func() (io.Reader, error) { return stdin, nil },
+			)
+			def := wireShapeDefs[tc.toolName]
+			s.RegisterTool(def(repo))
+
+			req := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      1,
+				"method":  "tools/call",
+				"params": map[string]any{
+					"name":      tc.toolName,
+					"arguments": json.RawMessage(tc.argsJSON),
+				},
+			}
+			reqBytes, _ := json.Marshal(req)
+			stdin.Write(reqBytes)
+			stdin.Write([]byte("\n"))
+
+			if err := s.Serve(context.Background()); err != nil {
+				t.Fatalf("Serve: %v", err)
+			}
+
+			sc := assertStructuredContentIsObject(t, stdout)
+			// Most envelopes expose the list under a known key. Pin the
+			// key as well, so a future "envelope name change" is caught
+			// here too, not silently in client code.
+			if tc.wantKey != "" {
+				if _, ok := sc[tc.wantKey]; !ok {
+					t.Errorf("envelope key %q missing: structuredContent = %+v", tc.wantKey, sc)
+				}
+			}
+		})
+	}
+}
+
+// wireShapeDefs maps each tool name to a function that builds its ToolDef
+// from a repo. Adding a new tool means adding one row to this table —
+// the wire-shape check is then mechanical.
+var wireShapeDefs = map[string]func(*store.Repo) mcp.ToolDef{
+	"tree_overview": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "tree_overview", InputSchema: TreeOverviewSchema, OutputSchema: TreeOverviewOutputSchema, Handler: TreeOverview(r)}
+	},
+	"node_get": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "node_get", InputSchema: GetNodeSchema, OutputSchema: GetNodeOutputSchema, Handler: GetNode(r)}
+	},
+	"node_source": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "node_source", InputSchema: NodeSourceSchema, OutputSchema: NodeSourceOutputSchema, Handler: NodeSource(r)}
+	},
+	"node_edges": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "node_edges", InputSchema: NodeEdgesSchema, OutputSchema: NodeEdgesOutputSchema, Handler: NodeEdges(r)}
+	},
+	"search": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "search", InputSchema: SearchSchema, OutputSchema: SearchOutputSchema, Handler: Search(r)}
+	},
+	"edit_impact": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "edit_impact", InputSchema: EditImpactSchema, OutputSchema: EditImpactOutputSchema, Handler: EditImpact(r)}
+	},
+	"find_symbol": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "find_symbol", InputSchema: FindSymbolSchema, OutputSchema: FindSymbolOutputSchema, Handler: FindSymbol(r)}
+	},
+	"get_symbols_overview": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "get_symbols_overview", InputSchema: GetSymbolsOverviewSchema, OutputSchema: GetSymbolsOverviewOutputSchema, Handler: GetSymbolsOverview(r)}
+	},
+	"find_code": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "find_code", InputSchema: FindCodeSchema, OutputSchema: FindCodeOutputSchema, Handler: FindCode(r)}
+	},
+	"find_referencing_symbols": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "find_referencing_symbols", InputSchema: FindReferencingSymbolsSchema, OutputSchema: FindReferencingSymbolsOutputSchema, Handler: FindReferencingSymbols(r)}
+	},
+}
+
+// TestWireShape_AllTools pins the wire-shape contract for every tool
+// in one test. The fixture is loaded once (repofixture.New), then each
+// tool is registered, driven, and asserted on. The previous bug — five
+// tools returning slices and breaking the MCP "object" requirement —
+// is caught here for any tool that re-introduces the pattern.
+func TestWireShape_AllTools(t *testing.T) {
+	fx := repofixture.New(t)
+	r, _, err := store.Load(fx.Root)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	cases := []wireShapeCase{
+		{toolName: "tree_overview", argsJSON: `{"repo":"","depth":2}`},
+		{toolName: "node_get", argsJSON: `{"id":"fn:auth.Login","layers":["signature"]}`},
+		{toolName: "node_source", argsJSON: `{"id":"fn:auth.Login"}`},
+		{toolName: "node_edges", argsJSON: `{"id":"fn:auth.Login","kinds":["callees"],"limit":10}`, wantKey: "edges"},
+		{toolName: "search", argsJSON: `{"query":"Login","scope":""}`, wantKey: "results"},
+		{toolName: "edit_impact", argsJSON: `{"renames":[{"id":"fn:auth.Login","new_name":"SignIn"}]}`, wantKey: "renames"},
+		{toolName: "find_symbol", argsJSON: `{"name_path":"auth/Login","limit":5}`, wantKey: "symbols"},
+		{toolName: "get_symbols_overview", argsJSON: `{"file":"auth/login.go"}`, wantKey: "symbols"},
+		{toolName: "find_code", argsJSON: `{"pattern":"Login","pattern_kind":"regex","limit":10}`, wantKey: "matches"},
+		{toolName: "find_referencing_symbols", argsJSON: `{"symbol":"fn:auth.Login","kinds":["tests"]}`, wantKey: "references"},
+	}
+	runWireShapeCases(t, r, cases)
+}
+
+// TestWireShape_EmptyResults guards the contract for the previously-
+// broken edge case: when a list-returning handler produces zero matches,
+// it returns an empty slice. Wrapped in an envelope, that's still a
+// valid object on the wire (`{"matches":[]}`). A regression that
+// unwraps the empty slice would send `[]` as structuredContent and
+// break the contract.
+func TestWireShape_EmptyResults(t *testing.T) {
+	fx := repofixture.New(t)
+	r, _, err := store.Load(fx.Root)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	cases := []wireShapeCase{
+		// Pattern that matches nothing in the fixture.
+		{toolName: "find_code", argsJSON: `{"pattern":"ZZZQQQ_no_such_thing","pattern_kind":"regex","limit":10}`, wantKey: "matches"},
+		// Symbol that matches nothing.
+		{toolName: "find_symbol", argsJSON: `{"name_path":"ZZZQQQ_no_such_thing","limit":5}`, wantKey: "symbols"},
+		// Search with no hits.
+		{toolName: "search", argsJSON: `{"query":"ZZZQQQ_no_such_thing","scope":""}`, wantKey: "results"},
+		// node_edges with kinds that produce no edges.
+		{toolName: "node_edges", argsJSON: `{"id":"fn:auth.Login","kinds":["tests"],"limit":10}`, wantKey: "edges"},
+	}
+	runWireShapeCases(t, r, cases)
+}
+
+// TestWireShape_ToolsListExposesOutputSchema confirms each registered
+// tool surfaces its OutputSchema on `tools/list`. This is the consumer-
+// facing half of the contract: clients (and IDE plugins) can introspect
+// the structuredContent shape before calling.
+func TestWireShape_ToolsListExposesOutputSchema(t *testing.T) {
+	s, _ := wireShapeServer(t)
+	// Register one tool to verify the round-trip.
+	s.RegisterTool(mcp.ToolDef{
+		Name:         "demo",
+		InputSchema:  json.RawMessage(`{"type":"object"}`),
+		OutputSchema: json.RawMessage(`{"type":"object","required":["ok"]}`),
+		Handler:      func(context.Context, json.RawMessage) (any, error) { return map[string]any{"ok": true}, nil },
+	})
+	for _, td := range s.Tools() {
+		if len(td.OutputSchema) == 0 {
+			t.Errorf("tool %q: OutputSchema is empty", td.Name)
+		}
+		var probe struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(td.OutputSchema, &probe); err != nil {
+			t.Errorf("tool %q: OutputSchema not valid JSON: %v", td.Name, err)
+		}
+		if probe.Type != "object" {
+			t.Errorf("tool %q: OutputSchema.type = %q, want object", td.Name, probe.Type)
+		}
+	}
+}

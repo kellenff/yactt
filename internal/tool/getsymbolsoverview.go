@@ -36,6 +36,32 @@ var GetSymbolsOverviewSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
+// GetSymbolsOverviewOutputSchema declares the structuredContent shape of
+// get_symbols_overview. The handler returns the
+// {symbols: [...], file: "..."} envelope object that pins the
+// MCP-spec-required object shape on the wire.
+var GetSymbolsOverviewOutputSchema = json.RawMessage(`{
+  "type": "object",
+  "required": ["symbols", "file"],
+  "properties": {
+    "symbols": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "name", "summary"],
+        "properties": {
+          "id":      { "type": "string" },
+          "kind":    { "type": "string" },
+          "name":    { "type": "string" },
+          "summary": { "type": "string" }
+        }
+      }
+    },
+    "file": { "type": "string" }
+  },
+  "additionalProperties": false
+}`)
+
 // GetSymbolsOverview returns a Handler that emits the top-N structural
 // outline of a file.
 func GetSymbolsOverview(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {

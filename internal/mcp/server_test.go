@@ -88,18 +88,21 @@ func TestServerInitialize(t *testing.T) {
 
 func TestServerToolsList(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","required":["x"]}`)
+	outputSchema := json.RawMessage(`{"type":"object"}`)
 	s, stdin, stdout := newServer(t,
 		mcp.ToolDef{
-			Name:        "alpha",
-			Description: "first",
-			InputSchema: schema,
-			Handler:     func(context.Context, json.RawMessage) (any, error) { return nil, nil },
+			Name:         "alpha",
+			Description:  "first",
+			InputSchema:  schema,
+			OutputSchema: outputSchema,
+			Handler:      func(context.Context, json.RawMessage) (any, error) { return nil, nil },
 		},
 		mcp.ToolDef{
-			Name:        "beta",
-			Description: "second",
-			InputSchema: schema,
-			Handler:     func(context.Context, json.RawMessage) (any, error) { return nil, nil },
+			Name:         "beta",
+			Description:  "second",
+			InputSchema:  schema,
+			OutputSchema: outputSchema,
+			Handler:      func(context.Context, json.RawMessage) (any, error) { return nil, nil },
 		},
 	)
 	stdin.WriteString(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n")
@@ -144,10 +147,11 @@ func TestServerToolsCallOK(t *testing.T) {
 	stub := &stubHandler{ret: map[string]any{"ok": true, "n": 7}}
 	s, stdin, stdout := newServer(t,
 		mcp.ToolDef{
-			Name:        "echo",
-			Description: "echo",
-			InputSchema: json.RawMessage(`{"type":"object"}`),
-			Handler:     stub.Handle,
+			Name:         "echo",
+			Description:  "echo",
+			InputSchema:  json.RawMessage(`{"type":"object"}`),
+			OutputSchema: json.RawMessage(`{"type":"object"}`),
+			Handler:      stub.Handle,
 		},
 	)
 	stdin.WriteString(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"msg":"hi"}}}` + "\n")
@@ -194,10 +198,11 @@ func TestServerToolsCallHandlerError(t *testing.T) {
 	stub := &stubHandler{err: errors.New("kaboom")}
 	s, stdin, stdout := newServer(t,
 		mcp.ToolDef{
-			Name:        "fail",
-			Description: "always errors",
-			InputSchema: json.RawMessage(`{"type":"object"}`),
-			Handler:     stub.Handle,
+			Name:         "fail",
+			Description:  "always errors",
+			InputSchema:  json.RawMessage(`{"type":"object"}`),
+			OutputSchema: json.RawMessage(`{"type":"object"}`),
+			Handler:      stub.Handle,
 		},
 	)
 	stdin.WriteString(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"fail","arguments":{}}}` + "\n")
@@ -352,10 +357,11 @@ func TestServerMultipleRequestsInOrder(t *testing.T) {
 	stub := &stubHandler{ret: "ok"}
 	s, stdin, stdout := newServer(t,
 		mcp.ToolDef{
-			Name:        "do",
-			Description: "do",
-			InputSchema: json.RawMessage(`{}`),
-			Handler:     stub.Handle,
+			Name:         "do",
+			Description:  "do",
+			InputSchema:  json.RawMessage(`{}`),
+			OutputSchema: json.RawMessage(`{"type":"object"}`),
+			Handler:      stub.Handle,
 		},
 	)
 	stdin.WriteString(`{"jsonrpc":"2.0","id":11,"method":"initialize"}` + "\n")
@@ -384,8 +390,8 @@ func TestServerRegisterToolPanicsOnDuplicate(t *testing.T) {
 		return &bytes.Buffer{}, nil
 	})
 	handler := func(context.Context, json.RawMessage) (any, error) { return nil, nil }
-	s.RegisterTool(mcp.ToolDef{Name: "x", Handler: handler})
-	s.RegisterTool(mcp.ToolDef{Name: "x", Handler: handler})
+	s.RegisterTool(mcp.ToolDef{Name: "x", OutputSchema: json.RawMessage(`{"type":"object"}`), Handler: handler})
+	s.RegisterTool(mcp.ToolDef{Name: "x", OutputSchema: json.RawMessage(`{"type":"object"}`), Handler: handler})
 }
 
 func TestServerServeRejectsBadStdin(t *testing.T) {
@@ -481,9 +487,10 @@ func TestServerToolsCall_NilResult(t *testing.T) {
 	stub := &stubHandler{ret: nil, err: nil}
 	s, stdin, stdout := newServer(t,
 		mcp.ToolDef{
-			Name:        "nil_result",
-			InputSchema: json.RawMessage(`{}`),
-			Handler:     stub.Handle,
+			Name:         "nil_result",
+			InputSchema:  json.RawMessage(`{}`),
+			OutputSchema: json.RawMessage(`{"type":"object"}`),
+			Handler:      stub.Handle,
 		},
 	)
 	stdin.WriteString(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"nil_result"}}` + "\n")
@@ -506,5 +513,174 @@ func TestServerToolsCall_NilResult(t *testing.T) {
 	// result was nil — the marshal produced "content":[] or "content":""?
 	if len(ctr) == 0 {
 		t.Errorf("Result empty: %+v", ctr)
+	}
+}
+
+// TestServerRegisterTool_RejectsMissingOutputSchema pins the boot-time
+// guard from RegisterTool: OutputSchema is required, must parse, and
+// must declare a top-level `type:"object"`. Every other shape is
+// rejected so the MCP "structuredContent is a JSON object" contract is
+// enforced before any request hits a tool.
+func TestServerRegisterTool_RejectsMissingOutputSchema(t *testing.T) {
+	s, _, _ := newServer(t)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on missing OutputSchema")
+		}
+	}()
+	s.RegisterTool(mcp.ToolDef{
+		Name:        "no_output_schema",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+		Handler:     func(context.Context, json.RawMessage) (any, error) { return nil, nil },
+	})
+}
+
+func TestServerRegisterTool_RejectsNonObjectOutputSchema(t *testing.T) {
+	s, _, _ := newServer(t)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on array OutputSchema")
+		}
+	}()
+	s.RegisterTool(mcp.ToolDef{
+		Name:         "array_output_schema",
+		InputSchema:  json.RawMessage(`{"type":"object"}`),
+		OutputSchema: json.RawMessage(`{"type":"array"}`),
+		Handler:      func(context.Context, json.RawMessage) (any, error) { return nil, nil },
+	})
+}
+
+func TestServerRegisterTool_RejectsMalformedOutputSchema(t *testing.T) {
+	s, _, _ := newServer(t)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on malformed OutputSchema")
+		}
+	}()
+	s.RegisterTool(mcp.ToolDef{
+		Name:         "malformed_output_schema",
+		InputSchema:  json.RawMessage(`{"type":"object"}`),
+		OutputSchema: json.RawMessage(`{not-json`),
+		Handler:      func(context.Context, json.RawMessage) (any, error) { return nil, nil },
+	})
+}
+
+// TestServerRegisterTool_AcceptsMinimalObjectOutputSchema confirms that
+// the minimal `{"type":"object"}` is accepted. The detailed property
+// descriptions are nice-to-have but not required for the boot guard.
+func TestServerRegisterTool_AcceptsMinimalObjectOutputSchema(t *testing.T) {
+	s, _, _ := newServer(t)
+	s.RegisterTool(mcp.ToolDef{
+		Name:         "minimal_object_output",
+		InputSchema:  json.RawMessage(`{"type":"object"}`),
+		OutputSchema: json.RawMessage(`{"type":"object"}`),
+		Handler:      func(context.Context, json.RawMessage) (any, error) { return nil, nil },
+	})
+	if tools := s.Tools(); len(tools) != 1 {
+		t.Fatalf("got %d tools, want 1 (registration failed silently)", len(tools))
+	}
+}
+
+// TestServerToolsList_SurfacesOutputSchema confirms the OutputSchema is
+// propagated to the tools/list response so consumers (clients, IDE
+// plugins, future agent surfaces) can introspect the structuredContent
+// shape they will receive.
+func TestServerToolsList_SurfacesOutputSchema(t *testing.T) {
+	s, stdin, stdout := newServer(t,
+		mcp.ToolDef{
+			Name:         "shape",
+			InputSchema:  json.RawMessage(`{"type":"object"}`),
+			OutputSchema: json.RawMessage(`{"type":"object","required":["value"]}`),
+			Handler:      func(context.Context, json.RawMessage) (any, error) { return nil, nil },
+		},
+	)
+	stdin.WriteString(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}` + "\n")
+	if err := s.Serve(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var resp mcp.Response
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &resp); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(resp.Result)
+	var listed mcp.ListToolsResult
+	if err := json.Unmarshal(raw, &listed); err != nil {
+		t.Fatalf("listed: %v", err)
+	}
+	if len(listed.Tools) != 1 {
+		t.Fatalf("got %d tools, want 1", len(listed.Tools))
+	}
+	got := listed.Tools[0].OutputSchema
+	var probe struct {
+		Type     string   `json:"type"`
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(got, &probe); err != nil {
+		t.Fatalf("OutputSchema not valid JSON: %v", err)
+	}
+	if probe.Type != "object" {
+		t.Errorf("OutputSchema.type = %q, want object", probe.Type)
+	}
+	if len(probe.Required) != 1 || probe.Required[0] != "value" {
+		t.Errorf("OutputSchema.required = %v, want [value]", probe.Required)
+	}
+}
+
+// TestServerToolsCall_StructuredContentIsObject confirms the wire-shape
+// contract class: when a handler returns a `map[string]any` (object),
+// the server marshals structuredContent as a JSON object on the wire.
+// This is the contract per-tool tests in internal/tool pin via the real
+// handlers; here we verify the server itself doesn't mangle the shape
+// (e.g. by JSON-marshalling into a string).
+func TestServerToolsCall_StructuredContentIsObject(t *testing.T) {
+	stub := &stubHandler{ret: map[string]any{"hello": "world", "n": 42}}
+	s, stdin, stdout := newServer(t,
+		mcp.ToolDef{
+			Name:         "obj",
+			InputSchema:  json.RawMessage(`{"type":"object"}`),
+			OutputSchema: json.RawMessage(`{"type":"object"}`),
+			Handler:      stub.Handle,
+		},
+	)
+	stdin.WriteString(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"obj"}}` + "\n")
+	if err := s.Serve(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var resp mcp.Response
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+	// The Result must be a CallToolResult with structuredContent intact.
+	raw, _ := json.Marshal(resp.Result)
+	var ctr mcp.CallToolResult
+	if err := json.Unmarshal(raw, &ctr); err != nil {
+		t.Fatalf("result unmarshal: %v", err)
+	}
+	sc, ok := ctr.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent = %T, want map[string]any", ctr.StructuredContent)
+	}
+	if sc["hello"] != "world" || sc["n"].(float64) != 42 {
+		t.Errorf("StructuredContent = %+v, want {hello: world, n: 42}", sc)
+	}
+	// Also verify the wire frame's JSON itself — that's what the MCP
+	// host validator sees. A regression that double-marshals
+	// StructuredContent (e.g. as a JSON-encoded string) would show up
+	// here as `sc` being a string.
+	var rawFrame map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &rawFrame); err != nil {
+		t.Fatal(err)
+	}
+	res, _ := rawFrame["result"].(map[string]any)
+	scWire, ok := res["structuredContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("structuredContent on the wire = %T, want object", res["structuredContent"])
+	}
+	if scWire["hello"] != "world" {
+		t.Errorf("wire structuredContent = %+v, want hello=world", scWire)
 	}
 }

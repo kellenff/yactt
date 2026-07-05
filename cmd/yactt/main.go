@@ -128,19 +128,22 @@ func runMCPServe(args []string) error {
 // registerAllTools wires the 10 tools from design §5.1 onto the server.
 //
 // The registry order is the order in which they appear in the design's §5.1
-// table; it's also the order clients see in `tools/list`.
+// table; it's also the order clients see in `tools/list`. Every tool
+// declares both an InputSchema and an OutputSchema; the OutputSchema is
+// validated by RegisterTool and must declare a top-level `type:"object"`,
+// which is the MCP contract on `structuredContent`.
 func registerAllTools(srv *mcp.Server, repo *store.Repo) {
 	tools := []mcp.ToolDef{
-		{Name: "tree_overview", Description: "Get the top of the repo tree (depth-limited).", InputSchema: tool.TreeOverviewSchema, Handler: tool.TreeOverview(repo)},
-		{Name: "node_get", Description: "Get one or more layers of a node by its stable ID.", InputSchema: tool.GetNodeSchema, Handler: tool.GetNode(repo)},
-		{Name: "node_source", Description: "Get the lossless source for a node, optionally bounded by a line range.", InputSchema: tool.NodeSourceSchema, Handler: tool.NodeSource(repo)},
-		{Name: "node_edges", Description: "Get cross-references for a node.", InputSchema: tool.NodeEdgesSchema, Handler: tool.NodeEdges(repo)},
-		{Name: "search", Description: "Find symbols by name or doc-comment matching.", InputSchema: tool.SearchSchema, Handler: tool.Search(repo)},
-		{Name: "edit_impact", Description: "Analyze the impact of a proposed set of renames. Does NOT apply them.", InputSchema: tool.EditImpactSchema, Handler: tool.EditImpact(repo)},
-		{Name: "find_symbol", Description: "Locate symbols by qualified name path with glob support.", InputSchema: tool.FindSymbolSchema, Handler: tool.FindSymbol(repo)},
-		{Name: "get_symbols_overview", Description: "Get the top-level structural outline of a file.", InputSchema: tool.GetSymbolsOverviewSchema, Handler: tool.GetSymbolsOverview(repo)},
-		{Name: "find_code", Description: "AST-aware or regex pattern search across files.", InputSchema: tool.FindCodeSchema, Handler: tool.FindCode(repo)},
-		{Name: "find_referencing_symbols", Description: "Find all symbols that reference a given symbol.", InputSchema: tool.FindReferencingSymbolsSchema, Handler: tool.FindReferencingSymbols(repo)},
+		{Name: "tree_overview", Description: "Get the top of the repo tree (depth-limited).", InputSchema: tool.TreeOverviewSchema, OutputSchema: tool.TreeOverviewOutputSchema, Handler: tool.TreeOverview(repo)},
+		{Name: "node_get", Description: "Get one or more layers of a node by its stable ID.", InputSchema: tool.GetNodeSchema, OutputSchema: tool.GetNodeOutputSchema, Handler: tool.GetNode(repo)},
+		{Name: "node_source", Description: "Get the lossless source for a node, optionally bounded by a line range.", InputSchema: tool.NodeSourceSchema, OutputSchema: tool.NodeSourceOutputSchema, Handler: tool.NodeSource(repo)},
+		{Name: "node_edges", Description: "Get cross-references for a node.", InputSchema: tool.NodeEdgesSchema, OutputSchema: tool.NodeEdgesOutputSchema, Handler: tool.NodeEdges(repo)},
+		{Name: "search", Description: "Find symbols by name or doc-comment matching.", InputSchema: tool.SearchSchema, OutputSchema: tool.SearchOutputSchema, Handler: tool.Search(repo)},
+		{Name: "edit_impact", Description: "Analyze the impact of a proposed set of renames. Does NOT apply them.", InputSchema: tool.EditImpactSchema, OutputSchema: tool.EditImpactOutputSchema, Handler: tool.EditImpact(repo)},
+		{Name: "find_symbol", Description: "Locate symbols by qualified name path with glob support.", InputSchema: tool.FindSymbolSchema, OutputSchema: tool.FindSymbolOutputSchema, Handler: tool.FindSymbol(repo)},
+		{Name: "get_symbols_overview", Description: "Get the top-level structural outline of a file.", InputSchema: tool.GetSymbolsOverviewSchema, OutputSchema: tool.GetSymbolsOverviewOutputSchema, Handler: tool.GetSymbolsOverview(repo)},
+		{Name: "find_code", Description: "AST-aware or regex pattern search across files.", InputSchema: tool.FindCodeSchema, OutputSchema: tool.FindCodeOutputSchema, Handler: tool.FindCode(repo)},
+		{Name: "find_referencing_symbols", Description: "Find all symbols that reference a given symbol.", InputSchema: tool.FindReferencingSymbolsSchema, OutputSchema: tool.FindReferencingSymbolsOutputSchema, Handler: tool.FindReferencingSymbols(repo)},
 	}
 	for _, t := range tools {
 		srv.RegisterTool(t)

@@ -83,9 +83,13 @@ func TestLSPCallers_CrossPackage_ResolvedConfidence(t *testing.T) {
 	}
 
 	out := callJSON(t, tool.NodeEdges(repo), `{"id":"fn:payments.Charge","kinds":["callers"]}`)
-	results, ok := out.([]tool.NodeEdgesResult)
+	env, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("node_edges type: got %T", out)
+		t.Fatalf("node_edges envelope type: got %T", out)
+	}
+	results, ok := env["edges"].([]tool.NodeEdgesResult)
+	if !ok {
+		t.Fatalf("node_edges edges slice type: got %T", env["edges"])
 	}
 	if len(results) == 0 {
 		t.Fatal("expected at least one caller for payments.Charge")

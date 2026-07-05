@@ -69,11 +69,12 @@ type Capabilities struct {
 }
 
 // ToolDescriptor is the entry returned in `tools/list` — name + description +
-// JSON Schema for arguments.
+// JSON Schema for arguments AND the structuredContent return shape.
 type ToolDescriptor struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"inputSchema"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description"`
+	InputSchema  json.RawMessage `json:"inputSchema"`
+	OutputSchema json.RawMessage `json:"outputSchema"`
 }
 
 // ListToolsResult is the response to `tools/list`.

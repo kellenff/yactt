@@ -65,6 +65,21 @@ var EditImpactSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
+// EditImpactOutputSchema declares the structuredContent shape of
+// edit_impact. The handler returns EditImpactResult{Renames: [...]} which
+// is already an object — the schema pins that contract.
+var EditImpactOutputSchema = json.RawMessage(`{
+  "type": "object",
+  "required": ["renames"],
+  "properties": {
+    "renames": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
+  },
+  "additionalProperties": false
+}`)
+
 // EditImpact returns a Handler that analyses a set of proposed renames.
 //
 // MVP implementation: each rename composes scanCallers + scanTests; conflicts

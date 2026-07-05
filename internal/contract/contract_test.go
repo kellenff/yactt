@@ -1,12 +1,15 @@
 // Package contract holds boundary tests for each MCP tool.
 //
-// Contract tests verify three things:
+// Contract tests verify four things:
 //
-//  1. The JSON Schema returned in `tools/list` round-trips through encoding/json.
-//  2. Each schema declares a `required` array (no all-optional tools).
+//  1. The JSON Schemas (input + output) returned in `tools/list`
+//     round-trip through encoding/json.
+//  2. Each input schema declares a `required` array (no all-optional tools).
 //  3. Required-field violations are rejected by the handler before any repo
 //     access — the boundary catches missing args without ever reaching the
 //     domain logic.
+//  4. Each tool declares an OutputSchema with a top-level `type:"object"`,
+//     satisfying the MCP "structuredContent is a JSON object" contract.
 //
 // Success-path coverage (handler against a real fixture) lives in
 // tests/acceptance. Splitting the two keeps the contract test fast and free
@@ -22,10 +25,10 @@ import (
 	"github.com/kellenff/yactt/internal/tool"
 )
 
-// everySchema is the set of (name → schema) entries that the registry should
-// publish. Keeping this list in one place guarantees that any new tool adds
-// both a schema constant AND a contract test entry — there's no way to add
-// a tool without touching this table.
+// everySchema is the set of (name → input-schema) entries that the registry
+// should publish. Keeping this list in one place guarantees that any new
+// tool adds both a schema constant AND a contract test entry — there's no
+// way to add a tool without touching this table.
 func everySchema(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
 	return map[string]json.RawMessage{
@@ -39,6 +42,29 @@ func everySchema(t *testing.T) map[string]json.RawMessage {
 		"get_symbols_overview":     tool.GetSymbolsOverviewSchema,
 		"find_code":                tool.FindCodeSchema,
 		"find_referencing_symbols": tool.FindReferencingSymbolsSchema,
+	}
+}
+
+// everyOutputSchema mirrors everySchema for the structuredContent shape.
+// The contract that drives MCP's "object" requirement on structuredContent
+// is checked here: every output schema must declare `type:"object"` at the
+// root. A bare slice or non-object schema at this layer would be rejected
+// at register time (see internal/mcp/server.go:validateOutputSchema) and
+// is therefore impossible to ship — but this test catches accidental
+// drops/typos in the schema constants themselves.
+func everyOutputSchema(t *testing.T) map[string]json.RawMessage {
+	t.Helper()
+	return map[string]json.RawMessage{
+		"tree_overview":            tool.TreeOverviewOutputSchema,
+		"node_get":                 tool.GetNodeOutputSchema,
+		"node_source":              tool.NodeSourceOutputSchema,
+		"node_edges":               tool.NodeEdgesOutputSchema,
+		"search":                   tool.SearchOutputSchema,
+		"edit_impact":              tool.EditImpactOutputSchema,
+		"find_symbol":              tool.FindSymbolOutputSchema,
+		"get_symbols_overview":     tool.GetSymbolsOverviewOutputSchema,
+		"find_code":                tool.FindCodeOutputSchema,
+		"find_referencing_symbols": tool.FindReferencingSymbolsOutputSchema,
 	}
 }
 
@@ -72,6 +98,58 @@ func TestSchemasRequiredFields(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestOutputSchemasAreObjects pins the MCP contract on structuredContent:
+// every tool's OutputSchema must declare a top-level `type:"object"`. If a
+// new tool is added without an OutputSchema (or with a non-object one),
+// this test fails before the server ever boots. Mirrors the in-server
+// guard (server.go:validateOutputSchema) so a regression on either side
+// is caught by the corresponding test.
+func TestOutputSchemasAreObjects(t *testing.T) {
+	for name, raw := range everyOutputSchema(t) {
+		t.Run(name, func(t *testing.T) {
+			if len(raw) == 0 {
+				t.Fatalf("output schema %s: empty (every tool must declare an OutputSchema)", name)
+			}
+			var probe struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(raw, &probe); err != nil {
+				t.Fatalf("output schema %s: invalid JSON: %v", name, err)
+			}
+			if probe.Type != "object" {
+				t.Fatalf("output schema %s: top-level type = %q, want \"object\" (handlers must wrap slices in an envelope object)", name, probe.Type)
+			}
+		})
+	}
+}
+
+// TestInputOutputSchemasCoverSameTools asserts that every name present
+// in everySchema also appears in everyOutputSchema. The two tables must
+// stay in lockstep — a tool with an input schema but no output schema
+// would silently slip through TestSchemasAreValidJSON and blow up at
+// registration. This test catches the drift cheaply.
+func TestInputOutputSchemasCoverSameTools(t *testing.T) {
+	in := everySchema(t)
+	out := everyOutputSchema(t)
+	if len(in) != len(out) {
+		t.Fatalf("input schema count (%d) != output schema count (%d); keys: in=%v out=%v", len(in), len(out), keys(in), keys(out))
+	}
+	for name := range in {
+		if _, ok := out[name]; !ok {
+			t.Errorf("tool %q has input schema but no output schema", name)
+		}
+	}
+}
+
+// keys is a tiny helper to format a map[string]X for a t.Fatalf.
+func keys(m map[string]json.RawMessage) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // boundaryTest rejects handlers that don't fail at the boundary when args are

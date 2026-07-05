@@ -154,9 +154,13 @@ func TestNodeSourceAcceptance(t *testing.T) {
 func TestSearchAcceptance(t *testing.T) {
 	repo := loadRepo(t)
 	out := callJSON(t, tool.Search(repo), `{"query":"ValidateToken","scope":""}`)
-	hits, ok := out.([]search.Result)
+	env, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("search result type: got %T", out)
+		t.Fatalf("search envelope type: got %T", out)
+	}
+	hits, ok := env["results"].([]search.Result)
+	if !ok {
+		t.Fatalf("search results slice type: got %T", env["results"])
 	}
 	if len(hits) == 0 {
 		t.Fatal("expected at least one search hit")
@@ -199,9 +203,13 @@ func TestGetSymbolsOverviewAcceptance(t *testing.T) {
 func TestFindCodeAcceptance(t *testing.T) {
 	repo := loadRepo(t)
 	out := callJSON(t, tool.FindCode(repo), `{"pattern":"ValidateToken","pattern_kind":"regex","limit":20}`)
-	hits, ok := out.([]tool.FindCodeMatch)
+	env, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("find_code type: got %T", out)
+		t.Fatalf("find_code envelope type: got %T", out)
+	}
+	hits, ok := env["matches"].([]tool.FindCodeMatch)
+	if !ok {
+		t.Fatalf("find_code matches slice type: got %T", env["matches"])
 	}
 	if len(hits) == 0 {
 		t.Fatal("expected hits for ValidateToken")
@@ -211,9 +219,13 @@ func TestFindCodeAcceptance(t *testing.T) {
 func TestFindSymbolAcceptance(t *testing.T) {
 	repo := loadRepo(t)
 	out := callJSON(t, tool.FindSymbol(repo), `{"name_path":"auth/Login*","limit":10,"include_body":true}`)
-	hits, ok := out.([]tool.FindSymbolResult)
+	env, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("find_symbol type: got %T", out)
+		t.Fatalf("find_symbol envelope type: got %T", out)
+	}
+	hits, ok := env["symbols"].([]tool.FindSymbolResult)
+	if !ok {
+		t.Fatalf("find_symbol symbols slice type: got %T", env["symbols"])
 	}
 	if len(hits) == 0 {
 		t.Fatal("expected at least one match for auth/Login*")
@@ -223,9 +235,13 @@ func TestFindSymbolAcceptance(t *testing.T) {
 func TestFindReferencingSymbolsAcceptance(t *testing.T) {
 	repo := loadRepo(t)
 	out := callAsMap(t, tool.FindReferencingSymbols(repo), `{"symbol":"fn:auth.ValidateToken","kinds":["tests","calls"]}`)
-	edges, ok := out.([]any)
+	env, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("find_referencing_symbols type: got %T", out)
+		t.Fatalf("find_referencing_symbols envelope type: got %T", out)
+	}
+	edges, ok := env["references"].([]any)
+	if !ok {
+		t.Fatalf("find_referencing_symbols references slice type: got %T", env["references"])
 	}
 	if len(edges) == 0 {
 		t.Fatal("expected at least one edge (tests or callers)")
@@ -252,9 +268,13 @@ func TestEditImpactAcceptance(t *testing.T) {
 func TestNodeEdgesAcceptance(t *testing.T) {
 	repo := loadRepo(t)
 	out := callAsMap(t, tool.NodeEdges(repo), `{"id":"fn:auth.Login","kinds":["callees"],"limit":10}`)
-	edges, ok := out.([]any)
+	env, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("node_edges type: got %T", out)
+		t.Fatalf("node_edges envelope type: got %T", out)
+	}
+	edges, ok := env["edges"].([]any)
+	if !ok {
+		t.Fatalf("node_edges edges slice type: got %T", env["edges"])
 	}
 	if len(edges) == 0 {
 		t.Fatal("expected callees for Login")
@@ -323,9 +343,13 @@ func TestNodeGet_CrossPackage_Login_BodyMentionsCharge(t *testing.T) {
 func TestFindSymbol_ExactNamePath(t *testing.T) {
 	repo := loadRepo(t)
 	out := callJSON(t, tool.FindSymbol(repo), `{"name_path":"auth/Login","limit":5,"include_body":false}`)
-	hits, ok := out.([]tool.FindSymbolResult)
+	env, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("find_symbol type: got %T", out)
+		t.Fatalf("find_symbol envelope type: got %T", out)
+	}
+	hits, ok := env["symbols"].([]tool.FindSymbolResult)
+	if !ok {
+		t.Fatalf("find_symbol symbols slice type: got %T", env["symbols"])
 	}
 	if len(hits) == 0 {
 		t.Fatal("expected at least one match for auth/Login")
@@ -343,9 +367,13 @@ func TestFindSymbol_ExactNamePath(t *testing.T) {
 func TestFindSymbol_PrefixGlob_Login(t *testing.T) {
 	repo := loadRepo(t)
 	out := callJSON(t, tool.FindSymbol(repo), `{"name_path":"auth/Login*","limit":10,"include_body":false}`)
-	hits, ok := out.([]tool.FindSymbolResult)
+	env, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("find_symbol type: got %T", out)
+		t.Fatalf("find_symbol envelope type: got %T", out)
+	}
+	hits, ok := env["symbols"].([]tool.FindSymbolResult)
+	if !ok {
+		t.Fatalf("find_symbol symbols slice type: got %T", env["symbols"])
 	}
 	if len(hits) == 0 {
 		t.Fatal("expected at least one match for auth/Login*")
@@ -370,9 +398,13 @@ func TestFindSymbol_PrefixGlob_Login(t *testing.T) {
 func TestFindCode_RegexPattern_Charge(t *testing.T) {
 	repo := loadRepo(t)
 	out := callJSON(t, tool.FindCode(repo), `{"pattern":"payments\\.Charge","pattern_kind":"regex","limit":20}`)
-	hits, ok := out.([]tool.FindCodeMatch)
+	env, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("find_code type: got %T", out)
+		t.Fatalf("find_code envelope type: got %T", out)
+	}
+	hits, ok := env["matches"].([]tool.FindCodeMatch)
+	if !ok {
+		t.Fatalf("find_code matches slice type: got %T", env["matches"])
 	}
 	if len(hits) == 0 {
 		t.Fatal("expected at least one regex match for payments.Charge")
@@ -397,9 +429,13 @@ func TestFindCode_RegexPattern_Charge(t *testing.T) {
 func TestFindReferencingSymbols_CrossPackage_Charge(t *testing.T) {
 	repo := loadRepo(t)
 	out := callAsMap(t, tool.FindReferencingSymbols(repo), `{"symbol":"fn:payments.Charge","kinds":["calls"]}`)
-	edges, ok := out.([]any)
+	env, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("find_referencing_symbols type: got %T", out)
+		t.Fatalf("find_referencing_symbols envelope type: got %T", out)
+	}
+	edges, ok := env["references"].([]any)
+	if !ok {
+		t.Fatalf("find_referencing_symbols references slice type: got %T", env["references"])
 	}
 	if len(edges) == 0 {
 		t.Fatal("expected at least one caller of payments.Charge")

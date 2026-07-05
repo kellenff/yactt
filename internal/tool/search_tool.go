@@ -39,6 +39,28 @@ var SearchSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
+// SearchOutputSchema declares the structuredContent shape of search. The
+// list of results is wrapped in an envelope object so the wire frame
+// satisfies the MCP spec's "object" requirement on structuredContent.
+var SearchOutputSchema = json.RawMessage(`{
+  "type": "object",
+  "required": ["results"],
+  "properties": {
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["score", "node"],
+        "properties": {
+          "score": { "type": "number" },
+          "node":  { "type": "object" }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}`)
+
 // Search returns a Handler that emits ranked (id, summary) results.
 func Search(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
@@ -61,7 +83,10 @@ func Search(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (a
 			}
 		}
 		results := search.Search(repo, q)
-		return results, nil
+		// Wrap the slice in an envelope object so structuredContent on the
+		// wire is a JSON object (the MCP contract). Matches are surfaced
+		// under the `results` key, declared in SearchOutputSchema.
+		return map[string]any{"results": results}, nil
 	}
 }
 

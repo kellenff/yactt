@@ -43,6 +43,20 @@ var NodeSourceSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
+// NodeSourceOutputSchema declares the structuredContent shape of
+// node_source. The handler returns a *NodeSourceResult (a single object).
+var NodeSourceOutputSchema = json.RawMessage(`{
+  "type": "object",
+  "required": ["text", "lines", "encoding"],
+  "properties": {
+    "text":      { "type": "string" },
+    "lines":     { "type": "object" },
+    "encoding":  { "type": "string" },
+    "provenance": { "type": "object" }
+  },
+  "additionalProperties": false
+}`)
+
 // NodeSource returns a Handler that emits the lossless source slice for an
 // ID. Falls back to file content when the ID is `file:<path>`.
 func NodeSource(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {

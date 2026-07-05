@@ -20,15 +20,26 @@ type Handler func(ctx context.Context, args json.RawMessage) (any, error)
 
 // ToolDef is the registration of one tool.
 //
-// Schema is JSON Schema (2020-12 dialect) describing the arguments. Handlers
-// are expected to validate inside the function (the design's "parse don't
-// validate" rule means we parse into typed structs at the top of the
-// handler).
+// InputSchema is JSON Schema (2020-12 dialect) describing the arguments;
+// OutputSchema describes the shape of the value returned under
+// `structuredContent`. Handlers are expected to validate inputs inside the
+// function (the design's "parse don't validate" rule means we parse into
+// typed structs at the top of the handler) and to wrap any list-shaped
+// return in an object envelope so the wire frame satisfies the MCP spec's
+// "object" requirement on structuredContent.
+//
+// OutputSchema is REQUIRED at registration time; RegisterTool panics if
+// the schema is missing or does not declare a top-level `type:"object"`.
+// The contract lets every server-level consumer (clients, registries, our
+// future IDE plugin) rely on structuredContent being a JSON object, and
+// keeps the previously-discovered bug class (slice-returning handlers
+// smuggling arrays into structuredContent) out of the wire forever.
 type ToolDef struct {
-	Name        string
-	Description string
-	InputSchema json.RawMessage
-	Handler     Handler
+	Name         string
+	Description  string
+	InputSchema  json.RawMessage
+	OutputSchema json.RawMessage
+	Handler      Handler
 }
 
 // Server is the JSON-RPC 2.0 server. It is safe for concurrent use across the
@@ -62,13 +73,41 @@ func NewServer(name, version, protocolVersion string, stdout io.Writer, stdin fu
 
 // RegisterTool attaches a tool definition. Replacement panics — registration
 // races would be a bug, not a recoverable state.
+//
+// OutputSchema is validated here: it must parse as JSON Schema and must
+// declare a top-level `type:"object"`. The check is the boot-time backstop
+// for the "structuredContent must be a JSON object" MCP contract — any
+// tool that forgets to declare one, or declares a non-object schema, fails
+// fast at registration, before any request can hit it.
 func (s *Server) RegisterTool(t ToolDef) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.tools[t.Name]; exists {
 		panic(fmt.Sprintf("mcp: duplicate tool name %q", t.Name))
 	}
+	if err := validateOutputSchema(t.Name, t.OutputSchema); err != nil {
+		panic(fmt.Sprintf("mcp: tool %q: %v", t.Name, err))
+	}
 	s.tools[t.Name] = t
+}
+
+// validateOutputSchema enforces the "structuredContent is an object" MCP
+// contract at registration. Empty schemas are rejected so every tool author
+// must consciously declare the return shape.
+func validateOutputSchema(name string, raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return fmt.Errorf("OutputSchema is required (declare `type:\"object\"` plus the shape of %q's return)", name)
+	}
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return fmt.Errorf("OutputSchema is not valid JSON Schema: %w", err)
+	}
+	if probe.Type != "object" {
+		return fmt.Errorf("OutputSchema must declare type:\"object\" (got %q; handlers must wrap slices in an envelope object)", probe.Type)
+	}
+	return nil
 }
 
 // Tools returns a copy of the registered tool set, sorted by name.
@@ -143,9 +182,10 @@ func (s *Server) dispatch(ctx context.Context, req Request) Response {
 		out := make([]ToolDescriptor, 0, len(s.tools))
 		for _, t := range s.tools {
 			out = append(out, ToolDescriptor{
-				Name:        t.Name,
-				Description: t.Description,
-				InputSchema: t.InputSchema,
+				Name:         t.Name,
+				Description:  t.Description,
+				InputSchema:  t.InputSchema,
+				OutputSchema: t.OutputSchema,
 			})
 		}
 		s.mu.RUnlock()

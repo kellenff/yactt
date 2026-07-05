@@ -51,6 +51,34 @@ var NodeEdgesSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
+// NodeEdgesOutputSchema declares the structuredContent shape of
+// node_edges. The list of edges is wrapped in an envelope object so the
+// wire frame satisfies the MCP spec's "object" requirement on
+// structuredContent.
+var NodeEdgesOutputSchema = json.RawMessage(`{
+  "type": "object",
+  "required": ["edges"],
+  "properties": {
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["edgeKind", "targetId", "location", "confidence", "provenance"],
+        "properties": {
+          "edgeKind":      { "type": "string" },
+          "targetId":      { "type": "string" },
+          "targetKind":    { "type": "string" },
+          "targetSummary": { "type": "string" },
+          "location":      { "type": "object" },
+          "confidence":    { "type": "number" },
+          "provenance":    { "type": "object" }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}`)
+
 // NodeEdges returns a Handler that emits typed cross-references for an ID.
 //
 // MVP backend: tree-sitter pass for syntactic call detection. Confidence is
@@ -96,7 +124,10 @@ func NodeEdges(repo *store.Repo) func(ctx context.Context, args json.RawMessage)
 				out = append(out, scanOverrides(repo, file, sym, a.Limit, p)...)
 			}
 		}
-		return out, nil
+		// Wrap the slice in an envelope object so structuredContent on the
+		// wire is a JSON object (the MCP contract). Edges are surfaced
+		// under the `edges` key, declared in NodeEdgesOutputSchema.
+		return map[string]any{"edges": out}, nil
 	}
 }
 

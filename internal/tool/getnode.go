@@ -44,6 +44,20 @@ var GetNodeSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
+// GetNodeOutputSchema declares the structuredContent shape of node_get.
+// The handler returns a *domain.Node (a single object).
+var GetNodeOutputSchema = json.RawMessage(`{
+  "type": "object",
+  "required": ["id", "kind"],
+  "properties": {
+    "id":      { "type": "string" },
+    "kind":    { "type": "string" },
+    "name":    { "type": "string" },
+    "summary": { "type": "string" }
+  },
+  "additionalProperties": true
+}`)
+
 // GetNode returns a Handler that materializes a node's layers.
 func GetNode(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {

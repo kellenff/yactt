@@ -12,6 +12,25 @@ import (
 	"github.com/kellenff/yactt/internal/store/repofixture"
 )
 
+// unwrapEdges pulls the typed []NodeEdgesResult out of the envelope map
+// the NodeEdges handler returns (the MCP spec requires structuredContent
+// to be a JSON object, so the handler wraps its slice under the `edges`
+// key). Every test in this file calls unwrapEdges so a regression on the
+// envelope shape is caught at the assertion site, not via a confusing
+// `out.(map[string]any)` failure far from the cause.
+func unwrapEdges(t *testing.T, out any) []NodeEdgesResult {
+	t.Helper()
+	env, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("node_edges return type: got %T, want map[string]any (envelope)", out)
+	}
+	edges, ok := env["edges"].([]NodeEdgesResult)
+	if !ok {
+		t.Fatalf("envelope edges type: got %T", env["edges"])
+	}
+	return edges
+}
+
 // TestNodeEdges_DefaultsLimitAndKinds exercises the two LIVED-CONDITIONALS
 // guards at lines 76 (`a.Limit <= 0` → defaults to 50) and 80
 // (`len(kinds) == 0` → defaults to callers/callees/tests). We patch
@@ -57,10 +76,7 @@ type Session struct {
 	if err != nil {
 		t.Fatalf("NodeEdges: %v", err)
 	}
-	edges, ok := out.([]NodeEdgesResult)
-	if !ok {
-		t.Fatalf("NodeEdges return type: got %T", out)
-	}
+	edges := unwrapEdges(t, out)
 	// With defaults applied, the tree-sitter pass should find the
 	// payments.Charge call inside Login and emit a CALLEES edge.
 	foundCallee := false
@@ -249,10 +265,7 @@ func TestSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NodeEdges: %v", err)
 	}
-	edges, ok := out.([]NodeEdgesResult)
-	if !ok {
-		t.Fatalf("NodeEdges return type: got %T", out)
-	}
+	edges := unwrapEdges(t, out)
 	// We expect at least one TESTS edge. The fixture declares
 	// TestSmoke in smoke_test.go; scanTests walks every file and
 	// surfaces functions in *_test.go files.
@@ -323,10 +336,7 @@ export class UseUser {
 	if err != nil {
 		t.Fatalf("NodeEdges: %v", err)
 	}
-	edges, ok := out.([]NodeEdgesResult)
-	if !ok {
-		t.Fatalf("NodeEdges return type: got %T", out)
-	}
+	edges := unwrapEdges(t, out)
 
 	// Go file: collect observed import paths.
 	goWant := map[string]bool{"fmt": false, "github.com/foo/bar": false}
@@ -366,7 +376,7 @@ export class UseUser {
 	if err != nil {
 		t.Fatalf("NodeEdges (TS): %v", err)
 	}
-	tsEdges, _ := out2.([]NodeEdgesResult)
+	tsEdges := unwrapEdges(t, out2)
 	var sawTS bool
 	for _, e := range tsEdges {
 		if e.EdgeKind == "IMPORTS" && e.TargetSummary == "./user" {
@@ -384,7 +394,7 @@ export class UseUser {
 	if err != nil {
 		t.Fatalf("NodeEdges (no imports): %v", err)
 	}
-	noImportEdges, _ := out3.([]NodeEdgesResult)
+	noImportEdges := unwrapEdges(t, out3)
 	for _, e := range noImportEdges {
 		if e.EdgeKind == "IMPORTS" {
 			t.Errorf("auth/login.go has no imports but got IMPORTS edge: %+v", e)
@@ -441,10 +451,7 @@ export class Child extends Parent {
 	if err != nil {
 		t.Fatalf("NodeEdges: %v", err)
 	}
-	edges, ok := out.([]NodeEdgesResult)
-	if !ok {
-		t.Fatalf("NodeEdges return type: got %T", out)
-	}
+	edges := unwrapEdges(t, out)
 	var sawParent bool
 	for _, e := range edges {
 		if e.EdgeKind != "OVERRIDES" {
@@ -561,10 +568,7 @@ func TestNodeEdges_RespectsLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NodeEdges: %v", err)
 	}
-	edges, ok := out.([]NodeEdgesResult)
-	if !ok {
-		t.Fatalf("NodeEdges return type: got %T", out)
-	}
+	edges := unwrapEdges(t, out)
 	// Note: limit applies per kind; with 3 kinds active and limit=1,
 	// the total cap is 3. We don't pin an exact count — we just
 	// verify the cap doesn't explode (each kind contributes at most

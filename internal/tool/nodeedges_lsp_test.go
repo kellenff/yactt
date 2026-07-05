@@ -90,10 +90,7 @@ func Login(user, pass string) (Session, error) {
 	if err != nil {
 		t.Fatalf("NodeEdges: %v", err)
 	}
-	edges, ok := out.([]NodeEdgesResult)
-	if !ok {
-		t.Fatalf("NodeEdges return type: got %T, want []NodeEdgesResult", out)
-	}
+	edges := unwrapEdges(t, out)
 	if len(edges) == 0 {
 		t.Fatal("expected at least one caller of payments.Charge via Tier 1")
 	}
@@ -162,10 +159,7 @@ func TestScanCallers_LSPReturnsNoCaller_FallsBackToTreeSitter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NodeEdges: %v", err)
 	}
-	edges, ok := out.([]NodeEdgesResult)
-	if !ok {
-		t.Fatalf("NodeEdges return type: got %T", out)
-	}
+	edges := unwrapEdges(t, out)
 	// No callers expected — the stub's (-1, -1) reference doesn't
 	// resolve to a function, so callerIDAt returns false and the Tier-1
 	// branch yields no edges; the tree-sitter pass finds no callers

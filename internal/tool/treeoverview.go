@@ -72,6 +72,24 @@ var TreeOverviewSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
+// TreeOverviewOutputSchema declares the structuredContent shape of
+// tree_overview. The handler already returns a single TreeOverviewResult
+// (an object), so the schema is minimally typed — full property
+// descriptions live on TreeOverviewResult.
+var TreeOverviewOutputSchema = json.RawMessage(`{
+  "type": "object",
+  "required": ["id", "kind"],
+  "properties": {
+    "id":         { "type": "string" },
+    "kind":       { "type": "string" },
+    "summary":    { "type": "string" },
+    "provenance": { "type": "object" },
+    "children":   { "type": "array" },
+    "warning":    { "type": "string" }
+  },
+  "additionalProperties": false
+}`)
+
 // TreeOverview returns a Handler that produces the top-N levels of the tree
 // rooted at `repo`, with only the requested layer set populated.
 func TreeOverview(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {

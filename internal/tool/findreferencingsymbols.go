@@ -39,6 +39,34 @@ var FindReferencingSymbolsSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
+// FindReferencingSymbolsOutputSchema declares the structuredContent shape
+// of find_referencing_symbols. The list of references is wrapped in an
+// envelope object so the wire frame satisfies the MCP spec's "object"
+// requirement on structuredContent.
+var FindReferencingSymbolsOutputSchema = json.RawMessage(`{
+  "type": "object",
+  "required": ["references"],
+  "properties": {
+    "references": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["edgeKind", "targetId", "location", "confidence", "provenance"],
+        "properties": {
+          "edgeKind":      { "type": "string" },
+          "targetId":      { "type": "string" },
+          "targetKind":    { "type": "string" },
+          "targetSummary": { "type": "string" },
+          "location":      { "type": "object" },
+          "confidence":    { "type": "number" },
+          "provenance":    { "type": "object" }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}`)
+
 // FindReferencingSymbols returns a Handler that resolves `symbol` to an ID
 // and forwards to node_edges. Per design §4.10 this is the symbol-addressed
 // alias for node_edges.
@@ -78,7 +106,11 @@ func FindReferencingSymbols(repo *store.Repo) func(ctx context.Context, args jso
 				out = append(out, cast(scanTests(repo, file, sym, a.Limit, p))...)
 			}
 		}
-		return out, nil
+		// Wrap the slice in an envelope object so structuredContent on the
+		// wire is a JSON object (the MCP contract). References are
+		// surfaced under the `references` key, declared in
+		// FindReferencingSymbolsOutputSchema.
+		return map[string]any{"references": out}, nil
 	}
 }
 

@@ -54,6 +54,31 @@ var FindCodeSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
+// FindCodeOutputSchema declares the structuredContent shape of find_code.
+// The list of matches is wrapped in an envelope object so the wire frame
+// satisfies the MCP spec's "object" requirement on structuredContent. See
+// internal/mcp/server.go:validateOutputSchema for the registration check.
+var FindCodeOutputSchema = json.RawMessage(`{
+  "type": "object",
+  "required": ["matches"],
+  "properties": {
+    "matches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "range", "snippet"],
+        "properties": {
+          "file":    { "type": "string" },
+          "range":   { "type": "object", "required": ["start", "end"], "properties": { "start": { "type": "integer" }, "end": { "type": "integer" } } },
+          "snippet": { "type": "string" },
+          "context": { "type": ["object", "null"] }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}`)
+
 // FindCode returns a Handler that emits AST-aware (or regex) matches.
 //
 // MVP supports regex (tree_sitter pattern is wired up via the Language
@@ -79,7 +104,11 @@ func FindCode(repo *store.Repo) func(ctx context.Context, args json.RawMessage) 
 			if err != nil {
 				return nil, fmt.Errorf("find_code: invalid regex: %w", err)
 			}
-			return findCodeRegex(repo, a.Scope, a.FileFilter, rx, a.IncludeContext, a.Limit), nil
+			// Wrap the slice in an envelope object so structuredContent on
+			// the wire is a JSON object (the MCP contract). Matches are
+			// surfaced under the `matches` key, declared in
+			// FindCodeOutputSchema.
+			return map[string]any{"matches": findCodeRegex(repo, a.Scope, a.FileFilter, rx, a.IncludeContext, a.Limit)}, nil
 		case "tree_sitter":
 			// Tree-sitter query runner is Phase 2 — return an explicit
 			// "unsupported" so the caller knows to fall back to regex.

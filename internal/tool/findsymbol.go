@@ -41,6 +41,29 @@ var FindSymbolSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
+// FindSymbolOutputSchema declares the structuredContent shape of
+// find_symbol. The list of matches is wrapped in an envelope object so the
+// wire frame satisfies the MCP spec's "object" requirement on
+// structuredContent. Field name `symbols` matches get_symbols_overview.
+var FindSymbolOutputSchema = json.RawMessage(`{
+  "type": "object",
+  "required": ["symbols"],
+  "properties": {
+    "symbols": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["node"],
+        "properties": {
+          "node": { "type": "object" },
+          "body": { "type": ["object", "null"] }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}`)
+
 // FindSymbol returns a Handler that locates symbols by qualified name path.
 // Glob patterns are translated to a small matching routine against the symbol
 // index built at repo load.
@@ -98,7 +121,10 @@ func FindSymbol(repo *store.Repo) func(ctx context.Context, args json.RawMessage
 				break
 			}
 		}
-		return out, nil
+		// Wrap the slice in an envelope object so structuredContent on the
+		// wire is a JSON object (the MCP contract). Matches are surfaced
+		// under the `symbols` key, declared in FindSymbolOutputSchema.
+		return map[string]any{"symbols": out}, nil
 	}
 }
 
