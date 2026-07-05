@@ -48,6 +48,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Validate TAG before any shell interpolation. The trigger
+          # `on: push: tags: ['v*']` only constrains the prefix — a
+          # tag like `v1.0.0"; whoami; "` would terminate the outer
+          # quoting on the -ldflags line below and execute arbitrary
+          # commands. Strict semver allowlist at the only sink.
+          if ! [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.+-]+)?$ ]]; then
+            echo "refusing tag '${TAG}' — must match v<MAJOR>.<MINOR>.<PATCH>[-<PRE>]" >&2
+            exit 1
+          fi
           mkdir -p dist
           ext=""
           if [ "${GOOS}" = "windows" ]; then ext=".exe"; fi
