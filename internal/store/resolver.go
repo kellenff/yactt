@@ -4,9 +4,12 @@ import (
 	"sort"
 	"strings"
 
+	sitter "github.com/smacker/go-tree-sitter"
+
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/parser"
+	"github.com/kellenff/yactt/internal/source"
 	"github.com/kellenff/yactt/internal/summarizer"
 )
 
@@ -38,7 +41,8 @@ func toLookup(e symbolEntry) SymbolLookup { return SymbolLookup{File: e.file, Sy
 // symIndex is an immutable-once-built index of every declaration in the repo.
 // We rebuild it on full Load and on ReloadInvalidate; reads are lockless.
 type symIndex struct {
-	byName map[symbolKey][]symbolEntry
+	byName     map[symbolKey][]symbolEntry
+	byCallEdge map[edgeKey][]EdgeEntry
 }
 
 func (r *Repo) rebuildIndex() {
@@ -53,7 +57,10 @@ func (r *Repo) rebuildIndex() {
 	}
 	r.mu.RUnlock()
 
-	idx := &symIndex{byName: make(map[symbolKey][]symbolEntry, len(snapshot)*4)}
+	idx := &symIndex{
+		byName:     make(map[symbolKey][]symbolEntry, len(snapshot)*4),
+		byCallEdge: make(map[edgeKey][]EdgeEntry),
+	}
 	for path, syms := range snapshot {
 		pkg := pkgFromPath(r.root, path, r.rootPkg)
 		for _, s := range syms {
@@ -65,6 +72,55 @@ func (r *Repo) rebuildIndex() {
 			idx.byName[symbolKey{"", s.Name}] = append(idx.byName[symbolKey{"", s.Name}], symbolEntry{file: path, sym: s})
 		}
 	}
+
+	// Second pass: walk every function_declaration body, extract the bare
+	// callee name from each call_expression, and emit one EdgeEntry per call
+	// site keyed both ways. Methods (method_declaration) are skipped here to
+	// match the existing Tier-2 live walker in tool/nodeedges.go; widening
+	// the set is a separate slice.
+	for path, syms := range snapshot {
+		var f *source.File
+		for _, s := range syms {
+			if s.Kind != "function_declaration" || s.Name == "" {
+				continue
+			}
+			if f == nil {
+				cf, err := r.CachedFile(path)
+				if err != nil || cf == nil || cf.Root == nil {
+					break
+				}
+				f = cf
+			}
+			startByte, endByte := ByteRangeFromRows(f.Bytes, s.StartRow, s.EndRow)
+			seen := make(map[string]bool)
+			WalkExpr(f.Root, startByte, endByte, func(n *sitter.Node) bool {
+				if n.Type() != "call_expression" {
+					return true
+				}
+				fn := n.ChildByFieldName("function")
+				if fn == nil && n.ChildCount() > 0 {
+					fn = n.Child(0)
+				}
+				if fn == nil {
+					return true
+				}
+				callee := ExtractCalleeName(fn, f.Bytes)
+				if callee == "" {
+					return true
+				}
+				if seen[callee] {
+					return true
+				}
+				seen[callee] = true
+				entry := EdgeEntry{File: path, Caller: s, Callee: callee, Kind: domain.EdgeCallers}
+				idx.byCallEdge[edgeKey{0, callee}] = append(idx.byCallEdge[edgeKey{0, callee}], entry)
+				idx.byCallEdge[edgeKey{1, path + "::" + s.Name}] = append(idx.byCallEdge[edgeKey{1, path + "::" + s.Name}], entry)
+				return true
+			})
+			f = nil
+		}
+	}
+
 	r.mu.Lock()
 	r.index = idx
 	r.mu.Unlock()
@@ -114,6 +170,66 @@ func (r *Repo) Lookup(pkg, name string) []SymbolLookup {
 	for i, e := range raw {
 		out[i] = toLookup(e)
 	}
+	return out
+}
+
+// EdgesByCallee returns every call-edge record pointing at a function named
+// `name`. The tool layer inverts it into CALLERS edges: each entry is
+// "someone called name".
+//
+// Result is sorted by (file, caller.StartRow) for stable presentation across
+// rebuilds. Returns an empty slice when the index is empty (no Load yet) or
+// when no caller references that name — the live walker in tool/nodeedges.go
+// is the unconditional fallback in that case.
+func (r *Repo) EdgesByCallee(name string) []EdgeEntry {
+	if name == "" {
+		return nil
+	}
+	r.mu.RLock()
+	idx := r.index
+	r.mu.RUnlock()
+	if idx == nil {
+		return nil
+	}
+	raw := idx.byCallEdge[edgeKey{0, name}]
+	out := make([]EdgeEntry, len(raw))
+	for i, e := range raw {
+		out[i] = e
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].File != out[j].File {
+			return out[i].File < out[j].File
+		}
+		return out[i].Caller.StartRow < out[j].Caller.StartRow
+	})
+	return out
+}
+
+// EdgesByCaller returns every call-edge record emitted by the function named
+// `name` in `file`. The tool layer inverts it into CALLEES edges: each entry
+// is "name called someone".
+//
+// Same empty-slice contract as EdgesByCallee when the index is empty or the
+// caller is unindexed (e.g. the file was edited after Load without
+// ReloadInvalidate).
+func (r *Repo) EdgesByCaller(file, name string) []EdgeEntry {
+	if file == "" || name == "" {
+		return nil
+	}
+	r.mu.RLock()
+	idx := r.index
+	r.mu.RUnlock()
+	if idx == nil {
+		return nil
+	}
+	raw := idx.byCallEdge[edgeKey{1, file + "::" + name}]
+	out := make([]EdgeEntry, len(raw))
+	for i, e := range raw {
+		out[i] = e
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Callee < out[j].Callee
+	})
 	return out
 }
 

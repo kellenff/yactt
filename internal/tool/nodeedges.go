@@ -96,15 +96,66 @@ func NodeEdges(repo *store.Repo) func(ctx context.Context, args json.RawMessage)
 	}
 }
 
-// scanCallees walks the function body looking for `call_expression` nodes and
-// extracts the called identifier. We then resolve against the symbol index:
+// scanCallees resolves the requested symbol's callees. Tier 0 is the
+// persisted call-edge index built at Load time (see internal/store/edges.go);
+// Tier 1 is the live AST walker, used as a fallback when the index has not
+// captured this caller — typically a file edit since Load without a matching
+// ReloadInvalidate.
 //
-//   - exact (pkg, name) match → emit a CALLEES edge with confidence 0.5.
-//   - name-only match         → also emit, marked syntactically ambiguous.
-//
-// Cross-file resolution requires LSP/SCIP (Phase 2). For MVP, single-file
-// targets resolve precisely; cross-file targets resolve by name only.
+// Both paths emit the same NodeEdgesResult shape with the same confidence
+// (0.5 — name-only resolution is syntactic); the index is purely an
+// optimisation.
 func scanCallees(repo *store.Repo, file string, sym parser.Symbol, limit int, p *domain.Provenance) []NodeEdgesResult {
+	if sym.Name == "" {
+		return nil
+	}
+	if entries := repo.EdgesByCaller(file, sym.Name); len(entries) > 0 {
+		return scanCalleesFromIndex(repo, file, sym, limit, p, entries)
+	}
+	return scanCalleesLive(repo, file, sym, limit, p)
+}
+
+// scanCalleesFromIndex renders CALLEES edges from pre-built index entries.
+// Each entry is a unique (caller, callee-name) pair — the index has already
+// deduped per-caller. We resolve each callee name against the symbol index
+// and dedup targets by (package-path, sym-name) so two different lookup
+// matches at the same target collapse to one edge.
+func scanCalleesFromIndex(repo *store.Repo, file string, sym parser.Symbol, limit int, p *domain.Provenance, entries []store.EdgeEntry) []NodeEdgesResult {
+	loc := location(file, sym.StartRow, sym.EndRow)
+	out := make([]NodeEdgesResult, 0, len(entries))
+	seen := make(map[string]bool)
+	for _, e := range entries {
+		if len(out) >= limit {
+			break
+		}
+		for _, l := range repo.Lookup("", e.Callee) {
+			targetKey := joinDotted(packagePath(repo.Root(), l.File), l.Sym.Name)
+			if seen[targetKey] {
+				continue
+			}
+			seen[targetKey] = true
+			out = append(out, NodeEdgesResult{
+				EdgeKind:      domain.EdgeCallees,
+				TargetID:      targetIDForLookup(repo, l),
+				TargetKind:    symbolKind(l.Sym),
+				TargetSummary: symbolSummary(l.Sym),
+				Location:      loc,
+				Confidence:    0.5,
+				Provenance:    *p,
+			})
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out
+}
+
+// scanCalleesLive is the unconditional fallback for scanCallees: walks the
+// function body looking for `call_expression` nodes and extracts the called
+// identifier. Used when the index has no entry for this caller (file edited
+// without ReloadInvalidate since Load).
+func scanCalleesLive(repo *store.Repo, file string, sym parser.Symbol, limit int, p *domain.Provenance) []NodeEdgesResult {
 	f, err := repo.CachedFile(file)
 	if err != nil {
 		return nil
@@ -112,8 +163,6 @@ func scanCallees(repo *store.Repo, file string, sym parser.Symbol, limit int, p 
 	if f.Root == nil {
 		return nil
 	}
-	// Approximate byte offsets from row positions: each row ≈ average bytes
-	// per row in the file. Cheap and good enough for the syntactic walk.
 	startByte, endByte := byteRangeFromRows(f.Bytes, sym.StartRow, sym.EndRow)
 	loc := location(file, sym.StartRow, sym.EndRow)
 	seen := make(map[string]bool)
@@ -124,7 +173,6 @@ func scanCallees(repo *store.Repo, file string, sym parser.Symbol, limit int, p 
 		}
 		fn := n.ChildByFieldName("function")
 		if fn == nil {
-			// Fallback: first child is the function ref for many grammars.
 			if n.ChildCount() > 0 {
 				fn = n.Child(0)
 			}
@@ -132,8 +180,6 @@ func scanCallees(repo *store.Repo, file string, sym parser.Symbol, limit int, p 
 		if fn == nil {
 			return true
 		}
-		// Strip method-call chains: `a.b.Called()` → pick the rightmost
-		// identifier by walking until the last selector_expression.
 		name := extractCalleeName(fn, f.Bytes)
 		if name == "" {
 			return true
@@ -398,60 +444,29 @@ func scanTests(repo *store.Repo, _ string, sym parser.Symbol, limit int, p *doma
 
 // walkExpr walks a tree, calling visit on every node until visit returns
 // false. The byte range filter restricts the walk to the symbol's body.
+//
+// Thin wrapper over store.WalkExpr so the persisted call-edge index and the
+// live AST walker share one implementation. Kept package-local so existing
+// test callers (nodeedges_test.go) don't have to switch call sites.
 func walkExpr(n *sitter.Node, startByte, endByte int, visit func(*sitter.Node) bool) {
-	if n == nil {
-		return
-	}
-	s := int(n.StartByte())
-	e := int(n.EndByte())
-	if e <= startByte || s >= endByte {
-		return
-	}
-	if !visit(n) {
-		return
-	}
-	nch := int(n.ChildCount())
-	for i := 0; i < nch; i++ {
-		walkExpr(n.Child(i), startByte, endByte, visit)
-	}
+	store.WalkExpr(n, startByte, endByte, visit)
 }
 
 // extractCalleeName handles `Foo()` and `pkg.Foo()` syntax. For Go the rightmost
 // identifier in a selector_expression is the called name.
+//
+// Thin wrapper over store.ExtractCalleeName — same single-source-of-truth
+// rationale as walkExpr.
 func extractCalleeName(n *sitter.Node, src []byte) string {
-	if n == nil {
-		return ""
-	}
-	switch n.Type() {
-	case "identifier", "field_identifier":
-		return n.Content(src)
-	case "selector_expression":
-		if n.ChildCount() == 0 {
-			return ""
-		}
-		return extractCalleeName(n.Child(int(n.ChildCount())-1), src)
-	}
-	return ""
+	return store.ExtractCalleeName(n, src)
 }
 
 // byteRangeFromRows converts a (startRow, endRow) pair into an approximate
-// byte range over `src`. Each row is treated as a line of variable width;
-// we just iterate once and count newline boundaries.
+// byte range over `src`.
+//
+// Thin wrapper over store.ByteRangeFromRows.
 func byteRangeFromRows(src []byte, startRow, endRow int) (int, int) {
-	row := 0
-	idx := 0
-	for i, b := range src {
-		if row == startRow && idx == 0 {
-			idx = i
-		}
-		if b == '\n' {
-			row++
-			if row == endRow {
-				return idx, i
-			}
-		}
-	}
-	return idx, len(src)
+	return store.ByteRangeFromRows(src, startRow, endRow)
 }
 
 // location builds a domain.Location for an edge.

@@ -61,6 +61,19 @@ func Login(user, pass string) (Session, error) {
 	return Session{}, nil
 }
 
+// Authenticate runs the validation + payment flow. The body calls into
+// the payments package without an import (so the call is unresolved but
+// still recorded by tree-sitter). This gives the persisted call-edge index
+// a real cross-package edge to surface in store-level tests, while keeping
+// symbol-name analysis clean — the callee has exactly one declaration, in
+// the payments package.
+func Authenticate(token string) (Session, error) {
+	if err := Charge(token); err != nil {
+		return Session{}, err
+	}
+	return Session{}, nil
+}
+
 // Session holds a user's auth state.
 type Session struct {
 	User string
