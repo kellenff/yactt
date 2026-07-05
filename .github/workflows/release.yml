@@ -10,6 +10,11 @@ on:
 
 permissions:
   contents: write
+  # Required for actions/attest@v4 — the workflow's OIDC token signs
+  # the SLSA Build Provenance attestation via Fulcio, and the action
+  # writes the resulting attestation to GitHub's attestation store.
+  id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -86,6 +91,20 @@ jobs:
           name: yactt-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*.tar.gz
           if-no-files-found: error
+
+      # SLSA Build Provenance v1 (Level 3). `actions/attest@v4` signs
+      # an in-toto statement with the workflow's OIDC token via
+      # Fulcio and registers it in GitHub's attestation store,
+      # indexed by the tarball's SHA-256. Consumers verify with:
+      #   gh attestation verify yactt_<os>_<arch>.tar.gz -R kellenff/yactt
+      # This proves "this binary was built from this repo at this
+      # commit by this workflow" — closing the supply-chain gap
+      # that TOFU + SHA256SUMS can't (they only catch corruption and
+      # same-version replay).
+      - name: SLSA build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/yactt_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz
 
   checksums:
     name: checksums
