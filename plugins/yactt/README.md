@@ -4,7 +4,9 @@ Federated code-intelligence MCP server + `code-explore` skill for Claude Code.
 
 ## Install
 
-Requires Go ≥ 1.26 on PATH — the SessionStart hook runs `go install` if `yactt` isn't already on PATH.
+The SessionStart hook bootstraps the `yactt` binary from the latest GitHub Release on first use — no Go toolchain required. The hook fetches the platform-matched tarball, verifies its SHA256 against the published `SHA256SUMS`, and installs to `$XDG_HOME/bin/yactt` (or `$HOME/.local/bin/yactt` when `XDG_HOME` is unset). Subsequent sessions check the version and upgrade whenever a newer release is out.
+
+Requires `jq` (standard on macOS/Linux developer machines; `brew install jq` / `apt install jq` otherwise).
 
 ```bash
 # Add this repo as a marketplace (local path or remote URL)
@@ -16,7 +18,9 @@ Requires Go ≥ 1.26 on PATH — the SessionStart hook runs `go install` if `yac
 /plugin install yactt@yactt
 ```
 
-That's it. The SessionStart hook builds and installs the `yactt` binary on first use; later sessions are a no-op.
+That's it. The SessionStart hook downloads and installs the `yactt` binary on first use; later sessions are a no-op when the installed version is current.
+
+If `$XDG_HOME/bin` (or `$HOME/.local/bin`) is not on your `PATH`, the bootstrap prints a one-line instruction for adding it. The MCP server fails loudly on startup if `yactt` can't be reached either way.
 
 ## Use
 
@@ -45,13 +49,19 @@ Claude should call `tree_overview` first, then drill in with `find_symbol`, `nod
 
 ## Direct CLI
 
-Outside Claude Code:
+Outside Claude Code, download the latest release directly:
 
 ```bash
-go install github.com/kellenff/yactt/cmd/yactt@latest
+# macOS arm64:
+curl -fsSL https://github.com/kellenff/yactt/releases/latest/download/yactt_darwin_arm64.tar.gz \
+  | tar -xz -C /usr/local/bin yactt_darwin_arm64 && mv /usr/local/bin/yactt_darwin_arm64 /usr/local/bin/yactt
+
+# then
 yactt overview .         # tree dump for the current repo
 yactt mcp serve [path]   # MCP server over stdio, rooted at path
 ```
+
+See the [latest release](https://github.com/kellenff/yactt/releases/latest) for all platform tarballs.
 
 ## License
 

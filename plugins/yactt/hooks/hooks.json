@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if ! command -v yactt >/dev/null 2>&1 && [ ! -x \"${CLAUDE_PROJECT_DIR:-.}/bin/yactt\" ]; then (cd \"${CLAUDE_PROJECT_DIR:-.}\" && go build -o bin/yactt ./cmd/yactt); fi"
+            "command": "INSTALL=\"${CLAUDE_PLUGIN_ROOT:-${CLAUDE_PROJECT_DIR}/plugins/yactt}/scripts/install.sh\"; if [ -x \"$INSTALL\" ]; then bash \"$INSTALL\"; else echo \"yactt: bootstrap script not found at $INSTALL\" >&2; fi"
           }
         ]
       }
