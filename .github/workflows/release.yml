@@ -1,0 +1,136 @@
+name: release
+
+# Trigger: a `v*` tag push (e.g. v0.1.0). Tags are repo-controlled, but the
+# tag name is still treated as untrusted input below — passed through
+# env, never inlined in shell.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    # smacker/go-tree-sitter is cgo, so each non-host target needs its
+    # native C toolchain. We run each matrix entry on its native runner
+    # rather than cross-compiling (no usable cross-cgo toolchain on
+    # GitHub-hosted runners for darwin/windows/linux-arm64).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: darwin,  goarch: amd64, runs-on: macos-15-intel }
+          - { goos: darwin,  goarch: arm64, runs-on: macos-15 }
+          - { goos: linux,   goarch: amd64, runs-on: ubuntu-latest }
+          - { goos: linux,   goarch: arm64, runs-on: ubuntu-24.04-arm }
+          - { goos: windows, goarch: amd64, runs-on: windows-latest }
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache: true
+
+      - name: build
+        # All `${{ }}` interpolations use GitHub-controlled values
+        # (matrix entries I defined; tag name from the trigger). The
+        # tag name flows through `env:` and is expanded by the shell as
+        # `${TAG}` — never inline `${{ }}` in `run:`.
+        env:
+          GOOS:   ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          TAG:    ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ext=""
+          if [ "${GOOS}" = "windows" ]; then ext=".exe"; fi
+          binary="yactt_${GOOS}_${GOARCH}${ext}"
+          go build -trimpath \
+            -ldflags="-s -w -X main.version=${TAG}" \
+            -o "dist/${binary}" ./cmd/yactt
+          echo "built ${binary} (version=${TAG})"
+
+      - name: archive
+        working-directory: dist
+        env:
+          GOOS:   ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ext=""
+          if [ "${GOOS}" = "windows" ]; then ext=".exe"; fi
+          binary="yactt_${GOOS}_${GOARCH}${ext}"
+          tar -czf "yactt_${GOOS}_${GOARCH}.tar.gz" "${binary}"
+          rm "${binary}"
+          ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yactt-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  checksums:
+    name: checksums
+    needs: build
+    # Ubuntu — has `sha256sum` (GNU coreutils) natively. The checksums
+    # job pulls the artifacts the build job uploaded, so the hashes
+    # are computed over the same files the release will attach.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: sha256sum
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum -- *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SHA256SUMS
+          path: dist/SHA256SUMS
+
+  release:
+    name: github release
+    needs: [build, checksums]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: inspect artifacts
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          ls -la
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          # `github.ref_name` is the tag (e.g. v0.1.0); used for both
+          # the release tag and the visible release title. The trigger
+          # `on: push: tags: ['v*']` constrains incoming tags.
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS

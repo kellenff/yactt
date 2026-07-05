@@ -36,6 +36,11 @@ Usage:
 When path is omitted, mcp serve defaults to the current working directory.
 `
 
+// version is stamped onto the binary at build time via
+// -ldflags="-X main.version=<tag>". Default "dev" covers `go build`
+// outside CI; release CI overrides it with the git tag.
+var version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
@@ -45,7 +50,11 @@ func main() {
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	case "version", "-v", "--version":
-		fmt.Println("yactt mvp")
+		// `version` is overridden at build time via
+		// -ldflags="-X main.version=<tag>" so release CI can stamp
+		// the actual tag onto the binary. Default "dev" covers
+		// `go build` outside CI.
+		fmt.Printf("yactt %s\n", version)
 	case "overview":
 		if err := runOverview(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
