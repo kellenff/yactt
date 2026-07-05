@@ -35,6 +35,18 @@ import (
 // ErrNotFound is returned when a requested node / file / symbol doesn't exist.
 var ErrNotFound = errors.New("store: not found")
 
+// ErrMaxFilesExceeded is returned from Load when the walk's source-file
+// count exceeds the configured MaxFiles cap. The walk aborts at the
+// cap+1'th file and the error surfaces in Load's errs slice — the
+// partially-built repo is still returned. Designed to bound resource
+// use against planted trees with millions of small files.
+var ErrMaxFilesExceeded = errors.New("store: too many files")
+
+// DefaultMaxFiles caps the per-load source-file count. 50k fits a
+// large monorepo comfortably (Linux kernel has ~70k source files;
+// most codebases have well under 10k).
+const DefaultMaxFiles = 50_000
+
 // Repo is the per-root load of a code repository. It is safe for concurrent
 // use — symbol/file accessors take the internal mutex.
 //
@@ -67,10 +79,34 @@ type Repo struct {
 	lspVersions map[parser.Name]string
 }
 
+// LoadOption configures Load's behaviour.
+type LoadOption func(*loadOptions)
+
+type loadOptions struct {
+	maxFiles int
+}
+
+// WithMaxFiles overrides the per-load source-file cap. Useful in
+// tests that exercise the cap without creating 50k files. A value of
+// 0 disables the cap.
+func WithMaxFiles(n int) LoadOption {
+	return func(o *loadOptions) { o.maxFiles = n }
+}
+
 // Load scans root, parses each source file matching a known language, and
 // returns a *Repo. Files are parsed in parallel; failures on a single file
 // are skipped and surface in the returned errors list.
-func Load(root string) (*Repo, []error, error) {
+//
+// MaxFiles (DefaultMaxFiles, or the value supplied via WithMaxFiles) caps
+// the count of source files loaded; the cap+1'th file aborts the walk
+// with ErrMaxFilesExceeded, which appears in the errs slice and the
+// partial repo is still returned.
+func Load(root string, opts ...LoadOption) (*Repo, []error, error) {
+	var o loadOptions
+	o.maxFiles = DefaultMaxFiles
+	for _, opt := range opts {
+		opt(&o)
+	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, nil, fmt.Errorf("store: %w", err)
@@ -104,6 +140,7 @@ func Load(root string) (*Repo, []error, error) {
 		errs = append(errs, e)
 	}
 
+	var filesSeen int
 	walk := func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -120,6 +157,12 @@ func Load(root string) (*Repo, []error, error) {
 		if lerr != nil {
 			// Not a source file we can parse — skip silently.
 			return nil
+		}
+		if o.maxFiles > 0 {
+			filesSeen++
+			if filesSeen > o.maxFiles {
+				return ErrMaxFilesExceeded
+			}
 		}
 		f, ferr := source.LoadFile(path, lang)
 		if ferr != nil {

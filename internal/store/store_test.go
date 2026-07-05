@@ -588,3 +588,88 @@ func Login(user, pass string) (Session, error) {
 		t.Errorf(`ImportsIn(LoginPath) missing "fmt" after ReloadInvalidate; got %+v`, entries)
 	}
 }
+
+// TestLoad_MaxFilesExceeded verifies the per-load file cap. We build
+// a tempdir with N+1 source files and a small MaxFiles=N; the walk
+// must abort at the (N+1)th file, surface ErrMaxFilesExceeded in
+// errs, and return a partial repo containing N files.
+func TestLoad_MaxFilesExceeded(t *testing.T) {
+	const cap = 5
+	const total = cap + 3 // 8 source files; cap triggers on the 6th
+
+	dir := t.TempDir()
+	for i := 0; i < total; i++ {
+		path := filepath.Join(dir, "f"+intToStr(i)+".go")
+		body := "package f" + intToStr(i) + "\n\nfunc X() {}\n"
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	r, errs, err := store.Load(dir, store.WithMaxFiles(cap))
+	if err != nil {
+		t.Fatalf("Load returned top-level err: %v", err)
+	}
+	if r == nil {
+		t.Fatal("Load returned nil repo (should return partial repo on cap)")
+	}
+	// cap files indexed.
+	if got := len(r.Files()); got != cap {
+		t.Errorf("Files() = %d, want %d (cap)", got, cap)
+	}
+	// ErrMaxFilesExceeded surfaced in errs.
+	var sawCap bool
+	for _, e := range errs {
+		if errors.Is(e, store.ErrMaxFilesExceeded) {
+			sawCap = true
+			break
+		}
+	}
+	if !sawCap {
+		t.Errorf("errs missing ErrMaxFilesExceeded; got %v", errs)
+	}
+}
+
+// TestLoad_UnderCap_NoErr verifies the cap doesn't trip when the
+// file count is well under MaxFiles. Regression guard: a too-eager
+// check (e.g. >= instead of >) would falsely reject a load that
+// fits.
+func TestLoad_UnderCap_NoErr(t *testing.T) {
+	fix := repofixture.New(t)
+	// repofixture has ~6 source files; cap 100 is comfortably above.
+	r, errs, err := store.Load(fix.Root, store.WithMaxFiles(100))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if r == nil {
+		t.Fatal("Load returned nil repo")
+	}
+	for _, e := range errs {
+		if errors.Is(e, store.ErrMaxFilesExceeded) {
+			t.Errorf("under-cap load surfaced ErrMaxFilesExceeded: %v", e)
+		}
+	}
+}
+
+// TestLoad_DefaultMaxFiles pins the production default to 50_000 so
+// drift on the constant is caught by a contract-style assertion.
+func TestLoad_DefaultMaxFiles(t *testing.T) {
+	if store.DefaultMaxFiles != 50_000 {
+		t.Errorf("DefaultMaxFiles = %d, want 50_000", store.DefaultMaxFiles)
+	}
+}
+
+// intToStr renders a small non-negative int as a base-10 string
+// without pulling strconv into the test file.
+func intToStr(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	const digits = "0123456789"
+	var s []byte
+	for n > 0 {
+		s = append([]byte{digits[n%10]}, s...)
+		n /= 10
+	}
+	return string(s)
+}

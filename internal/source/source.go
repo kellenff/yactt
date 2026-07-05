@@ -23,11 +23,19 @@ import (
 
 // Errors returned by Fetch. Sentinels so callers can match with errors.Is.
 var (
-	ErrEmptyRange  = errors.New("source: empty line range")
-	ErrRangeOOB    = errors.New("source: line range out of bounds")
-	ErrReadFailed  = errors.New("source: cannot read file")
-	ErrParseFailed = errors.New("source: cannot parse file")
+	ErrEmptyRange   = errors.New("source: empty line range")
+	ErrRangeOOB     = errors.New("source: line range out of bounds")
+	ErrReadFailed   = errors.New("source: cannot read file")
+	ErrParseFailed  = errors.New("source: cannot parse file")
+	ErrFileTooLarge = errors.New("source: file too large")
 )
+
+// DefaultMaxFileBytes caps the per-file byte size at Load time. 8 MiB
+// is well above any realistic source file (Go/TS/JS/Python files
+// rarely exceed 100 KiB) but bounds resource use against a planted
+// multi-GB blob. ponytail: lift to a per-load option when a caller
+// needs to tune — none have yet.
+const DefaultMaxFileBytes int64 = 8 * 1024 * 1024
 
 // File holds the on-disk content of one source file plus its parsed CST.
 //
@@ -44,14 +52,40 @@ type File struct {
 	Grammar parser.Language
 }
 
+// LoadOption configures LoadFile's behaviour.
+type LoadOption func(*loadOptions)
+
+type loadOptions struct {
+	maxBytes int64
+}
+
+// WithMaxBytes overrides the per-file byte cap. Useful in tests
+// that exercise the rejection path without writing 8 MiB files.
+func WithMaxBytes(n int64) LoadOption {
+	return func(o *loadOptions) { o.maxBytes = n }
+}
+
 // LoadFile reads the file and parses it with the given grammar. Parse errors
 // are returned as `ErrParseFailed` so callers can fall back gracefully — design
 // §8 open question 6 asked about exactly this case and the answer we picked is
 // "surface the error"; the store layer decides how to propagate.
-func LoadFile(path string, lang parser.Language) (*File, error) {
+//
+// A file whose size exceeds the configured byte cap (DefaultMaxFileBytes, or
+// the value supplied via WithMaxBytes) is rejected with ErrFileTooLarge
+// before any read happens, so a planted multi-GB blob cannot blow up the
+// Load budget.
+func LoadFile(path string, lang parser.Language, opts ...LoadOption) (*File, error) {
+	var o loadOptions
+	o.maxBytes = DefaultMaxFileBytes
+	for _, opt := range opts {
+		opt(&o)
+	}
 	st, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrReadFailed, err)
+	}
+	if o.maxBytes > 0 && st.Size() > o.maxBytes {
+		return nil, fmt.Errorf("%w: %d > %d", ErrFileTooLarge, st.Size(), o.maxBytes)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {

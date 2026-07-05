@@ -240,7 +240,7 @@ func TestFindCodeBoundary(t *testing.T) {
 	perToolArgBoundary(t, "find_code", tool.FindCode(nil), []boundaryTest{
 		{name: "missing_pattern", args: `{}`, want: "pattern is required"},
 		{name: "bad_regex", args: `{"pattern":"("}`, want: "regex"},
-		{name: "tree_sitter_unsupported", args: `{"pattern":"foo","pattern_kind":"tree_sitter"}`, want: "tree_sitter"},
+		{name: "tree_sitter_unsupported", args: `{"pattern":"foo","pattern_kind":"tree_sitter"}`, want: "tree-sitter"},
 	})
 }
 

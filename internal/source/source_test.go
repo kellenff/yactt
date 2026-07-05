@@ -505,3 +505,61 @@ func TestWalkTokens_ClampLowerBound(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadFile_RejectsOversized verifies the byte cap. We synthesise
+// a 1 MiB file, configure the cap at 64 KiB, and assert LoadFile
+// returns ErrFileTooLarge. Without the cap, a planted multi-GB blob
+// could allocate gigabytes before failing to parse.
+func TestLoadFile_RejectsOversized(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "big.go")
+	// 1 MiB of repeated Go-comment padding.
+	const block = "// padding line that takes a few bytes\n"
+	const total = 1 << 20 // 1 MiB
+	var sb strings.Builder
+	for sb.Len() < total {
+		sb.WriteString(block)
+	}
+	if err := os.WriteFile(p, []byte(sb.String()), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, err := source.LoadFile(p, goLang, source.WithMaxBytes(64*1024))
+	if err == nil {
+		t.Fatal("expected ErrFileTooLarge; got nil")
+	}
+	if !errors.Is(err, source.ErrFileTooLarge) {
+		t.Errorf("err = %v, want errors.Is(ErrFileTooLarge)", err)
+	}
+}
+
+// TestLoadFile_AcceptsUnderCap confirms a file under the cap still
+// loads successfully when WithMaxBytes is in effect. Regression
+// guard: an off-by-one in the comparison (e.g. >= instead of >) would
+// reject exactly-cap files.
+func TestLoadFile_AcceptsUnderCap(t *testing.T) {
+	// 4 KiB file, cap 8 KiB — well under.
+	p := writeFile(t, strings.Repeat("// padding\n", 200))
+	f, err := source.LoadFile(p, goLang, source.WithMaxBytes(8*1024))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if f == nil {
+		t.Fatal("LoadFile returned nil")
+	}
+}
+
+// TestLoadFile_DefaultCap documents the default cap (8 MiB). A
+// file under 8 MiB must load without WithMaxBytes being supplied.
+func TestLoadFile_DefaultCap(t *testing.T) {
+	p := writeFile(t, smallGoSource)
+	if source.DefaultMaxFileBytes != 8*1024*1024 {
+		t.Errorf("DefaultMaxFileBytes = %d, want 8 MiB", source.DefaultMaxFileBytes)
+	}
+	f, err := source.LoadFile(p, goLang)
+	if err != nil {
+		t.Fatalf("LoadFile with default cap: %v", err)
+	}
+	if f == nil {
+		t.Fatal("LoadFile returned nil")
+	}
+}
