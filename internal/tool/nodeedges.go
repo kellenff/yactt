@@ -92,6 +92,8 @@ func NodeEdges(repo *store.Repo) func(ctx context.Context, args json.RawMessage)
 				out = append(out, scanTests(repo, file, sym, a.Limit, p)...)
 			case "imports":
 				out = append(out, scanImports(repo, file, sym, a.Limit, p)...)
+			case "overrides":
+				out = append(out, scanOverrides(repo, file, sym, a.Limit, p)...)
 			}
 		}
 		return out, nil
@@ -489,6 +491,190 @@ func scanImports(repo *store.Repo, file string, _ parser.Symbol, limit int, p *d
 		}
 	}
 	return out
+}
+
+// scanOverrides walks the node's containing file for a class
+// declaration matching sym.Receiver; for each, looks up parent classes
+// via the `class_heritage` clause and emits one OVERRIDES edge per
+// parent method with the same name as sym.
+//
+// Languages:
+//   - TS/JS: walks `class_declaration` AST and emits one edge per
+//     parent method with a matching name. Confidence 0.4 because we
+//     don't resolve parent method bodies or types.
+//   - Go: no override semantics (no `extends` keyword); emits nil.
+//
+// Same-file inheritance only — cross-file parent resolution requires
+// package-graph support, deferred to Phase 1.5.
+func scanOverrides(repo *store.Repo, file string, sym parser.Symbol, limit int, p *domain.Provenance) []NodeEdgesResult {
+	if sym.Receiver == "" || sym.Kind != "method_declaration" {
+		return nil
+	}
+	f, err := repo.CachedFile(file)
+	if err != nil || f.Root == nil {
+		return nil
+	}
+	pkg := packagePath(repo.Root(), file)
+	src := f.Bytes
+
+	// 1. Find the class declaration whose name matches sym.Receiver.
+	ownClass := findClassByName(f.Root, sym.Receiver, src)
+	if ownClass == nil {
+		return nil
+	}
+
+	// 2. Walk that class's class_heritage to extract parent class names.
+	parents := parentClassNames(ownClass, src)
+	if len(parents) == 0 {
+		return nil
+	}
+
+	// 3. For each parent declared in this file, look for a method with
+	//    the same name as sym; emit one OVERRIDES edge per match.
+	//    Recurse through `export_statement` wrappers since TS/JS
+	//    often wrap classes in `export class ...`.
+	out := []NodeEdgesResult{}
+	seen := make(map[string]bool)
+	var eachClass func(*sitter.Node)
+	eachClass = func(n *sitter.Node) {
+		if n == nil {
+			return
+		}
+		if n.Type() == "class_declaration" {
+			parentName := className(n, src)
+			if parentName != "" {
+				isParent := false
+				for _, p := range parents {
+					if p == parentName {
+						isParent = true
+						break
+					}
+				}
+				if isParent {
+					body := n.ChildByFieldName("body")
+					if body != nil {
+						for j := 0; j < int(body.ChildCount()); j++ {
+							m := body.Child(j)
+							if m == nil || m.Type() != "method_definition" {
+								continue
+							}
+							mName := methodName(m, src)
+							if mName == "" || mName != sym.Name {
+								continue
+							}
+							key := parentName + "." + mName
+							if seen[key] {
+								continue
+							}
+							seen[key] = true
+							out = append(out, NodeEdgesResult{
+								EdgeKind:      domain.EdgeOverrides,
+								TargetID:      id.Method(pkg, parentName, mName).String(),
+								TargetKind:    domain.KindMethod,
+								TargetSummary: mName,
+								Location:      location(file, int(m.StartPoint().Row), int(m.EndPoint().Row)+1),
+								Confidence:    0.4,
+								Provenance:    *p,
+							})
+							if len(out) >= limit {
+								return
+							}
+						}
+					}
+				}
+			}
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			eachClass(n.Child(i))
+		}
+	}
+	eachClass(f.Root)
+	return out
+}
+
+// findClassByName walks the AST and returns the first class_declaration
+// whose name child matches want. Used by scanOverrides to locate the
+// node's containing class. Tree-sitter TS/JS both expose class names as
+// `identifier` or `type_identifier` children.
+func findClassByName(root *sitter.Node, want string, src []byte) *sitter.Node {
+	var found *sitter.Node
+	var walk func(*sitter.Node) bool
+	walk = func(n *sitter.Node) bool {
+		if n == nil {
+			return false
+		}
+		if n.Type() == "class_declaration" && className(n, src) == want {
+			found = n
+			return true
+		}
+		for i := 0; i < int(n.ChildCount()); i++ {
+			if walk(n.Child(i)) {
+				return true
+			}
+		}
+		return false
+	}
+	walk(root)
+	return found
+}
+
+// className returns the name of a class_declaration. Tree-sitter TS/JS
+// place the name as the first identifier-like child of the declaration.
+func className(class *sitter.Node, src []byte) string {
+	for i := 0; i < int(class.ChildCount()); i++ {
+		ch := class.Child(i)
+		if ch == nil {
+			continue
+		}
+		if ch.Type() == "identifier" || ch.Type() == "type_identifier" {
+			return ch.Content(src)
+		}
+	}
+	return ""
+}
+
+// parentClassNames returns the class names listed in a
+// class_declaration's `class_heritage` clause (TS/JS `extends X`).
+// Empty when the class has no parent. Tree-sitter TS wraps `extends`
+// and the parent identifier inside an `extends_clause` child, so we
+// recursively descend into that as well.
+func parentClassNames(class *sitter.Node, src []byte) []string {
+	var parents []string
+	var walk func(*sitter.Node) bool
+	walk = func(n *sitter.Node) bool {
+		if n == nil {
+			return false
+		}
+		switch n.Type() {
+		case "class_heritage", "extends_clause":
+			// Search inside clause for the parent identifier.
+			for i := 0; i < int(n.ChildCount()); i++ {
+				walk(n.Child(i))
+			}
+		case "identifier", "type_identifier":
+			parents = append(parents, n.Content(src))
+		}
+		return false
+	}
+	for i := 0; i < int(class.ChildCount()); i++ {
+		ch := class.Child(i)
+		if ch != nil && ch.Type() == "class_heritage" {
+			walk(ch)
+		}
+	}
+	return parents
+}
+
+// methodName returns the name of a method_definition. Tree-sitter
+// TS/JS place it as a `property_identifier` child of the method.
+func methodName(method *sitter.Node, src []byte) string {
+	for i := 0; i < int(method.ChildCount()); i++ {
+		ch := method.Child(i)
+		if ch != nil && ch.Type() == "property_identifier" {
+			return ch.Content(src)
+		}
+	}
+	return ""
 }
 
 // walkExpr walks a tree, calling visit on every node until visit returns

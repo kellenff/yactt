@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/store/repofixture"
@@ -395,6 +396,150 @@ export class UseUser {
 	// reference here. Avoids "imported and not used" lint if the
 	// parameter is ever renamed.
 	_ = parser.Symbol{}
+}
+
+// TestScanOverrides_FindsParentMethod pins the new `case "overrides":`
+// branch in NodeEdges. Synthesizes a TS file with `Child extends
+// Parent { method() {...} }` and asserts that asking for
+// `Child.method`'s overrides surfaces `Parent.method`.
+//
+// Pins:
+//   - dispatch routes `overrides` to `scanOverrides`.
+//   - TS/JS class_heritage walk finds the parent.
+//   - Same-named parent method emits one OVERRIDES edge with the
+//     correct target ID (`meth:auth.Parent.method`) and confidence 0.4.
+//   - Non-method symbols (functions, classes) get no edges.
+//   - Go methods (no override semantics) get no edges.
+func TestScanOverrides_FindsParentMethod(t *testing.T) {
+	fx := repofixture.New(t)
+
+	tsSrc := []byte(`export class Parent {
+  greet(): string { return "hi"; }
+}
+
+export class Child extends Parent {
+  greet(): string { return "child hi"; }
+  fetch(): string { return "ball"; }
+}
+`)
+	tsPath := fx.Root + string(os.PathSeparator) + "auth" + string(os.PathSeparator) + "overrides.ts"
+	if err := os.WriteFile(tsPath, tsSrc, 0o644); err != nil {
+		t.Fatalf("write overrides.ts: %v", err)
+	}
+
+	r, _, err := store.Load(fx.Root)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	// Child.greet overrides Parent.greet — must surface one OVERRIDES
+	// edge. Child.fetch has no parent counterpart — zero edges.
+	out, err := NodeEdges(r)(context.Background(), json.RawMessage(
+		`{"id":"meth:auth.Child.greet","kinds":["overrides"],"limit":50}`,
+	))
+	if err != nil {
+		t.Fatalf("NodeEdges: %v", err)
+	}
+	edges, ok := out.([]NodeEdgesResult)
+	if !ok {
+		t.Fatalf("NodeEdges return type: got %T", out)
+	}
+	var sawParent bool
+	for _, e := range edges {
+		if e.EdgeKind != "OVERRIDES" {
+			continue
+		}
+		if e.TargetID != "meth:auth.Parent.greet" {
+			t.Errorf("TargetID = %q, want meth:auth.Parent.greet", e.TargetID)
+		}
+		if e.TargetKind != domain.KindMethod {
+			t.Errorf("TargetKind = %q, want KindMethod", e.TargetKind)
+		}
+		if e.Confidence != 0.4 {
+			t.Errorf("Confidence = %v, want 0.4", e.Confidence)
+		}
+		if e.Location.LineRange.Start <= 0 {
+			t.Errorf("Location = %+v, want row > 0", e.Location)
+		}
+		sawParent = true
+	}
+	if !sawParent {
+		t.Errorf("Child.greet should override Parent.greet; got %+v", edges)
+	}
+
+	// Child.fetch has no parent counterpart — zero edges.
+	out2, err := NodeEdges(r)(context.Background(), json.RawMessage(
+		`{"id":"meth:auth.Child.fetch","kinds":["overrides"],"limit":50}`,
+	))
+	if err != nil {
+		t.Fatalf("NodeEdges (fetch): %v", err)
+	}
+	fetchEdges, _ := out2.([]NodeEdgesResult)
+	for _, e := range fetchEdges {
+		if e.EdgeKind == "OVERRIDES" {
+			t.Errorf("Child.fetch should not override anything; got %+v", e)
+		}
+	}
+
+	// A standalone class with no `extends` returns zero edges.
+	tsSrc2 := []byte(`export class Standalone {
+  method(): void {}
+}
+`)
+	tsPath2 := fx.Root + string(os.PathSeparator) + "auth" + string(os.PathSeparator) + "standalone.ts"
+	if err := os.WriteFile(tsPath2, tsSrc2, 0o644); err != nil {
+		t.Fatalf("write standalone.ts: %v", err)
+	}
+	r2, _, err := store.Load(fx.Root)
+	if err != nil {
+		t.Fatalf("Load (standalone): %v", err)
+	}
+	defer func() { _ = r2.Close() }()
+
+	out3, err := NodeEdges(r2)(context.Background(), json.RawMessage(
+		`{"id":"meth:auth.Standalone.method","kinds":["overrides"],"limit":50}`,
+	))
+	if err != nil {
+		t.Fatalf("NodeEdges (standalone): %v", err)
+	}
+	standaloneEdges, _ := out3.([]NodeEdgesResult)
+	for _, e := range standaloneEdges {
+		if e.EdgeKind == "OVERRIDES" {
+			t.Errorf("Standalone.method should not override anything; got %+v", e)
+		}
+	}
+
+	// Go method returns nil — Go has no override semantics. Refresh
+	// is a method on User; no OVERRIDES edges even if the user happens
+	// to have a method of the same name elsewhere.
+	out4, err := NodeEdges(r2)(context.Background(), json.RawMessage(
+		`{"id":"meth:auth.User.Refresh","kinds":["overrides"],"limit":50}`,
+	))
+	if err != nil {
+		t.Fatalf("NodeEdges (Go): %v", err)
+	}
+	goEdges, _ := out4.([]NodeEdgesResult)
+	for _, e := range goEdges {
+		if e.EdgeKind == "OVERRIDES" {
+			t.Errorf("Go method should not emit OVERRIDES; got %+v", e)
+		}
+	}
+
+	// A function (no Receiver) emits nil — guard against the dispatch
+	// confusing top-level functions with class methods.
+	out5, err := NodeEdges(r2)(context.Background(), json.RawMessage(
+		`{"id":"fn:auth.Login","kinds":["overrides"],"limit":50}`,
+	))
+	if err != nil {
+		t.Fatalf("NodeEdges (fn): %v", err)
+	}
+	fnEdges, _ := out5.([]NodeEdgesResult)
+	for _, e := range fnEdges {
+		if e.EdgeKind == "OVERRIDES" {
+			t.Errorf("function should not emit OVERRIDES; got %+v", e)
+		}
+	}
 }
 
 // TestNodeEdges_RespectsLimit asserts the per-kind limit cap is

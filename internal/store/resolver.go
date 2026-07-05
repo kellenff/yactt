@@ -295,9 +295,11 @@ func (r *Repo) LocateSymbol(nodeID id.ID) (file string, sym parser.Symbol, found
 		// in the class's file. Two types in the same file can each declare a
 		// same-named method (e.g. `func (a *Alpha) Ping()` and
 		// `func (b *Beta) Ping()`); without the receiver check we'd return
-		// whichever the iteration order hit first.
+		// whichever the iteration order hit first. Accept both Go
+		// `type_declaration` and TS/JS `class_declaration` — single
+		// "named-type" shape across languages (see id.For's kind routing).
 		for _, e := range entries {
-			if e.Sym.Kind != "type_declaration" {
+			if e.Sym.Kind != "type_declaration" && e.Sym.Kind != "class_declaration" {
 				continue
 			}
 			if _, ferr := r.CachedFile(e.File); ferr != nil {
