@@ -22,6 +22,21 @@ That's it. The SessionStart hook downloads and installs the `yactt` binary on fi
 
 If `$XDG_HOME/bin` (or `$HOME/.local/bin`) is not on your `PATH`, the bootstrap prints a one-line instruction for adding it. The MCP server fails loudly on startup if `yactt` can't be reached either way.
 
+## Integrity model (read this)
+
+The bootstrap's `SHA256SUMS` check is **corruption detection**, not supply-chain integrity. The manifest is fetched from the same origin as the binary, so a compromised release endpoint can ship a malicious tarball with a matching hash. What the bootstrap actually catches:
+
+- **Transport corruption / partial downloads** — SHA256 mismatch in SHA256SUMS (corruption-detection).
+- **Replay or replace at the same version** — TOFU check against `${XDG_DATA_HOME:-${HOME}/.local/share}/yactt/known-good`. After the first successful install, a same-version release with a different sha256 in `SHA256SUMS` is refused. Closes the silent-update threat from a compromised GitHub release endpoint *for the same version*.
+- **Unknown-version upgrades** — a malicious new version is treated as a legitimate upgrade (TOFU doesn't cover version-bumped releases).
+
+What the bootstrap does NOT catch (and why):
+
+- A malicious new release — TOFU is bypassed on every version bump, since the user's stated choice was "latest wins".
+- A compromised TLS endpoint — `https://github.com` is the only transport, but `github.com` itself isn't pinned.
+
+For full supply-chain integrity (catching malicious new versions, too), the manifest needs an out-of-band signature. Plan: sign `SHA256SUMS` with `cosign` or `minisign` during release, bundle the public key in `plugins/yactt/`, and verify the signature in the bootstrap before trusting the manifest. Until that's in place, treat the SHA256 check as a corruption guard, not a security boundary.
+
 ## Use
 
 After install, Claude has 10 new MCP tools (prefix `mcp__plugin_yactt_yactt__`) and one skill (`code-explore`) that triggers on prompts about exploring, summarizing, or reviewing code.

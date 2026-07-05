@@ -20,6 +20,17 @@ else
 fi
 INSTALL_PATH="${INSTALL_DIR}/yactt"
 
+# TOFU (Trust-On-First-Use) of (version, sha256). After the first
+# successful install we record the sha256 we observed in SHA256SUMS.
+# On every subsequent install: if the version is the same as the
+# last install AND the sha256 from SHA256SUMS differs, refuse — that
+# catches "compromised GitHub release at the same version" (a replay
+# or silent replace). It does NOT catch a malicious new release (the
+# sha256 would differ but we'd treat it as a legitimate upgrade).
+# For full supply-chain integrity, sign SHA256SUMS out-of-band
+# (cosign/minisign with a pinned key); see plugin README.
+KNOWN_GOOD_FILE="${XDG_DATA_HOME:-${HOME}/.local/share}/yactt/known-good"
+
 # --- cache (caps unauthed GitHub API at ~24 calls/day) ---
 CACHE_FILE="${XDG_CACHE_HOME:-${HOME}/.cache}/yactt/latest"
 CACHE_TTL=3600
@@ -102,19 +113,43 @@ download_and_install() {
 	# shellcheck disable=SC2064
 	trap "rm -rf '${tmpdir}'" EXIT
 
-	echo "yactt: downloading v${version} (${target})..." >&2
-	curl -fsSL -o "${tmpdir}/${archive}" "${base}/${archive}"
+	# Fetch SHA256SUMS FIRST so we can run the TOFU check before we
+	# download the binary itself. Saves a 100+ MB download if TOFU
+	# refuses (a same-version replay with a swapped hash).
+	echo "yactt: fetching SHA256SUMS for v${version}..." >&2
 	curl -fsSL -o "${tmpdir}/SHA256SUMS" "${base}/SHA256SUMS"
 
-	# Verify against SHA256SUMS. Refuse to install on mismatch — the
-	# user picked "latest wins" but only when the download is genuine.
-	local expected actual
+	local expected
 	expected=$(awk -v a="${archive}" '$2 == a {print $1}' "${tmpdir}/SHA256SUMS")
-	actual=$(shasum -a 256 "${tmpdir}/${archive}" | awk '{print $1}')
 	if [[ -z "${expected}" ]]; then
 		echo "yactt: no SHA256 entry for ${archive} — refusing to install" >&2
 		return 1
 	fi
+
+	# TOFU check: same version as before but a different sha256 in
+	# the manifest is a strong signal of replay / compromised release.
+	if [[ -f "${KNOWN_GOOD_FILE}" ]]; then
+		local known_version known_sha
+		known_version=$(awk '{print $1}' "${KNOWN_GOOD_FILE}")
+		known_sha=$(awk '{print $2}' "${KNOWN_GOOD_FILE}")
+		if [[ "${known_version}" == "${version}" && "${known_sha}" != "${expected}" ]]; then
+			echo "yactt: refusing v${version} — known-good hash was ${known_sha}, manifest now says ${expected}" >&2
+			echo "         likely a replay or compromised release; refusing to install" >&2
+			return 1
+		fi
+	fi
+
+	echo "yactt: downloading v${version} (${target})..." >&2
+	curl -fsSL -o "${tmpdir}/${archive}" "${base}/${archive}"
+
+	# Verify against SHA256SUMS. This is CORRUPTION DETECTION only —
+	# the manifest comes from the same origin as the binary, so a
+	# compromised release endpoint can ship a matching pair. The
+	# TOFU check above is what catches that for same-version replays.
+	# For full supply-chain integrity, sign the manifest out-of-band
+	# (cosign / minisign with a pinned public key); see README.
+	local actual
+	actual=$(shasum -a 256 "${tmpdir}/${archive}" | awk '{print $1}')
 	if [[ "${expected}" != "${actual}" ]]; then
 		echo "yactt: checksum mismatch (expected ${expected}, got ${actual})" >&2
 		return 1
@@ -124,6 +159,10 @@ download_and_install() {
 	tar -xzf "${tmpdir}/${archive}" -C "${tmpdir}" "yactt_${target}"
 	install -m 0755 "${tmpdir}/yactt_${target}" "${INSTALL_PATH}"
 	echo "yactt: installed v${version} → ${INSTALL_PATH}" >&2
+
+	# Record the (version, sha256) pair for the next TOFU check.
+	mkdir -p "$(dirname "${KNOWN_GOOD_FILE}")"
+	printf '%s %s\n' "${version}" "${actual}" > "${KNOWN_GOOD_FILE}"
 
 	# PATH sanity check — soft warning, not fatal. The MCP server
 	# will fail to start if yactt is unreachable, which surfaces the
