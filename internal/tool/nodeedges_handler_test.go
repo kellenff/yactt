@@ -267,6 +267,136 @@ func TestSmoke(t *testing.T) {
 	}
 }
 
+// TestScanImports_EmitsPaths pins the new `case "imports":` branch in
+// NodeEdges. Synthesizes a Go file with two imports and a TS file with
+// one named import; calls NodeEdges with kinds=["imports"] and
+// verifies the emitted IMPORTS edges surface the expected paths with
+// the right per-row Location.
+//
+// Pins:
+//   - dispatch routes `imports` to `scanImports` (not silently dropped).
+//   - Go `import_declaration` and TS `import_statement` both work.
+//   - Dedup: a single file with grouped `import ("a"; "a")` would emit
+//     one edge; this test exercises the simple `import "x"` shape.
+//   - Target ID format: `pkg:<import-path>`.
+func TestScanImports_EmitsPaths(t *testing.T) {
+	fx := repofixture.New(t)
+
+	// Synthetic Go file with two imports.
+	goSrc := []byte(`package auth
+
+import "fmt"
+import "github.com/foo/bar"
+
+func UseFmt() {}
+`)
+	goPath := fx.Root + string(os.PathSeparator) + "auth" + string(os.PathSeparator) + "imports_test.go"
+	if err := os.WriteFile(goPath, goSrc, 0o644); err != nil {
+		t.Fatalf("write imports_test.go: %v", err)
+	}
+
+	// Synthetic TS file with one named import.
+	tsSrc := []byte(`import { User } from "./user";
+
+export class UseUser {
+  pick(): User { return null as any; }
+}
+`)
+	tsPath := fx.Root + string(os.PathSeparator) + "auth" + string(os.PathSeparator) + "user_importer.ts"
+	if err := os.WriteFile(tsPath, tsSrc, 0o644); err != nil {
+		t.Fatalf("write user_importer.ts: %v", err)
+	}
+
+	r, _, err := store.Load(fx.Root)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	// Drive scanImports on the Go file via its declared function. The
+	// `file`, not `sym`, is what scanImports reads, so the choice of
+	// symbol is incidental — UseFmt lives in the same file.
+	out, err := NodeEdges(r)(context.Background(), json.RawMessage(
+		`{"id":"fn:auth.UseFmt","kinds":["imports"],"limit":50}`,
+	))
+	if err != nil {
+		t.Fatalf("NodeEdges: %v", err)
+	}
+	edges, ok := out.([]NodeEdgesResult)
+	if !ok {
+		t.Fatalf("NodeEdges return type: got %T", out)
+	}
+
+	// Go file: collect observed import paths.
+	goWant := map[string]bool{"fmt": false, "github.com/foo/bar": false}
+	for _, e := range edges {
+		if e.EdgeKind != "IMPORTS" {
+			continue
+		}
+		if e.TargetID != "pkg:"+e.TargetSummary {
+			t.Errorf("TargetID = %q, want pkg:%q", e.TargetID, e.TargetSummary)
+		}
+		if _, ok := goWant[e.TargetSummary]; ok {
+			goWant[e.TargetSummary] = true
+		}
+	}
+	for path, seen := range goWant {
+		if !seen {
+			t.Errorf("expected Go IMPORTS edge for %q", path)
+		}
+	}
+
+	// Pin a non-zero row on the Go import edge so the Location field
+	// stays meaningful (matches the existing scanTests contract).
+	for _, e := range edges {
+		if e.TargetSummary == "fmt" {
+			if e.Location.LineRange.Start <= 0 {
+				t.Errorf("fmt import location = %+v, want row > 0", e.Location)
+			}
+		}
+	}
+
+	// TS file: a separate query on the TS-declared class surfaces the
+	// TS-only import. Confirms the dispatch and walker cover both
+	// import_declaration (Go) and import_statement (TS/JS).
+	out2, err := NodeEdges(r)(context.Background(), json.RawMessage(
+		`{"id":"class:auth.UseUser","kinds":["imports"],"limit":50}`,
+	))
+	if err != nil {
+		t.Fatalf("NodeEdges (TS): %v", err)
+	}
+	tsEdges, _ := out2.([]NodeEdgesResult)
+	var sawTS bool
+	for _, e := range tsEdges {
+		if e.EdgeKind == "IMPORTS" && e.TargetSummary == "./user" {
+			sawTS = true
+		}
+	}
+	if !sawTS {
+		t.Errorf("TS ./user import dropped; got %+v", tsEdges)
+	}
+
+	// Sanity: a file with no imports returns zero IMPORTS edges.
+	out3, err := NodeEdges(r)(context.Background(), json.RawMessage(
+		`{"id":"fn:auth.Login","kinds":["imports"],"limit":50}`,
+	))
+	if err != nil {
+		t.Fatalf("NodeEdges (no imports): %v", err)
+	}
+	noImportEdges, _ := out3.([]NodeEdgesResult)
+	for _, e := range noImportEdges {
+		if e.EdgeKind == "IMPORTS" {
+			t.Errorf("auth/login.go has no imports but got IMPORTS edge: %+v", e)
+		}
+	}
+
+	// Confirm the parser.Symbol field compiles in the dispatch — the
+	// unused `_ parser.Symbol` parameter at scanImports gets a
+	// reference here. Avoids "imported and not used" lint if the
+	// parameter is ever renamed.
+	_ = parser.Symbol{}
+}
+
 // TestNodeEdges_RespectsLimit asserts the per-kind limit cap is
 // applied. The fixture has multiple functions; ask for limit=1 and
 // verify we get at most one edge per kind.

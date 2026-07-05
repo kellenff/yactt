@@ -90,6 +90,8 @@ func NodeEdges(repo *store.Repo) func(ctx context.Context, args json.RawMessage)
 				out = append(out, scanCallers(repo, file, sym, a.Limit, p)...)
 			case "tests":
 				out = append(out, scanTests(repo, file, sym, a.Limit, p)...)
+			case "imports":
+				out = append(out, scanImports(repo, file, sym, a.Limit, p)...)
 			}
 		}
 		return out, nil
@@ -434,6 +436,56 @@ func scanTests(repo *store.Repo, _ string, sym parser.Symbol, limit int, p *doma
 			if len(out) >= limit {
 				return out
 			}
+		}
+	}
+	return out
+}
+
+// scanImports walks the top level of the node's containing file and
+// emits one IMPORTS edge per imported package. Syntactic only — no
+// cross-package resolution to local files or `pkg:` indexes, so
+// confidence sits at 0.4 (lower than CALLEES's 0.5 because we don't
+// even attempt identifier lookup against the symbol index).
+//
+// The target ID is `pkg:<import-path>` regardless of whether the path
+// resolves to anything in the repo — the wire format keeps the path
+// string as the stable address. Resolving to local files is a
+// Phase 1.5 upgrade (design §5.1 cross-language import graph).
+//
+// Deduplicates by path within a single file — grouped `import ("a"; "a")`
+// in Go or duplicate specifiers in TS produce one edge per unique path.
+func scanImports(repo *store.Repo, file string, _ parser.Symbol, limit int, p *domain.Provenance) []NodeEdgesResult {
+	f, err := repo.CachedFile(file)
+	if err != nil || f.Root == nil {
+		return nil
+	}
+	out := []NodeEdgesResult{}
+	seen := make(map[string]bool)
+	root := f.Root
+	for i := 0; i < int(root.ChildCount()); i++ {
+		ch := root.Child(i)
+		if ch == nil {
+			continue
+		}
+		if ch.Type() != "import_declaration" && ch.Type() != "import_statement" {
+			continue
+		}
+		path := store.ExtractImportPath(ch, f.Bytes)
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		out = append(out, NodeEdgesResult{
+			EdgeKind:      domain.EdgeImports,
+			TargetID:      "pkg:" + path,
+			TargetKind:    domain.KindPackage,
+			TargetSummary: path,
+			Location:      location(file, int(ch.StartPoint().Row), int(ch.EndPoint().Row)+1),
+			Confidence:    0.4,
+			Provenance:    *p,
+		})
+		if len(out) >= limit {
+			return out
 		}
 	}
 	return out
