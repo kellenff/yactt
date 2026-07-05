@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancels in-flight runs on the same ref so a force-push or new
+# commit doesn't burn runner minutes on a superseded commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: vet / test / smoke build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache: true
+
+      # `go vet` is the cheapest static-check that catches the
+      # obvious API misuse. `go test ./...` is the contract gate
+      # today (`make check` is referenced in the project memory
+      # but the file isn't on disk — see the build-binaries slice
+      # notes; vet+test cover the equivalent for now). The smoke
+      # build catches "tests pass but the shipping binary doesn't
+      # compile" regressions.
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: smoke build (linux/amd64)
+        run: go build -trimpath -o /tmp/yactt ./cmd/yactt
+
+      - name: upload smoke binary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yactt-smoke-${{ github.sha }}
+          path: /tmp/yactt
+          retention-days: 3
