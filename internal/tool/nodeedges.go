@@ -109,7 +109,7 @@ func scanCallees(repo *store.Repo, file string, sym parser.Symbol, limit int, p 
 	if sym.Name == "" {
 		return nil
 	}
-	if entries := repo.EdgesByCaller(file, sym.Name); len(entries) > 0 {
+	if entries := repo.EdgesByCaller(file, sym); len(entries) > 0 {
 		return scanCalleesFromIndex(repo, file, sym, limit, p, entries)
 	}
 	return scanCalleesLive(repo, file, sym, limit, p)
@@ -293,8 +293,8 @@ func scanCallers(repo *store.Repo, file string, sym parser.Symbol, limit int, p 
 			if found {
 				out = append(out, NodeEdgesResult{
 					EdgeKind:   domain.EdgeCallers,
-					TargetID:   "fn:" + joinDotted(packagePath(repo.Root(), otherPath), e.Name),
-					TargetKind: domain.KindFunction,
+					TargetID:   id.For(e, packagePath(repo.Root(), otherPath)),
+					TargetKind: symbolKind(e),
 					Location:   location(otherPath, e.StartRow, e.EndRow),
 					Confidence: 0.5,
 					Provenance: *p,
@@ -342,17 +342,14 @@ func callerIDAt(path string, line, col int, repo *store.Repo) (string, bool) {
 	// Resolve the containing function by walking the symbol index.
 	// This is the cheapest correct option given the repo's current
 	// lookups; it costs at most one full pass over the file's symbols.
+	pkg := packagePath(repo.Root(), path)
 	entries := repo.Symbols(path)
 	for _, e := range entries {
 		if e.Kind != "function_declaration" && e.Kind != "method_declaration" {
 			continue
 		}
 		if line >= e.StartRow && line < e.EndRow {
-			pkg := joinDotted(packagePath(repo.Root(), path), e.Name)
-			if e.Receiver != "" {
-				return "meth:" + joinDotted(packagePath(repo.Root(), path), e.Receiver+"."+e.Name), true
-			}
-			return "fn:" + pkg, true
+			return id.For(e, pkg), true
 		}
 	}
 	return "", false
@@ -427,7 +424,7 @@ func scanTests(repo *store.Repo, _ string, sym parser.Symbol, limit int, p *doma
 		for _, s := range repo.Symbols(path) {
 			out = append(out, NodeEdgesResult{
 				EdgeKind:      domain.EdgeTests,
-				TargetID:      "fn:" + joinDotted(packagePath(repo.Root(), path), s.Name),
+				TargetID:      id.For(s, packagePath(repo.Root(), path)),
 				TargetKind:    symbolKind(s),
 				TargetSummary: symbolSummary(s),
 				Location:      location(path, s.StartRow, s.EndRow),

@@ -114,7 +114,7 @@ func (r *Repo) rebuildIndex() {
 				seen[callee] = true
 				entry := EdgeEntry{File: path, Caller: s, Callee: callee, Kind: domain.EdgeCallers}
 				idx.byCallEdge[edgeKey{0, callee}] = append(idx.byCallEdge[edgeKey{0, callee}], entry)
-				idx.byCallEdge[edgeKey{1, path + "::" + s.Name}] = append(idx.byCallEdge[edgeKey{1, path + "::" + s.Name}], entry)
+				idx.byCallEdge[edgeKey{1, callerEdgeKey(path, s)}] = append(idx.byCallEdge[edgeKey{1, callerEdgeKey(path, s)}], entry)
 				return true
 			})
 			f = nil
@@ -205,15 +205,17 @@ func (r *Repo) EdgesByCallee(name string) []EdgeEntry {
 	return out
 }
 
-// EdgesByCaller returns every call-edge record emitted by the function named
-// `name` in `file`. The tool layer inverts it into CALLEES edges: each entry
-// is "name called someone".
+// EdgesByCaller returns every call-edge record emitted by the caller
+// identified by `sym` in `file`. The tool layer inverts it into CALLEES
+// edges: each entry is "sym called someone".
 //
 // Same empty-slice contract as EdgesByCallee when the index is empty or the
 // caller is unindexed (e.g. the file was edited after Load without
-// ReloadInvalidate).
-func (r *Repo) EdgesByCaller(file, name string) []EdgeEntry {
-	if file == "" || name == "" {
+// ReloadInvalidate). The symbol's Receiver is part of the key for methods —
+// two same-named methods on different receivers in the same file no longer
+// collapse.
+func (r *Repo) EdgesByCaller(file string, sym parser.Symbol) []EdgeEntry {
+	if file == "" || sym.Name == "" {
 		return nil
 	}
 	r.mu.RLock()
@@ -222,7 +224,7 @@ func (r *Repo) EdgesByCaller(file, name string) []EdgeEntry {
 	if idx == nil {
 		return nil
 	}
-	raw := idx.byCallEdge[edgeKey{1, file + "::" + name}]
+	raw := idx.byCallEdge[edgeKey{1, callerEdgeKey(file, sym)}]
 	out := make([]EdgeEntry, len(raw))
 	for i, e := range raw {
 		out[i] = e
@@ -231,6 +233,17 @@ func (r *Repo) EdgesByCaller(file, name string) []EdgeEntry {
 		return out[i].Callee < out[j].Callee
 	})
 	return out
+}
+
+// callerEdgeKey builds the by-call-edge caller-side key for a symbol.
+// Methods include the receiver so two same-named methods on different
+// receivers in the same file (e.g. Alpha.Ping vs Beta.Ping) get distinct
+// entries. Functions use the bare name.
+func callerEdgeKey(file string, s parser.Symbol) string {
+	if s.Receiver != "" {
+		return file + "::" + s.Receiver + "." + s.Name
+	}
+	return file + "::" + s.Name
 }
 
 // LocateSymbol returns the (file, Symbol) for an id.ID of code-kind. File-

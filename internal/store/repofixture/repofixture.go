@@ -125,20 +125,25 @@ func Refund(txID string) error { return nil }
 	}
 
 	// Two types with same-named methods, used to verify the resolver can
-	// disambiguate `meth:auth.Alpha.Ping` from `meth:auth.Beta.Ping`.
+	// disambiguate `meth:auth.Alpha.Ping` from `meth:auth.Beta.Ping` AND
+	// the persisted call-edge index keys each method independently under
+	// (file::Receiver.Name). Alpha.Ping calls Charge and Beta.Ping calls
+	// Refund; both are unresolved cross-package calls recorded by tree-
+	// sitter. Without per-receiver keying, both methods would collide
+	// under `multi.go::Ping` and the per-method call sets would merge.
 	multiSrc := `package auth
 
 // Alpha is the first dual-receiver fixture.
 type Alpha struct{ Value string }
 
 // Ping returns "alpha".
-func (a *Alpha) Ping() string { return "alpha" }
+func (a *Alpha) Ping() string { return Charge(0) }
 
 // Beta is the second dual-receiver fixture.
 type Beta struct{ Value int }
 
 // Ping returns "beta".
-func (b *Beta) Ping() string { return "beta" }
+func (b *Beta) Ping() string { return Refund("x") }
 `
 	if err := os.WriteFile(filepath.Join(dir, "auth", "multi.go"), []byte(multiSrc), 0o644); err != nil {
 		t.Fatal(err)

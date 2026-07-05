@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"path"
 	"strings"
+
+	"github.com/kellenff/yactt/internal/parser"
 )
 
 // Kind tags the head of an identifier.
@@ -111,6 +113,68 @@ func Class(pkg, name string) ID { return ID{KindClass, pkg + "." + name} }
 // Module builds a module:<package>.<Name> ID (Python module-level symbol).
 func Module(pkg, name string) ID { return ID{KindModule, pkg + "." + name} }
 
+// JoinDotted concatenates non-empty segments with a '.' separator. The
+// id-body string in `ID{Kind, body}` is canonically dot-joined; this
+// helper drops leading/trailing dots when pkg or the suffix is empty so
+// TS/JS symbol IDs (no enclosing module) round-trip cleanly.
+func JoinDotted(pkg string, rest ...string) string {
+	parts := make([]string, 0, 1+len(rest))
+	if pkg != "" {
+		parts = append(parts, pkg)
+	}
+	for _, p := range rest {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	return strings.Join(parts, ".")
+}
+
+// For builds the canonical ID for any parser.Symbol regardless of
+// language. Single source of truth for the kind→prefix mapping and
+// for pkg/class/name composition; replaces the five sites in the tool
+// and search layers that each emitted their own prefix.
+//
+// The Kind mapping:
+//
+//	function_declaration          → fn:
+//	method_declaration            → meth:
+//	type_declaration              → class:
+//	class_declaration             → class:
+//	interface_declaration         → class:
+//	type_alias_declaration        → class:
+//	enum_declaration              → class:
+//	module / module_declaration   → module:
+//	(unknown)                     → fn:
+//
+// Methods without a populated Receiver fall back to `fn:` because the
+// ID grammar requires a receiver to disambiguate; the symbol layer
+// always populates it, so this branch is a safety net only.
+func For(s parser.Symbol, pkg string) string {
+	kind := KindFunction
+	switch s.Kind {
+	case "method_declaration":
+		if s.Receiver == "" {
+			// Safety net for malformed symbols; the parser layer always
+			// populates Receiver, so this branch should never fire in
+			// practice. Fall back to fn: so the ID is at least
+			// round-trippable.
+			break
+		}
+		kind = KindMethod
+	case "type_declaration", "class_declaration",
+		"interface_declaration", "type_alias_declaration", "enum_declaration":
+		kind = KindClass
+	case "module", "module_declaration":
+		kind = KindModule
+	}
+	name := s.Name
+	if kind == KindMethod {
+		name = s.Receiver + "." + s.Name
+	}
+	return ID{kind, JoinDotted(pkg, name)}.String()
+}
+
 // FunctionParts splits the body of a fn:<...> ID into (package, receiver, name).
 // Receiver is "" if absent.
 func (i ID) FunctionParts() (pkg, receiver, name string, err error) {
@@ -129,16 +193,27 @@ func (i ID) FunctionParts() (pkg, receiver, name string, err error) {
 	return head[:mid], head[mid+1:], name, nil
 }
 
-// MethodParts splits a meth:<package>.<Class>.<Name> ID.
+// MethodParts splits a meth:<package-or-empty>.<Class>.<Name> ID. The
+// package segment is optional — TS/JS class methods and other shapes
+// where the enclosing module is implicit have no package segment.
 func (i ID) MethodParts() (pkg, class, name string, err error) {
 	if i.Kind != KindMethod {
 		return "", "", "", fmt.Errorf("%w: not a method id", ErrBadFormat)
 	}
 	parts := strings.SplitN(i.Body, ".", 3)
-	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return "", "", "", fmt.Errorf("%w: want pkg.Class.Name", ErrBadFormat)
+	switch len(parts) {
+	case 3:
+		if parts[0] == "" || parts[1] == "" || parts[2] == "" {
+			return "", "", "", fmt.Errorf("%w: want pkg.Class.Name", ErrBadFormat)
+		}
+		return parts[0], parts[1], parts[2], nil
+	case 2:
+		if parts[0] == "" || parts[1] == "" {
+			return "", "", "", fmt.Errorf("%w: want Class.Name", ErrBadFormat)
+		}
+		return "", parts[0], parts[1], nil
 	}
-	return parts[0], parts[1], parts[2], nil
+	return "", "", "", fmt.Errorf("%w: want pkg.Class.Name or Class.Name", ErrBadFormat)
 }
 
 // ClassParts splits a class:<package>.<Name> ID.

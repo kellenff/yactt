@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/store"
 )
@@ -34,12 +35,7 @@ func baseName(p string) string {
 // uses the dotted directory path so `node_get(fn:auth.login.Login)` resolves
 // back to the right file.
 func symbolID(file string, s parser.Symbol, root string) string {
-	pkg := packagePath(root, file)
-	prefix := "fn:"
-	if s.Kind == "type_declaration" {
-		prefix = "class:"
-	}
-	return prefix + joinDotted(pkg, s.Name)
+	return id.For(s, packagePath(root, file))
 }
 
 // symbolKind maps a parser.Symbol kind to a domain.NodeKind.

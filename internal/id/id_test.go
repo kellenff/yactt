@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kellenff/yactt/internal/id"
+	"github.com/kellenff/yactt/internal/parser"
 )
 
 func TestParseOK(t *testing.T) {
@@ -181,7 +182,9 @@ func TestMethodParts(t *testing.T) {
 	}{
 		{"valid", "meth:auth.Server.Login", "auth", "Server", "Login", false},
 		{"bad kind", "fn:auth.Server.Login", "", "", "", true},
-		{"two segments", "meth:auth.Server", "", "", "", true},
+		// Two-segment bodies are valid for TS/JS class methods with no
+		// enclosing module path. pkg is empty.
+		{"two segments no pkg", "meth:Server.refresh", "", "Server", "refresh", false},
 		{"one segment", "meth:auth", "", "", "", true},
 		{"empty parts", "meth:auth..Login", "", "", "", true},
 		{"empty body", "meth:", "", "", "", true},
@@ -336,5 +339,82 @@ func TestFunctionParts_HeadWithLeadingDot(t *testing.T) {
 	}
 	if pkg != "" || recv != "X" || name != "Y" {
 		t.Errorf("parts = (%q, %q, %q), want (\"\", \"X\", \"Y\")", pkg, recv, name)
+	}
+}
+
+// TestFor_KindRouting pins the kind→prefix mapping. The single-source
+// helper used by every emission site in the tool and search layers.
+func TestFor_KindRouting(t *testing.T) {
+	cases := []struct {
+		name string
+		sym  parser.Symbol
+		pkg  string
+		want string
+	}{
+		{"function", parser.Symbol{Kind: "function_declaration", Name: "Login"}, "auth", "fn:auth.Login"},
+		{"generator function", parser.Symbol{Kind: "generator_function_declaration", Name: "Gen"}, "auth", "fn:auth.Gen"},
+		{"method with receiver", parser.Symbol{Kind: "method_declaration", Name: "refresh", Receiver: "User"}, "auth", "meth:auth.User.refresh"},
+		{"method without receiver", parser.Symbol{Kind: "method_declaration", Name: "M"}, "auth", "fn:auth.M"},
+		{"type declaration", parser.Symbol{Kind: "type_declaration", Name: "Session"}, "auth", "class:auth.Session"},
+		{"class declaration (TS/JS)", parser.Symbol{Kind: "class_declaration", Name: "User"}, "auth", "class:auth.User"},
+		{"interface (TS)", parser.Symbol{Kind: "interface_declaration", Name: "Shape"}, "auth", "class:auth.Shape"},
+		{"type alias (TS)", parser.Symbol{Kind: "type_alias_declaration", Name: "Maybe"}, "auth", "class:auth.Maybe"},
+		{"enum (TS)", parser.Symbol{Kind: "enum_declaration", Name: "Color"}, "auth", "class:auth.Color"},
+		{"module", parser.Symbol{Kind: "module_declaration", Name: "pkg"}, "auth", "module:auth.pkg"},
+		{"unknown falls through to fn", parser.Symbol{Kind: "wat", Name: "X"}, "auth", "fn:auth.X"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := id.For(tc.sym, tc.pkg)
+			if got != tc.want {
+				t.Errorf("For(%+v, %q) = %q, want %q", tc.sym, tc.pkg, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFor_ToleratesEmptyPackage pins the leading-dot guard: TS/JS files
+// at the repo root have pkg=""; the body must drop the empty segment
+// rather than emit `meth:.Server.refresh`.
+func TestFor_ToleratesEmptyPackage(t *testing.T) {
+	sym := parser.Symbol{Kind: "method_declaration", Name: "refresh", Receiver: "User"}
+	got := id.For(sym, "")
+	want := "meth:User.refresh"
+	if got != want {
+		t.Errorf("For(empty pkg) = %q, want %q", got, want)
+	}
+	if _, err := id.Parse(got); err != nil {
+		t.Errorf("Parse(%q) error: %v", got, err)
+	}
+	if _, _, _, err := id.MustParse(got).MethodParts(); err != nil {
+		t.Errorf("MethodParts(%q) error: %v", got, err)
+	}
+}
+
+// TestJoinDotted covers the truth table for the dotted concatenation
+// helper. Drops empty parts so callers never produce leading/trailing dots.
+func TestJoinDotted(t *testing.T) {
+	cases := []struct {
+		name string
+		pkg  string
+		rest []string
+		want string
+	}{
+		{"all empty", "", nil, ""},
+		{"only pkg", "auth", nil, "auth"},
+		{"only name", "", []string{"Foo"}, "Foo"},
+		{"pkg + name", "auth", []string{"Login"}, "auth.Login"},
+		{"pkg + class + name", "auth", []string{"Server", "Login"}, "auth.Server.Login"},
+		{"drops empty pkg", "", []string{"Server", "refresh"}, "Server.refresh"},
+		{"drops empty middle", "auth", []string{"", "Login"}, "auth.Login"},
+		{"drops empty tail", "auth", []string{"Login", ""}, "auth.Login"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := id.JoinDotted(tc.pkg, tc.rest...)
+			if got != tc.want {
+				t.Errorf("JoinDotted(%q, %v) = %q, want %q", tc.pkg, tc.rest, got, tc.want)
+			}
+		})
 	}
 }

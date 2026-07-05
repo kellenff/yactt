@@ -419,11 +419,53 @@ func TestEdgesByCalleeIncludesTSMethod(t *testing.T) {
 	}
 }
 
+// TestEdgesBySameNameMethodKeying pins the per-receiver keying for
+// methods in the persisted call-edge index. auth/multi.go declares
+// Alpha.Ping (calls Charge) and Beta.Ping (calls Refund) — two same-
+// named methods on different receivers in the same file. Without
+// receiver-aware keys, both methods would collapse under
+// multi.go::Ping and EdgesByCaller could only return one set. With the
+// fix, each method has a distinct caller-side key.
+func TestEdgesBySameNameMethodKeying(t *testing.T) {
+	r, fix := loadFixture(t)
+
+	alphaSym := parser.Symbol{Kind: "method_declaration", Name: "Ping", Receiver: "Alpha"}
+	alphaEntries := r.EdgesByCaller(fix.MultiPath, alphaSym)
+	var sawCharge bool
+	for _, e := range alphaEntries {
+		if e.Callee == "Charge" {
+			sawCharge = true
+		}
+	}
+	if !sawCharge {
+		t.Errorf("Alpha.Ping dropped Charge; got %+v", alphaEntries)
+	}
+
+	betaSym := parser.Symbol{Kind: "method_declaration", Name: "Ping", Receiver: "Beta"}
+	betaEntries := r.EdgesByCaller(fix.MultiPath, betaSym)
+	var sawRefund bool
+	for _, e := range betaEntries {
+		if e.Callee == "Refund" {
+			sawRefund = true
+		}
+	}
+	if !sawRefund {
+		t.Errorf("Beta.Ping dropped Refund; got %+v", betaEntries)
+	}
+
+	// And confirm that querying the wrong receiver on the same file
+	// returns nothing — proof that the two methods are independent.
+	noEntries := r.EdgesByCaller(fix.MultiPath, parser.Symbol{Kind: "method_declaration", Name: "Ping", Receiver: "NoSuch"})
+	if len(noEntries) != 0 {
+		t.Errorf("EdgesByCaller(NoSuch) = %+v, want empty", noEntries)
+	}
+}
+
 // TestEdgesByCallerFixture pins the by-call-edge index from the callee side:
 // asking "what does Authenticate call?" must surface Charge.
 func TestEdgesByCallerFixture(t *testing.T) {
 	r, fix := loadFixture(t)
-	entries := r.EdgesByCaller(fix.LoginPath, "Authenticate")
+	entries := r.EdgesByCaller(fix.LoginPath, parser.Symbol{Kind: "function_declaration", Name: "Authenticate"})
 	if len(entries) == 0 {
 		t.Fatalf(`EdgesByCaller(%q, "Authenticate") empty; expected Charge`, fix.LoginPath)
 	}
@@ -440,14 +482,14 @@ func TestEdgesByCallerFixture(t *testing.T) {
 
 // TestEdgesFallbackOnUnknown confirms an unknown name yields an empty slice
 // without panicking — both accessors. Caller-side also returns empty when
-// the (file, name) pair has no entry (e.g. asking for an existing name in
+// the (file, sym) pair has no entry (e.g. asking for an existing name in
 // a different file).
 func TestEdgesFallbackOnUnknown(t *testing.T) {
 	r, _ := loadFixture(t)
 	if got := r.EdgesByCallee("DoesNotExist"); len(got) != 0 {
 		t.Errorf("EdgesByCallee(missing) = %+v, want empty", got)
 	}
-	if got := r.EdgesByCaller("/no/such/file.go", "Anything"); len(got) != 0 {
+	if got := r.EdgesByCaller("/no/such/file.go", parser.Symbol{Kind: "function_declaration", Name: "Anything"}); len(got) != 0 {
 		t.Errorf("EdgesByCaller(missing) = %+v, want empty", got)
 	}
 }
@@ -465,7 +507,7 @@ func TestReloadInvalidateRebuilds(t *testing.T) {
 	if len(entries) == 0 {
 		t.Fatal(`EdgesByCallee("Charge") empty after ReloadInvalidate`)
 	}
-	if got := r.EdgesByCaller(fix.LoginPath, "Authenticate"); len(got) == 0 {
+	if got := r.EdgesByCaller(fix.LoginPath, parser.Symbol{Kind: "function_declaration", Name: "Authenticate"}); len(got) == 0 {
 		t.Errorf(`EdgesByCaller(LoginPath, "Authenticate") empty after ReloadInvalidate`)
 	}
 }

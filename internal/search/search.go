@@ -190,20 +190,11 @@ func scoreSymbol(s parser.Symbol, doc string, q Query, path, pkg string) (float6
 	return score, true
 }
 
-// buildID renders the canonical node ID for a search hit.
+// buildID renders the canonical node ID for a search hit. Thin
+// delegation to id.For — kind→prefix mapping is single-sourced there so
+// the tool layer cannot drift from the persisted index again.
 func buildID(s parser.Symbol, pkg string) string {
-	switch s.Kind {
-	case "function_declaration":
-		return id.Function(pkg, "", s.Name).String()
-	case "method_declaration":
-		// The receiver is captured at parse time; an empty receiver means the
-		// grammar didn't yield one (e.g. a non-Go language or an unusual shape).
-		// Tools can still re-resolve via find_symbol with the summary.
-		return id.Method(pkg, s.Receiver, s.Name).String()
-	case "type_declaration":
-		return id.Class(pkg, s.Name).String()
-	}
-	return id.Module(pkg, s.Name).String()
+	return id.For(s, pkg)
 }
 
 // Pattern is a structured search pattern used by find_code. It supports regex
