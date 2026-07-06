@@ -60,23 +60,48 @@ func ByteRangeFromRows(src []byte, startRow, endRow int) (int, int) {
 // Returning false from visit short-circuits the subtree walk. n itself is
 // skipped when its range is fully outside [startByte, endByte); the existing
 // tool-layer walker accepts the same approximation.
+//
+// Iterative DFS over an explicit stack: one frame per (node, childIndex)
+// instead of one frame per recursion. Go's growable stack absorbs the
+// recursive version at any realistic tree-sitter depth, but the iterative
+// form bounds memory by the tree breadth, not depth, and removes the
+// question entirely.
 func WalkExpr(n *sitter.Node, startByte, endByte int, visit func(*sitter.Node) bool) {
 	if n == nil {
 		return
 	}
-	s := int(n.StartByte())
-	e := int(n.EndByte())
-	if startByte != 0 || endByte != 0 {
-		if e <= startByte || s >= endByte {
-			return
+	type frame struct {
+		node  *sitter.Node
+		child int // next child index to descend into
+		seen  bool // whether visit() has been called for this node yet
+	}
+	stack := []frame{{node: n}}
+	for len(stack) > 0 {
+		f := &stack[len(stack)-1]
+		if !f.seen {
+			if startByte != 0 || endByte != 0 {
+				s := int(f.node.StartByte())
+				e := int(f.node.EndByte())
+				if e <= startByte || s >= endByte {
+					stack = stack[:len(stack)-1]
+					continue
+				}
+			}
+			f.seen = true
+			if !visit(f.node) {
+				stack = stack[:len(stack)-1]
+				continue
+			}
 		}
-	}
-	if !visit(n) {
-		return
-	}
-	nch := int(n.ChildCount())
-	for i := 0; i < nch; i++ {
-		WalkExpr(n.Child(i), startByte, endByte, visit)
+		if f.child < int(f.node.ChildCount()) {
+			child := f.node.Child(f.child)
+			f.child++
+			if child != nil {
+				stack = append(stack, frame{node: child})
+			}
+		} else {
+			stack = stack[:len(stack)-1]
+		}
 	}
 }
 
