@@ -19,12 +19,11 @@ jobs:
     name: vet / test / smoke build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # ^ full commit SHA — pinned to defeat tag-mutation supply-chain attacks.
+      # Bump via Dependabot/Renovate; never edit the SHA by hand on a whim.
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.4'
-          cache: true
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
 
       # `go vet` is the cheapest static-check that catches the
       # obvious API misuse. `go test ./...` is the contract gate
@@ -44,7 +43,7 @@ jobs:
 
       - name: upload smoke binary
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: yactt-smoke-${{ github.sha }}
           path: /tmp/yactt
