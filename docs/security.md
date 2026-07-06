@@ -9,6 +9,12 @@
 > that motivated this doc, Issue #2 for the AST05 (doc-comment /
 > identifier-name injection) entry closed here, and Issue #3 for the AST09
 > (governance / audit) entry closed here.
+>
+> **AST03 (over-privileged access)** is closed-by-design and has no separate
+> tracking issue: yactt's MCP surface is read-only, `AllowedRoots`
+> constrains every path-bearing tool call, and `MaxFiles` (default 50 000)
+> bounds the walk. The surface is constrained at every egress; the
+> mitigations are structural, not optional.
 
 ## Threat model (one paragraph)
 
@@ -19,6 +25,27 @@ wants to turn that compromise into code execution inside the MCP server
 (grammar / Go module) or inside the developer's shell (install hook / LSP
 subprocess). The trust chain below narrows each of those paths to a single,
 auditable anchor.
+
+## Trust model (what yactt sees, returns, and does not)
+
+**Sees.** Source files in the resolved root (the directory passed to
+`yactt mcp serve`, or the cwd when omitted), plus anything the LSP
+servers fetch on yactt's behalf. `AllowedRoots` constrains every
+path-bearing tool call; `MaxFiles` (default 50 000) bounds the walk;
+the disk cache is bounded at 512 MiB by default.
+
+**Returns.** Structured layers (`signature`, `body`, `summary`) carry
+no attacker-authored prose — the agent can treat them as descriptions
+of structure. Unstructured layers (`source`, `tokens`, `docs`) carry
+attacker-authored bytes verbatim by design; the agent **must** treat
+their content as data, never as instructions. See §5 below for the
+trust model for callers.
+
+**Does not.** Write to the repo (the MCP surface has no write tools;
+`edit_impact` analyses renames but does not apply them). Make outbound
+network calls except to spawn `gopls` / `typescript-language-server`
+as child processes (which themselves may fetch from language
+registries). Read outside `AllowedRoots`. Telemetry.
 
 ## 1. Grammar + Go-module supply chain
 

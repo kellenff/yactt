@@ -66,12 +66,14 @@ jobs:
       - name: smoke build (linux/amd64)
         run: go build -trimpath -o /tmp/yactt ./cmd/yactt
 
-  vuln:
-    # Supply-chain CVE gate (Issue #1, mitigation #2). govulncheck queries the
-    # Go vulnerability database for any symbols imported by this module and
-    # fails on known CVEs. Runs in parallel with `test` — it's an offline
-    # query against the v1.24+ vuln DB embedded in the govulncheck binary.
-    name: govulncheck
+  security:
+    # Supply-chain CVE gate (Issue #1, mitigation #2) + secret-scanning gate
+    # (Issue #4, mitigation #4b). govulncheck queries the Go vulnerability
+    # database for any symbols imported by this module and fails on known
+    # CVEs. gitleaks scans the working tree for high-entropy strings and
+    # known credential patterns. Runs in parallel with `test` — both are
+    # offline queries against their respective databases.
+    name: govulncheck + gitleaks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -90,6 +92,17 @@ jobs:
           set -euo pipefail
           go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           govulncheck ./...
+
+      # Secret-scanning gate (Issue #4, mitigation #4b). gitleaks scans the
+      # checked-out tree for high-entropy strings and known credential
+      # patterns. Pinned by full commit SHA — the lightweight v2.3.2 tag
+      # points directly to the commit, so the @ref SHA is the audit anchor.
+      # The `GITLEAKS_VERSION` env pins the gitleaks binary the action
+      # downloads internally; v8.18.4 is the matched upstream release.
+      - uses: gitleaks/gitleaks-action@1f2d10fb689bc07a5f56f48d6db61f5bbbe772fa # v2.3.2
+        env:
+          GITLEAKS_VERSION: v8.18.4
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: upload smoke binary
         if: always()

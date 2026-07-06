@@ -187,6 +187,7 @@ install-hook trust chain, and mitigations for the OWASP Agentic Skills
 Top 10 findings:
 
 - **AST02 supply chain** — `go mod verify`, no-`replace` grep, `govulncheck`, SHA256SUMS + SLSA L3 attestation on releases.
+- **AST03 over-privileged access** — closed by design: read-only MCP surface, `AllowedRoots` constraint on every path-bearing tool, `MaxFiles` cap (50 000). No tracking issue — the surface is constrained at every egress.
 - **AST05 doc-comment / identifier-name injection (mitigated — Issue #2)** — gates prose behind an opt-in `docs` layer and sanitizes identifier names at egress.
 - **AST09 governance / audit (mitigated — Issue #3)** — one structured JSON startup line on stderr (binary SHA-256, resolved root, MaxFiles cap, grammars, LSP status) + an opt-in `--audit-log=<file>` line per `tools/call` (tool, paths, output bytes, duration), plus a runtime check against the install hook's TOFU record.
 

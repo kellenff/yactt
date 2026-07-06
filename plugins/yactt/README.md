@@ -17,6 +17,19 @@ That's it. The `SessionStart` hook downloads the matched binary from the latest 
 
 ---
 
+## Security
+
+The install-hook trust chain (SHA256 + SLSA L3 + TOFU) lives in
+[§ The integrity model](#the-integrity-model) below. The full
+threat model — grammar pinning, release attestation, LSP
+subprocess boundary, doc-comment / identifier-name injection
+gates, application-level audit log — is documented in
+[docs/security.md](../../docs/security.md).
+
+To report a vulnerability, see [SECURITY.md](../../SECURITY.md).
+
+---
+
 ## What this plugin does
 
 1. **Installs `yactt`** to `$XDG_HOME/bin/yactt` (or `$HOME/.local/bin/yactt` when `XDG_HOME` is unset). Both are XDG-conventional and on most shells' `PATH`.
