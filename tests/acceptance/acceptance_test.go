@@ -222,6 +222,95 @@ func TestFindCodeAcceptance(t *testing.T) {
 	}
 }
 
+// TestGetGraphSchemaAcceptance pins the schema tool against the live
+// fixture. The five enum slices must be present and the yactt provenance
+// stamp must be set — Issue #7 acceptance criterion.
+func TestGetGraphSchemaAcceptance(t *testing.T) {
+	repo := loadRepo(t)
+	out := callAsMap(t, tool.GetGraphSchema(repo), `{}`)
+	m, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("graph schema type: got %T", out)
+	}
+	for _, key := range []string{"nodeKinds", "edgeKinds", "layers", "defaultEdges", "codeKinds"} {
+		slice, ok := m[key].([]any)
+		if !ok {
+			t.Fatalf("%s not a slice; got %T", key, m[key])
+		}
+		if len(slice) == 0 {
+			t.Errorf("%s is empty", key)
+		}
+	}
+	prov, ok := m["provenance"].(map[string]any)
+	if !ok {
+		t.Fatalf("provenance type: got %T", m["provenance"])
+	}
+	if tool, _ := prov["tool"].(string); tool != "yactt" {
+		t.Errorf("provenance.tool = %q, want \"yactt\"", tool)
+	}
+}
+
+// TestGetCodeSnippetAcceptance covers both input shapes (stable id +
+// qualified name_path) and asserts the snippet includes the function
+// header. Mirrors the canonical "show me the code for X" workflow that
+// used to require find_symbol + node_source.
+func TestGetCodeSnippetAcceptance(t *testing.T) {
+	repo := loadRepo(t)
+
+	// By id
+	out := callAsMap(t, tool.GetCodeSnippet(repo), `{"id":"fn:auth.Login"}`)
+	m := out.(map[string]any)
+	if id, _ := m["id"].(string); id != "fn:auth.Login" {
+		t.Errorf("by-id id = %q, want fn:auth.Login", id)
+	}
+	text, _ := m["text"].(string)
+	if !strings.Contains(text, "func Login") {
+		t.Errorf("by-id text missing function header; got:\n%s", text)
+	}
+
+	// By name_path
+	out = callAsMap(t, tool.GetCodeSnippet(repo), `{"name_path":"auth.ValidateToken"}`)
+	m = out.(map[string]any)
+	if id, _ := m["id"].(string); id != "fn:auth.ValidateToken" {
+		t.Errorf("by-name id = %q, want fn:auth.ValidateToken", id)
+	}
+}
+
+// TestGetArchitectureAcceptance pins the architecture summary's envelope
+// shape against the fixture: the section lists are all present and the
+// fixture's language mix includes Go.
+func TestGetArchitectureAcceptance(t *testing.T) {
+	repo := loadRepo(t)
+	out := callAsMap(t, tool.GetArchitecture(repo), `{}`)
+	m, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("architecture type: got %T", out)
+	}
+
+	// Top-level keys.
+	for _, key := range []string{"summary", "languages", "topPackages", "hotspots", "deadCode", "importCycles", "provenance"} {
+		if _, ok := m[key]; !ok {
+			t.Errorf("missing key %q in architecture result", key)
+		}
+	}
+
+	// Languages includes Go on the fixture.
+	langs, ok := m["languages"].([]any)
+	if !ok {
+		t.Fatalf("languages slice type: got %T", m["languages"])
+	}
+	hasGo := false
+	for _, l := range langs {
+		entry, _ := l.(map[string]any)
+		if name, _ := entry["name"].(string); name == "go" {
+			hasGo = true
+		}
+	}
+	if !hasGo {
+		t.Errorf("expected Go in languages; got %+v", langs)
+	}
+}
+
 func TestFindSymbolAcceptance(t *testing.T) {
 	repo := loadRepo(t)
 	out := callJSON(t, tool.FindSymbol(repo), `{"name_path":"auth/Login*","limit":10,"include_body":true}`)
