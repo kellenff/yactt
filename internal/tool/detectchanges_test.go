@@ -495,6 +495,12 @@ func TestNormaliseRefs(t *testing.T) {
 		{base: "main", since: "HEAD~1", wantErr: "mutually exclusive"},
 		{head: "HEAD", wantErr: "required"},
 		{base: "", since: "", head: "", wantErr: "required"},
+		// Defence against git argv injection: refuse any ref whose
+		// first byte is `-` so a caller can't smuggle flags like
+		// `--upload-pack=...` into the subprocess.
+		{base: "--upload-pack=evil", wantErr: "must not start with '-'"},
+		{since: "-x", wantErr: "must not start with '-'"},
+		{base: "main", head: "--exec=evil", wantErr: "must not start with '-'"},
 	}
 	for _, c := range cases {
 		gotBase, gotHead, err := normaliseRefs(c.base, c.since, c.head)

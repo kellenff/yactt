@@ -292,8 +292,11 @@ func DetectChanges(repo *store.Repo) func(ctx context.Context, args json.RawMess
 	}
 }
 
-// normaliseRefs applies the base-vs-since XOR and defaults head="HEAD".
-// Returns the resolved (base, head) pair.
+// normaliseRefs applies the base-vs-since XOR, defaults head="HEAD",
+// and rejects any ref whose first byte is `-` (defence against
+// flag-injection into `git diff`'s argv — git would happily parse a
+// caller-supplied `--upload-pack=...` as a flag without
+// `--end-of-options`). Returns the resolved (base, head) pair.
 func normaliseRefs(base, since, head string) (string, string, error) {
 	if since != "" && base != "" {
 		return "", "", fmt.Errorf("base and since are mutually exclusive")
@@ -307,6 +310,12 @@ func normaliseRefs(base, since, head string) (string, string, error) {
 	if head == "" {
 		head = "HEAD"
 	}
+	if strings.HasPrefix(base, "-") {
+		return "", "", fmt.Errorf("base ref %q must not start with '-'", base)
+	}
+	if strings.HasPrefix(head, "-") {
+		return "", "", fmt.Errorf("head ref %q must not start with '-'", head)
+	}
 	return base, head, nil
 }
 
@@ -314,6 +323,12 @@ func normaliseRefs(base, since, head string) (string, string, error) {
 // stdout. The `...` form is symmetric difference — matches cbm's
 // detect_changes behaviour. --diff-filter=ACM skips pure deletions (no
 // enclosing symbol can be found for a line that no longer exists).
+//
+// `--end-of-options` (git 2.24+) is inserted immediately before the
+// refpair as a defence-in-depth measure: even if a caller somehow
+// bypasses normaliseRefs (e.g., via a future code path that doesn't
+// route through it), git will refuse to interpret the ref values as
+// flags.
 func runGitDiff(ctx context.Context, root, base, head string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git",
 		"-C", root,
@@ -322,6 +337,7 @@ func runGitDiff(ctx context.Context, root, base, head string) ([]byte, error) {
 		"--no-ext-diff",
 		"--unified=0",
 		"--diff-filter=ACM",
+		"--end-of-options",
 		base+"..."+head,
 	)
 	var stdout, stderr bytes.Buffer
