@@ -48,6 +48,28 @@ The bootstrap itself doesn't yet run `gh attestation verify` — that's a tracke
 
 > **Why "sign by digest"?** The TOFU record stores the binary's `sha256`, not just its version. A release at the same tag with a different digest is refused — that's the only way to catch "compromised GitHub release at the same version."
 
+### Runtime TOFU check (yactt side)
+
+At every `mcp serve` startup, yactt reads the TOFU record your hook wrote and compares its running binary's SHA-256 against the recorded hash at the same version. A mismatch writes a `WARNING:` line on stderr:
+
+```
+WARNING: yactt binary SHA-256 does not match the install hook's TOFU record
+  recorded: 4a3b...
+  actual:   1f2c...
+  version:  v0.1.0
+  likely a replay or compromised release — refusing to trust the install
+```
+
+A version mismatch (legitimate upgrade) is silent; missing TOFU (dev install) is silent; `dev` builds skip the check entirely. See [`docs/security.md`](../../docs/security.md) §6 (AST09 / Issue #3) for the full threat model.
+
+### Optional per-tool audit log
+
+```bash
+yactt mcp serve --audit-log=/var/log/yactt/audit.log
+```
+
+Writes one JSON line per `tools/call`. The startup line (binary SHA-256, resolved root, MaxFiles cap, grammars, LSP status) always lands on stderr regardless of this flag — the host can cross-check the binary without `audit-log` being on.
+
 ---
 
 ## The `code-explore` skill
