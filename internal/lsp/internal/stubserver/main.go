@@ -72,6 +72,7 @@ func main() {
 	failOn := flag.String("fail", "", "comma-separated 1-indexed request ids to fail")
 	sleepOn := flag.String("sleep", "", "comma-separated id:ms pairs to sleep before replying")
 	emptyHover := flag.String("hover-empty", "", "comma-separated request ids for which textDocument/hover returns nil")
+	proseHover := flag.String("hover-prose", "", "comma-separated request ids for which textDocument/hover returns a non-empty markdown value with no parseable function signature (no \"(\") — used by store/materializer regression tests")
 	refsFile := flag.String("refs-file", "", "file URI to return in canned textDocument/references replies (empty = echo request URI)")
 	refsLine := flag.Int("refs-line", 0, "line coordinate to return in canned textDocument/references replies")
 	refsCol := flag.Int("refs-col", 0, "character coordinate to return in canned textDocument/references replies")
@@ -94,6 +95,7 @@ func main() {
 	failMap := parseIDList(*failOn)
 	sleepMap := parseIDPairList(*sleepOn)
 	emptyHoverMap := parseIDList(*emptyHover)
+	proseHoverMap := parseIDList(*proseHover)
 
 	// Special handling: if request id 1 (initialize) is in failMap, refuse.
 	// The id is set by the client, but our protocol always expects it to
@@ -210,6 +212,27 @@ func main() {
 					"jsonrpc": "2.0",
 					"id":      id,
 					"result":  nil,
+				})
+				continue
+			}
+			if _, prose := proseHoverMap[id]; prose {
+				// Non-empty value with no parseable function signature —
+				// gopls sometimes returns prose when it has type info but
+				// nothing rendering the function header. The materializer
+				// must NOT stamp this answer as LSP-derived.
+				writeFrame(stdout, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      id,
+					"result": map[string]any{
+						"contents": map[string]any{
+							"kind":  "markdown",
+							"value": "Login authenticates a user against the configured backend and returns a session token. See auth.Session for the result type.",
+						},
+						"range": map[string]any{
+							"start": map[string]any{"line": 0, "character": 0},
+							"end":   map[string]any{"line": 0, "character": 5},
+						},
+					},
 				})
 				continue
 			}

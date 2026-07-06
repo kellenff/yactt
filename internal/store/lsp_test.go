@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,6 +190,101 @@ func TestSignature_LSPTimeout_TaggedFallback(t *testing.T) {
 	}
 	if got := n.Signature.Provenance.FallbackUsed; got != "lsp-timeout" {
 		t.Errorf("Provenance.FallbackUsed = %q, want lsp-timeout", got)
+	}
+}
+
+// TestSignature_LSPProseHover_FallsBackToTreeSitter is the regression
+// guard for the provenance-lie tier-1 finding: when gopls returns a
+// non-empty hover but the value contains no parseable `func ... (...) ...`
+// shape, the materializer must NOT stamp `Provenance.Tool = "gopls"` on a
+// tree-sitter-derived answer. Honest provenance here is `tree-sitter` with
+// `FallbackUsed = "lsp-no-types"` so consumers can tell "the server
+// answered but produced nothing useful" apart from "no server".
+//
+// The stub's `-hover-prose=2` flips request id 2 (the first post-handshake
+// hover) to a markdown reply whose value contains no `(` — the exact
+// shape parseHoverTypes rejects with nil.
+func TestSignature_LSPProseHover_FallsBackToTreeSitter(t *testing.T) {
+	r, _ := loadFixture(t)
+	defer func() { _ = r.Close() }()
+
+	bin := buildStubserverBin(t)
+	opts := lsp.Options{
+		Timeout:      time.Second,
+		Concurrency:  4,
+		CloseTimeout: time.Second,
+		RootURI:      "file://" + r.Root(),
+		Logf: func(format string, args ...any) {
+			t.Logf("stub: "+format, args...)
+		},
+	}
+	c, err := lsp.StartCommand(context.Background(), []string{bin, "-hover-prose=2"}, opts)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	r.lsp[parser.LangGo] = c
+	r.lspTools[parser.LangGo] = "gopls"
+	r.lspVersions[parser.LangGo] = c.Version()
+
+	nodeID := id.Function("auth", "", "Login")
+	n, err := MaterializeNode(r, nodeID, map[domain.LayerName]bool{domain.LayerSignature: true})
+	if err != nil {
+		t.Fatalf("MaterializeNode: %v", err)
+	}
+	if n.Signature == nil {
+		t.Fatal("Signature nil")
+	}
+	if got := n.Signature.Provenance.Tool; got != "tree-sitter" {
+		t.Errorf("Provenance.Tool = %q, want tree-sitter (no parseable types from prose hover)", got)
+	}
+	if got := n.Signature.Provenance.FallbackUsed; got != "lsp-no-types" {
+		t.Errorf("Provenance.FallbackUsed = %q, want lsp-no-types", got)
+	}
+	// Honest about provenance, but the tree-sitter signature text must
+	// still be present — fall-back, not fail.
+	if !strings.Contains(n.Signature.Text, "Login") {
+		t.Errorf("Signature.Text missing Login: %q", n.Signature.Text)
+	}
+}
+
+// TestBody_LSPProseHover_FallsBackToTreeSitter mirrors the signature
+// regression: a hover reply with no parseable types must not propagate the
+// "answered by gopls" stamp to Body when Body.Types is empty.
+func TestBody_LSPProseHover_FallsBackToTreeSitter(t *testing.T) {
+	r, _ := loadFixture(t)
+	defer func() { _ = r.Close() }()
+
+	bin := buildStubserverBin(t)
+	opts := lsp.Options{
+		Timeout:      time.Second,
+		Concurrency:  4,
+		CloseTimeout: time.Second,
+		RootURI:      "file://" + r.Root(),
+		Logf: func(format string, args ...any) {
+			t.Logf("stub: "+format, args...)
+		},
+	}
+	c, err := lsp.StartCommand(context.Background(), []string{bin, "-hover-prose=2"}, opts)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	r.lsp[parser.LangGo] = c
+	r.lspTools[parser.LangGo] = "gopls"
+	r.lspVersions[parser.LangGo] = c.Version()
+
+	nodeID := id.Function("auth", "", "Login")
+	n, err := MaterializeNode(r, nodeID, map[domain.LayerName]bool{domain.LayerBody: true})
+	if err != nil {
+		t.Fatalf("MaterializeNode: %v", err)
+	}
+	if n.Body == nil {
+		t.Fatal("Body nil")
+	}
+	if got := n.Body.Provenance.Tool; got != "tree-sitter" {
+		t.Errorf("Provenance.Tool = %q, want tree-sitter (no parseable types from prose hover)", got)
+	}
+	if got := n.Body.Provenance.FallbackUsed; got != "lsp-no-types" {
+		t.Errorf("Provenance.FallbackUsed = %q, want lsp-no-types", got)
 	}
 }
 

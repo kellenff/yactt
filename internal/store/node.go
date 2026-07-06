@@ -145,10 +145,12 @@ func MaterializeNode(r *Repo, nodeID id.ID, layerSet map[domain.LayerName]bool) 
 // When an LSP client is wired for the file's language, we ask its
 // `textDocument/hover` for the typed answer and stamp provenance
 // `Tool: <server-name>` (gopls for Go, typescript-language-server for
-// TS/JS). When the request errors or times out, we stamp
-// `Tool: "tree-sitter", FallbackUsed: "lsp-timeout"` (or `"lsp-error"`).
-// When no client is wired for the file's language, we stamp the existing
-// `Tool: "tree-sitter", FallbackUsed: "no-lsp-installed"` marker.
+// TS/JS). The Tier-1 stamp requires a *parseable* hover: when the value
+// carries no recognisable function-signature shape, we treat the server's
+// answer as prose (gopls sometimes returns documentation-style text with
+// no `func ... (...)` substring) and fall through to tree-sitter with
+// `FallbackUsed: "lsp-no-types"`. Honest provenance, not "answered by
+// gopls" on a tree-sitter value.
 //
 // Returns the signature text, an optional parameter/result-types map (LSP
 // only; nil otherwise), and the provenance line.
@@ -161,8 +163,17 @@ func (r *Repo) signatureMaterializer(f *source.File, sym parser.Symbol) (string,
 			defer cancel()
 			h, herr := client.Hover(ctx, f.Path, sym.StartRow, col)
 			if herr == nil && h.Contents.Value != "" {
-				types := parseHoverTypes(h.Contents.Value)
-				return strings.TrimRight(h.Contents.Value, "\n"), types, domain.LSPProvenance(tool, version).Ptr()
+				// Only commit to the LSP provenance line when the hover
+				// value parses into a typed signature. A non-empty reply
+				// with no `(...)` substring is prose (gopls returns
+				// docstring-style text when it has no type info to
+				// surface) — fall back rather than stamping gopls on a
+				// tier-2 answer.
+				if types := parseHoverTypes(h.Contents.Value); types != nil {
+					return strings.TrimRight(h.Contents.Value, "\n"), types, domain.LSPProvenance(tool, version).Ptr()
+				}
+				text, _ := treeSitterSignature(f, sym)
+				return text, nil, domain.TreeSitterProvenance().WithFallback("lsp-no-types").Ptr()
 			} else if herr != nil {
 				// Honest about the failure: tree-sitter fallback
 				// with the LSP fallback marker stamped on.
@@ -178,7 +189,12 @@ func (r *Repo) signatureMaterializer(f *source.File, sym parser.Symbol) (string,
 
 // bodyMaterializer is the Tier-1-or-tree-sitter body path. Mirrors
 // `signatureMaterializer` for the body layer; calls hover for the enclosing
-// function and, when LSP returns a typed answer, populates `Body.Types`.
+// function and, when LSP returns a *parseable typed* answer, populates
+// `Body.Types` AND stamps gopls provenance. Without parseable types the body
+// itself is a tree-sitter slice; lying with "answered by gopls" provenance
+// is the tier-1 regression — fall through and stamp tree-sitter with
+// `FallbackUsed: "lsp-no-types"` instead.
+//
 // Call-site ref resolution is deferred to `scanCallers`/`scanCallees` in
 // the tool layer.
 func (r *Repo) bodyMaterializer(f *source.File, sym parser.Symbol) ([]domain.Stmt, map[string]any, string, *domain.Provenance) {
@@ -190,12 +206,14 @@ func (r *Repo) bodyMaterializer(f *source.File, sym parser.Symbol) ([]domain.Stm
 			defer cancel()
 			h, herr := client.Hover(ctx, f.Path, sym.StartRow, col)
 			if herr == nil && h.Contents.Value != "" {
-				stmts, ctrl, _ := treeSitterStmts(f, sym)
-				types := map[string]any{}
-				if t := parseHoverTypes(h.Contents.Value); t != nil {
-					types = t
+				if types := parseHoverTypes(h.Contents.Value); types != nil {
+					stmts, ctrl, _ := treeSitterStmts(f, sym)
+					return stmts, types, ctrl, domain.LSPProvenance(tool, version).Ptr()
 				}
-				return stmts, types, ctrl, domain.LSPProvenance(tool, version).Ptr()
+				// Hover returned prose (no parseable signature). Body
+				// comes from tree-sitter; provenance must agree.
+				stmts, ctrl, prov := treeSitterStmtsWithProv(f, sym)
+				return stmts, map[string]any{}, ctrl, prov.WithFallback("lsp-no-types").Ptr()
 			}
 		}
 	}
