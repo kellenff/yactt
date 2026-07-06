@@ -21,9 +21,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
+	"github.com/kellenff/yactt/internal/audit"
 	"github.com/kellenff/yactt/internal/mcp"
+	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/persisted"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/tool"
@@ -32,10 +35,11 @@ import (
 const usage = `yactt — federated code intelligence for AI agents
 
 Usage:
-  yactt overview <path>    Print the top of the tree for a repo.
-  yactt mcp serve [path]   Run the MCP server on stdio, rooted at path.
-  yactt version            Print version info.
-  yactt help               Show this message.
+  yactt overview <path>                   Print the top of the tree for a repo.
+  yactt mcp serve [path] [--audit-log=F]  Run the MCP server on stdio, rooted at path.
+                                          --audit-log=F writes one JSON line per tool call to F.
+  yactt version                           Print version info.
+  yactt help                              Show this message.
 
 When path is omitted, mcp serve defaults to the current working directory.
 `
@@ -115,16 +119,43 @@ func runOverview(args []string) error {
 
 // runMCPServe starts the MCP server on stdio, bound to the repo at `path`.
 // When `path` is empty, the current working directory is used.
+//
+// Flags (parsed positionally so the path argument stays free-form):
+//
+//	--audit-log=<path>   Write one JSON audit line per tools/call dispatch
+//	                     to <path>. The file is created with mode 0600 and
+//	                     appended on subsequent invocations. Omit to disable
+//	                     per-tool audit; the startup line still goes to stderr.
 func runMCPServe(args []string) error {
-	repoPath := "."
-	if len(args) >= 1 {
-		repoPath = args[0]
+	var (
+		repoPath  = "."
+		auditPath string
+	)
+	for _, a := range args {
+		switch {
+		case strings.HasPrefix(a, "--audit-log="):
+			auditPath = strings.TrimPrefix(a, "--audit-log=")
+			if auditPath == "" {
+				return errors.New("--audit-log=<path> requires a non-empty path")
+			}
+		case strings.HasPrefix(a, "-"):
+			return fmt.Errorf("unknown flag: %s", a)
+		default:
+			// First non-flag positional wins; subsequent positions are
+			// rejected so a typo (e.g. two paths) doesn't silently
+			// shadow the first.
+			if repoPath != "." {
+				return fmt.Errorf("unexpected positional argument: %s", a)
+			}
+			repoPath = a
+		}
 	}
 	abs, err := filepath.Abs(repoPath)
 	if err != nil {
 		return err
 	}
-	repo, errs, err := store.Load(abs, loadOptsWithDiskCache(abs)...)
+	loadOpts := loadOptsWithDiskCache(abs)
+	repo, errs, err := store.Load(abs, loadOpts...)
 	if err != nil {
 		return fmt.Errorf("load: %w", err)
 	}
@@ -133,19 +164,136 @@ func runMCPServe(args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: %d file errors during load\n", len(errs))
 	}
 
+	// Startup audit line on stderr. Always emitted — it carries the
+	// binary's SHA-256 (so a downstream host can cross-check against
+	// the published SHA256SUMS), the resolved root, MaxFiles cap,
+	// grammar set, and per-language LSP status. The host-visible
+	// audit trail is the design's AST09 mitigation.
+	binSHA, _ := audit.BinarySHA256(binaryPath())
+	if err := audit.EmitStartup(os.Stderr, buildStartupInfo(repo, loadOpts, binSHA)); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: startup audit emit: %v\n", err)
+	}
+	// Install-hook TOFU assertion. Logs a warning when the running
+	// binary's SHA-256 differs from the (version, sha256) recorded
+	// at install time. Missing TOFU is a no-op (dev installs don't
+	// write one).
+	warnInstallTrustChain(version, binSHA)
+
+	// Optional per-tool audit logger. nil disables emission; the
+	// dispatch path checks for nil before calling.
+	var (
+		auditLogger *audit.Logger
+		auditCloser io.Closer
+	)
+	if auditPath != "" {
+		var lerr error
+		auditLogger, auditCloser, lerr = audit.NewFileLogger(auditPath)
+		if lerr != nil {
+			return fmt.Errorf("open audit log %s: %w", auditPath, lerr)
+		}
+		defer func() {
+			if auditCloser != nil {
+				_ = auditCloser.Close()
+			}
+		}()
+	}
+
 	srv := mcp.NewServer(
 		"yactt",
-		"mvp",
+		version,
 		"2024-11-05",
 		os.Stdout,
 		func() (io.Reader, error) { return os.Stdin, nil },
 	)
+	if auditLogger != nil {
+		srv.WithAudit(auditLogger, audit.ExtractPaths)
+	}
 	registerAllTools(srv, repo)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	return srv.Serve(ctx)
+}
+
+// buildStartupInfo snapshots the load-time state into the audit
+// startup record. Extracted from runMCPServe so the audit shape can
+// be unit-tested without spawning an MCP server.
+//
+// ponytail: MaxFiles uses the package default rather than peeking
+// the closure-supplied override. WithMaxFiles captures into an
+// unexported field, and the only clean alternatives (exposing
+// loadOptions or a Probe() interface on LoadOption) are heavier
+// than the value: nobody today sets a non-default cap in production
+// either. Lift this when the audit needs to faithfully report a
+// CLI-supplied cap.
+func buildStartupInfo(repo *store.Repo, opts []store.LoadOption, binSHA string) audit.Startup {
+	_ = opts
+	grammars := make([]string, 0)
+	for _, l := range parser.All() {
+		grammars = append(grammars, string(l.Name()))
+	}
+	var lspEntries []audit.LSPEntry
+	for _, l := range parser.All() {
+		_, toolName, ver := repo.LSPForLang(l.Name())
+		lspEntries = append(lspEntries, audit.LSPEntry{
+			Language: string(l.Name()),
+			Tool:     toolName,
+			Version:  ver,
+		})
+	}
+	return audit.Startup{
+		Version:      version,
+		RepoRoot:     repo.Root(),
+		MaxFiles:     store.DefaultMaxFiles,
+		LoadedFiles:  len(repo.Files()),
+		Grammars:     grammars,
+		LSP:          lspEntries,
+		BinarySHA256: binSHA,
+	}
+}
+
+// warnInstallTrustChain reads the TOFU file the install hook writes
+// and emits a stderr warning when the running binary's SHA-256
+// diverges from the recorded hash at the same version. Missing TOFU
+// is a no-op; a version mismatch (legitimate upgrade) is also a no-op.
+func warnInstallTrustChain(currentVersion, currentSHA string) {
+	if currentVersion == "dev" {
+		// Dev build — TOFU is meaningless (no release artifact
+		// identity to compare against). Skip silently.
+		return
+	}
+	if currentSHA == "" {
+		return
+	}
+	res, err := audit.CheckKnownGood(audit.KnownGoodPath(), currentVersion, currentSHA)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: install trust chain: %v\n", err)
+		return
+	}
+	switch res.Status {
+	case "mismatch":
+		fmt.Fprintf(os.Stderr,
+			"WARNING: yactt binary SHA-256 does not match the install hook's TOFU record\n"+
+				"  recorded: %s\n"+
+				"  actual:   %s\n"+
+				"  version:  %s\n"+
+				"  likely a replay or compromised release — refusing to trust the install\n",
+			res.Expected, res.Actual, res.Version)
+	}
+	// "match", "missing", "unknown_version" all silent — they're
+	// legitimate states.
+}
+
+// binaryPath returns the absolute path of the running executable.
+// Resolves /proc/self/exe on Linux, falls back to os.Args[0] (which
+// is fine for our use: we hash the bytes that get executed, not the
+// path string).
+func binaryPath() string {
+	if p, err := os.Executable(); err == nil && p != "" {
+		return p
+	}
+	return os.Args[0]
 }
 
 // loadOptsWithDiskCache returns the LoadOption slice that wires the

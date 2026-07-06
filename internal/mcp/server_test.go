@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kellenff/yactt/internal/mcp"
 )
@@ -563,6 +564,150 @@ func TestServerRegisterTool_RejectsMalformedOutputSchema(t *testing.T) {
 		OutputSchema: json.RawMessage(`{not-json`),
 		Handler:      func(context.Context, json.RawMessage) (any, error) { return nil, nil },
 	})
+}
+
+// TestServerToolsCall_AuditLogger confirms the per-tool audit
+// emission. A Logger is wired via WithAudit; the test drives a
+// tools/call and asserts that exactly one line was emitted with
+// the expected shape (tool, input paths, output bytes, error
+// status). This is the AST09 (Issue #3) integration test for the
+// server-side hook.
+func TestServerToolsCall_AuditLogger(t *testing.T) {
+	stub := &stubHandler{ret: map[string]any{"ok": true, "n": 7}}
+	s, stdin, stdout := newServer(t,
+		mcp.ToolDef{
+			Name:         "echo",
+			InputSchema:  json.RawMessage(`{"type":"object"}`),
+			OutputSchema: json.RawMessage(`{"type":"object"}`),
+			Handler:      stub.Handle,
+		},
+	)
+	// Wire the audit logger. extract just looks for the `repo`
+	// field's value verbatim — enough to pin the contract without
+	// re-implementing the JSON walker here.
+	var auditBuf bytes.Buffer
+	extract := func(raw json.RawMessage) []string {
+		var v struct {
+			Repo string `json:"repo"`
+		}
+		_ = json.Unmarshal(raw, &v)
+		if v.Repo != "" {
+			return []string{v.Repo}
+		}
+		return nil
+	}
+	s.WithAudit(&captureLogger{w: &auditBuf}, extract)
+
+	stdin.WriteString(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"repo":"/Users/foo/bar"}}}` + "\n")
+	if err := s.Serve(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() == 0 {
+		t.Fatal("server produced no wire output")
+	}
+	// Audit emit happens after the wire frame; one line per call.
+	if auditBuf.Len() == 0 {
+		t.Fatal("audit logger received nothing")
+	}
+	var got map[string]any
+	if err := json.Unmarshal(bytes.TrimRight(auditBuf.Bytes(), "\n"), &got); err != nil {
+		t.Fatalf("audit line not valid JSON: %v\n%s", err, auditBuf.String())
+	}
+	if got["event"] != "tool_call" {
+		t.Errorf("audit event = %v, want tool_call", got["event"])
+	}
+	if got["tool"] != "echo" {
+		t.Errorf("audit tool = %v, want echo", got["tool"])
+	}
+	if got["is_error"] != false {
+		t.Errorf("audit is_error = %v, want false", got["is_error"])
+	}
+	paths, ok := got["input_paths"].([]any)
+	if !ok || len(paths) != 1 || paths[0] != "/Users/foo/bar" {
+		t.Errorf("audit input_paths = %v", got["input_paths"])
+	}
+	if _, ok := got["output_bytes"]; !ok {
+		t.Error("audit output_bytes missing")
+	}
+	if _, ok := got["duration_ms"]; !ok {
+		t.Error("audit duration_ms missing")
+	}
+}
+
+// TestServerToolsCall_AuditLoggerError covers the error branch:
+// when the handler returns an error, the audit line must record
+// is_error=true and skip the result marshal.
+func TestServerToolsCall_AuditLoggerError(t *testing.T) {
+	stub := &stubHandler{err: errors.New("kaboom")}
+	s, stdin, _ := newServer(t,
+		mcp.ToolDef{
+			Name:         "fail",
+			InputSchema:  json.RawMessage(`{"type":"object"}`),
+			OutputSchema: json.RawMessage(`{"type":"object"}`),
+			Handler:      stub.Handle,
+		},
+	)
+	var auditBuf bytes.Buffer
+	s.WithAudit(&captureLogger{w: &auditBuf}, func(json.RawMessage) []string { return nil })
+
+	stdin.WriteString(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fail","arguments":{}}}` + "\n")
+	if err := s.Serve(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(bytes.TrimRight(auditBuf.Bytes(), "\n"), &got); err != nil {
+		t.Fatalf("audit line not valid JSON: %v", err)
+	}
+	if got["is_error"] != true {
+		t.Errorf("audit is_error = %v, want true on handler error", got["is_error"])
+	}
+}
+
+// TestServerToolsCall_NoAuditLogger confirms the nil-audit path:
+// emission is a no-op, the server keeps dispatching normally.
+func TestServerToolsCall_NoAuditLogger(t *testing.T) {
+	stub := &stubHandler{ret: "ok"}
+	s, stdin, stdout := newServer(t,
+		mcp.ToolDef{
+			Name:         "noop",
+			InputSchema:  json.RawMessage(`{"type":"object"}`),
+			OutputSchema: json.RawMessage(`{"type":"object"}`),
+			Handler:      stub.Handle,
+		},
+	)
+	// No WithAudit call.
+	stdin.WriteString(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"noop","arguments":{}}}` + "\n")
+	if err := s.Serve(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() == 0 {
+		t.Fatal("server should still produce wire output without an audit logger")
+	}
+}
+
+// captureLogger is a minimal audit.Logger-compatible type used in
+// server tests. It records each LogToolCall invocation as one JSON
+// line into w. The mcp.Server takes an unexported interface
+// (auditLogger); the concrete type here satisfies it via the
+// matching method signature.
+type captureLogger struct {
+	mu sync.Mutex
+	w  *bytes.Buffer
+}
+
+func (c *captureLogger) LogToolCall(tool string, inputPaths []string, outputBytes int, duration time.Duration, isError bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ev := map[string]any{
+		"event":        "tool_call",
+		"tool":         tool,
+		"input_paths":  inputPaths,
+		"output_bytes": outputBytes,
+		"duration_ms":  duration.Milliseconds(),
+		"is_error":     isError,
+	}
+	b, _ := json.Marshal(ev)
+	c.w.Write(append(b, '\n'))
 }
 
 // TestServerRegisterTool_AcceptsMinimalObjectOutputSchema confirms that

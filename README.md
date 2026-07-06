@@ -183,16 +183,36 @@ Next:
 ## Security
 
 yactt reads untrusted source code on every MCP call. Full threat model,
-install-hook trust chain, and mitigations for the four OWASP Agentic Skills
-Top 10 findings (AST02 supply chain, AST03 over-privileged access,
-**AST05 doc-comment / identifier-name injection (mitigated — Issue #2)**
-gates prose behind an opt-in `docs` layer and sanitizes identifier names
-at egress; AST09 governance) live in [docs/security.md](docs/security.md).
+install-hook trust chain, and mitigations for the OWASP Agentic Skills
+Top 10 findings:
+
+- **AST02 supply chain** — `go mod verify`, no-`replace` grep, `govulncheck`, SHA256SUMS + SLSA L3 attestation on releases.
+- **AST05 doc-comment / identifier-name injection (mitigated — Issue #2)** — gates prose behind an opt-in `docs` layer and sanitizes identifier names at egress.
+- **AST09 governance / audit (mitigated — Issue #3)** — one structured JSON startup line on stderr (binary SHA-256, resolved root, MaxFiles cap, grammars, LSP status) + an opt-in `--audit-log=<file>` line per `tools/call` (tool, paths, output bytes, duration), plus a runtime check against the install hook's TOFU record.
+
+Full threat model, install-hook trust chain, and mitigations live in
+[docs/security.md](docs/security.md).
 
 If you point yactt at a repo you do not fully trust, treat the `source`,
 `tokens`, and `docs` layers as untrusted data. The structured layers
 (`signature`, `body`, `summary`) carry no attacker-authored prose and can
 be trusted as descriptions of structure.
+
+### Opt-in audit log
+
+```bash
+yactt mcp serve --audit-log=/var/log/yactt/audit.log
+```
+
+One JSON line per MCP tool invocation:
+
+```json
+{"event":"tool_call","timestamp":"2026-07-05T12:34:56Z","tool":"node_get","input_paths":["/Users/kellen/proj/foo.go"],"output_bytes":1024,"duration_ms":12,"is_error":false}
+```
+
+The startup line is always written to stderr (even without `--audit-log`),
+so a host can cross-check the running binary's SHA-256 against its
+expected release.
 
 ---
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 )
 
 // Handler is the per-tool function. It receives a raw argument payload and
@@ -53,7 +54,26 @@ type Server struct {
 	stdout          io.Writer
 	stdinReader     func() (io.Reader, error)
 	protocolVersion string
+	// audit, when non-nil, receives one line per tools/call dispatch
+	// (AST09 mitigation — Issue #3). nil disables audit emission,
+	// which keeps tests and low-noise callers free of file plumbing.
+	audit *attachedAudit
 }
+
+// auditLogger is the minimal contract the server needs: emit one
+// line keyed on the tool name. We take this as an unexported
+// interface here so internal/audit doesn't become a dependency
+// the server package drags into its build graph; main.go's wiring
+// passes the concrete audit.Logger via the package-private
+// WithAudit option.
+type auditLogger interface {
+	LogToolCall(tool string, inputPaths []string, outputBytes int, duration time.Duration, isError bool)
+}
+
+// auditPathExtractor is the unexported contract for path extraction.
+// Same shape as audit.ExtractPaths — the server would otherwise
+// need to import encoding/json just to satisfy the signature.
+type auditPathExtractor func(json.RawMessage) []string
 
 // NewServer constructs an MCP server bound to stdout for writes.
 //
@@ -69,6 +89,45 @@ func NewServer(name, version, protocolVersion string, stdout io.Writer, stdin fu
 		protocolVersion: protocolVersion,
 		tools:           make(map[string]ToolDef),
 	}
+}
+
+// WithAudit attaches a per-tool audit logger. The logger receives one
+// line per tools/call dispatch (tool name, input paths, output bytes,
+// duration, error status). Pass nil to disable audit emission.
+//
+// Ponytail: passing the (logger, extractor) pair from main.go
+// avoids making internal/mcp a downstream of internal/audit. The
+// server only knows two unexported interface methods; main wires
+// the concrete types via a thin shim.
+func (s *Server) WithAudit(logger auditLogger, extract auditPathExtractor) {
+	if logger == nil {
+		s.audit = nil
+		return
+	}
+	s.audit = &attachedAudit{logger: logger, extract: extract}
+}
+
+// attachedAudit bundles the audit logger with its path-extraction
+// helper so the dispatch path has a single non-nil pointer to call.
+type attachedAudit struct {
+	logger auditLogger
+	extract auditPathExtractor
+}
+
+func (a *attachedAudit) log(name string, args json.RawMessage, out any, duration time.Duration, isError bool) {
+	paths := a.extract(args)
+	var size int
+	if out != nil {
+		// json.Marshal here matches the wire-shape contract on
+		// structuredContent; size is the JSON byte count. For
+		// errors we pass 0 — the error text is already on the wire
+		// as content[0].text, and re-marshalling it would be
+		// bookkeeping rather than audit.
+		if b, err := json.Marshal(out); err == nil {
+			size = len(b)
+		}
+	}
+	a.logger.LogToolCall(name, paths, size, duration, isError)
 }
 
 // RegisterTool attaches a tool definition. Replacement panics — registration
@@ -204,7 +263,18 @@ func (s *Server) dispatch(ctx context.Context, req Request) Response {
 		if !ok {
 			return EncodeError(req.ID, CodeMethodNotFound, "unknown tool", params.Name)
 		}
+		// Audit timing wraps the handler invocation (and only the
+		// handler — schema validation, registry lookup, and response
+		// framing are constant per call). The audit emit lives
+		// after the response is composed so a slow handler still
+		// gets an accurate duration stamp without blocking the
+		// wire.
+		start := time.Now()
 		result, herr := t.Handler(ctx, params.Arguments)
+		elapsed := time.Since(start)
+		if s.audit != nil {
+			s.audit.log(params.Name, params.Arguments, result, elapsed, herr != nil)
+		}
 		if herr != nil {
 			return Response{JSONRPC: "2.0", ID: req.ID, Result: CallToolResult{
 				Content: TextContent(herr.Error()),

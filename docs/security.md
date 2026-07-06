@@ -6,8 +6,9 @@
 > subprocess boundary at runtime, and the attacker-controlled content of the
 > target repo at every MCP call. It is a counterpart to the OWASP Agentic
 > Skills Top 10 review — see Issue #1 for the AST02 (supply chain) entry
-> that motivated this doc, and Issue #2 for the AST05 (doc-comment /
-> identifier-name injection) entry closed here.
+> that motivated this doc, Issue #2 for the AST05 (doc-comment /
+> identifier-name injection) entry closed here, and Issue #3 for the AST09
+> (governance / audit) entry closed here.
 
 ## Threat model (one paragraph)
 
@@ -194,6 +195,96 @@ CST tokens). Structured layers (`signature`, `body`, `summary`) carry
 no attacker-authored prose and can be trusted as descriptions of
 structure.
 
+## 6. AST09 — No Governance / application-level audit (Issue #3)
+
+### Threat
+
+yactt is a read-only MCP server, but per OWASP Agentic Skills
+Top 10 item [AST09 — No Governance](https://owasp.org/www-project-agentic-skills-top-10/),
+the absence of an application-level audit log leaves the host
+incapable of distinguishing routine reads ("yactt read 3 source
+files in the current repo") from suspicious reads ("yactt tried to
+read 50k files under `~/.ssh`"). The MCP transport sees the wire
+traffic but not the resolved paths, capabilities, or per-invocation
+scope. Without an audit trail, an incident response has no record
+to investigate; without a startup log, the install hook's
+SHA-256SUMS / SLSA trust chain has no runtime confirmation that
+the binary the host is talking to is the one the host expects.
+
+### Mitigations (Issue #3 close-out)
+
+1. **Structured startup log on stderr.** Every `yactt mcp serve`
+   launch emits exactly one JSON line on stderr, regardless of
+   `--audit-log`. The line carries the resolved absolute root,
+   `MaxFiles` cap, count of files actually loaded, grammar set
+   (tree-sitter languages wired at compile time), per-language LSP
+   presence + tool name + version, the running version (stamped in
+   by `-ldflags`), and the SHA-256 of the running binary. The
+   `binary_sha256` field is the runtime anchor for the
+   install-hook trust chain: a downstream host that knows the
+   expected release SHA-256 can spot-check the running binary by
+   parsing the startup line and refusing the session if they
+   diverge. See `cmd/yactt/main.go` → `runMCPServe` →
+   `audit.EmitStartup`.
+2. **Opt-in per-tool audit log.** `--audit-log=<path>` writes one
+   JSON line per `tools/call` dispatch to `<path>` (mode 0600,
+   append). The line carries the tool name, every absolute path
+   discovered in the input JSON, output byte count, wall-clock
+   duration, and `is_error` flag. The path-extraction heuristic is
+   intentionally narrow — only POSIX paths (`/*`) and Windows
+   drive-letter paths (`[A-Za-z]:[/\]`) — so false positives don't
+   clutter the audit log with unresolved queries and identifiers.
+   See `internal/audit/audit.go` → `ExtractPaths`,
+   `Logger.LogToolCall`. The dispatch timing lives in
+   `internal/mcp/server.go` → `dispatch`, audit emission via
+   `Server.WithAudit` keeps the server package free of any
+   direct dependency on `internal/audit`.
+3. **Install-hook runtime assertion.** At startup, yactt reads
+   the TOFU record at `${XDG_DATA_HOME:-~/.local/share}/yactt/known-good`
+   (the same file `install.sh` writes after a successful
+   `sha256sum` check against `SHA256SUMS`). It compares the
+   recorded `(version, sha256)` tuple against the running
+   binary's SHA-256. When the version matches and the SHA-256
+   diverges, yactt emits a `WARNING:` line on stderr identifying
+   the recorded hash, the actual hash, and the version, then
+   continues running (so a compromised install does not silently
+   brick the developer's tooling — the warning is the surface that
+   lets the host or user notice). A version mismatch (legitimate
+   upgrade) or a missing TOFU file (dev install) is silently
+   ignored. See `internal/audit/audit.go` → `CheckKnownGood`,
+   `cmd/yactt/main.go` → `warnInstallTrustChain`.
+
+### What it does NOT defend against
+
+- The startup log goes to stderr; a host that suppresses stderr
+  (e.g. a CLI wrapper that closes it) loses the audit anchor.
+  Process supervision is the host's responsibility.
+- Path extraction is string-shape based; a malicious tool input
+  that uses URL-encoded or relative paths will not appear in the
+  audit log. The audit log is observational — incident response
+  uses it together with MCP transport logs and the host's own
+  invocation context, not as the sole source of truth.
+- A TOFU mismatch is a warning, not a refusal. A compromised
+  release is still loadable; the host is expected to act on the
+  warning. The TOFU has no signing key — the goal is "make a
+  same-version replay visible to the human in the loop", not
+  "defend against a root-key compromise".
+
+### Test coverage
+
+`internal/audit/audit_test.go` covers all four major branches of
+`CheckKnownGood` (missing / unknown_version / match / mismatch),
+the path-extraction heuristic (`ExtractPaths` against nested
+objects, mixed relative + absolute paths, Windows drive letters),
+concurrent emission (`Logger` is mutex-guarded), and the
+binary-SHA-256 computation. Sister tests in
+`internal/mcp/server_test.go` (`TestServerToolsCall_AuditLogger`,
+`TestServerToolsCall_AuditLoggerError`,
+`TestServerToolsCall_NoAuditLogger`) pin the audit emission
+contract at the MCP dispatch layer: one line per `tools/call`,
+`is_error` set on handler error, and a clean no-op when no
+auditor is attached.
+
 ## Summary table
 
 | Path                         | Integrity gate                          | Where it lives                |
@@ -205,3 +296,4 @@ structure.
 | Install (consumer)           | SHA256SUMS + TOFU + semver allowlist    | `plugins/yactt/scripts/install.sh` |
 | LSP subprocess               | No auto-install; trust-on-PATH         | `internal/lsp/client.go`      |
 | Doc-comment / name injection | Summary-fallback default; `LayerDocs` opt-in; `SanitizeName` egress | `internal/store/node.go` · `internal/domain/sanitize.go` (Issue #2) |
+| Application-level audit (governance) | stderr startup line; opt-in `--audit-log=<file>` per-tool line; install-hook TOFU check | `internal/audit/audit.go` · `cmd/yactt/main.go` (Issue #3) |
