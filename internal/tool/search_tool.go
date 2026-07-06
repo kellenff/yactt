@@ -71,8 +71,12 @@ func Search(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (a
 		if a.Query == "" {
 			return nil, fmt.Errorf("search: query is required")
 		}
+		terms, err := splitQuery(a.Query)
+		if err != nil {
+			return nil, err
+		}
 		q := search.Query{
-			Terms: splitQuery(a.Query),
+			Terms: terms,
 			Limit: a.Limit,
 			Scope: a.Scope,
 		}
@@ -90,16 +94,35 @@ func Search(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (a
 	}
 }
 
-// splitQuery is a tiny whitespace + quoted-token splitter.
-func splitQuery(s string) []string {
+// splitQuery tokenizes a search query into terms. Whitespace outside
+// double-quoted spans separates terms; a double-quoted span becomes a
+// single term verbatim. An unclosed quote is rejected with an error —
+// the previous lenient behaviour silently folded the trailing span into
+// one term and obscured typos like `foo "bar` (the user's intent was
+// ambiguous between "one phrase" and "forgot the close"). The strict
+// boundary makes the error visible at the handler, not in the ranking.
+func splitQuery(s string) ([]string, error) {
 	out := []string{}
 	cur := strings.Builder{}
 	inQuote := false
 	for _, r := range s {
 		switch {
 		case r == '"':
-			inQuote = !inQuote
-		case r == ' ' && !inQuote:
+			if inQuote {
+				// Closing quote — flush a non-empty span.
+				if cur.Len() > 0 {
+					out = append(out, cur.String())
+					cur.Reset()
+				}
+				inQuote = false
+				continue
+			}
+			inQuote = true
+		case r == ' ':
+			if inQuote {
+				cur.WriteRune(r)
+				continue
+			}
 			if cur.Len() > 0 {
 				out = append(out, cur.String())
 				cur.Reset()
@@ -108,8 +131,11 @@ func splitQuery(s string) []string {
 			cur.WriteRune(r)
 		}
 	}
+	if inQuote {
+		return nil, fmt.Errorf("search: unclosed \" in query")
+	}
 	if cur.Len() > 0 {
 		out = append(out, cur.String())
 	}
-	return out
+	return out, nil
 }
