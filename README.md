@@ -1,0 +1,188 @@
+# yactt
+
+**Federated code intelligence for AI agents — lossless source, resolved semantics, MCP-native.**
+
+*Walk the tree, choose your layer.*
+
+yactt is a Model Context Protocol server that gives an AI agent both the raw bytes of a source file **and** the resolved symbol/call/reference graph that a human couldn't easily get on demand. It targets the empty quadrant of the code-intelligence tradeoff: lossless source plus semantic depth, in polyglot Go, TypeScript, and JavaScript repositories.
+
+> *Yet Another Code Tree Tool.* Self-aware in the GNU / YACC / WINE tradition — the name is tongue-in-cheek; the tool is serious.
+
+---
+
+## Why yactt
+
+The reference tools sit on a strict diagonal in the polyglot zone:
+
+| | Lossless source | Lossy summary |
+|---|---|---|
+| **Resolved semantics** | *(empty quadrant)* | CodeQL, Semgrep, Sourcegraph/SCIP |
+| **Syntactic only** | `cat`, file readers | `grep`, ripgrep |
+
+yactt occupies the empty corner. It uses [tree-sitter](https://tree-sitter.github.io/) as the unconditional syntactic floor and opportunistically attaches [`gopls`](https://pkg.go.dev/golang.org/x/tools/gopls) and [`typescript-language-server`](https://github.com/typescript-language-server/typescript-language-server) for resolved type/call/reference data when those servers are available on `PATH`. Without them, yactt still works — it just stamps `Provenance.Tool = "tree-sitter"` on every answer.
+
+The wire surface is [MCP](https://modelcontextprotocol.org/), not a custom protocol. Every tool declares both an `InputSchema` and an `OutputSchema` (the `OutputSchema` must declare `type:"object"` — enforced at registration time), so an agent gets structured results it can branch on without parsing prose.
+
+---
+
+## Install
+
+Three install paths, organized by who you are.
+
+### For Claude Code users
+
+The bundled plugin installs on first use. The `SessionStart` hook downloads the matched binary from the latest GitHub release, verifies its SHA256 against the published `SHA256SUMS`, and installs to `$XDG_HOME/bin/yactt`. No Go toolchain required.
+
+```bash
+/plugin marketplace add kellenff/yactt
+/plugin install yactt@yactt
+```
+
+Requires `jq` (standard on macOS/Linux developer machines; `brew install jq` / `apt install jq` otherwise).
+
+See [plugins/yactt/README.md](plugins/yactt/README.md) for the full install story, including the **SLSA Build Provenance Level 3** attestations verifiable with `gh attestation verify`.
+
+### For AI agent authors
+
+Any MCP-capable client. Wire the server into your `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "yactt": {
+      "type": "stdio",
+      "command": "yactt",
+      "args": ["mcp", "serve", "/path/to/repo"]
+    }
+  }
+}
+```
+
+The protocol version is `2024-11-05`. After `initialize` + `notifications/initialized`, call `tools/list` to enumerate the registered tools, then `tools/call` per request.
+
+### For shell pipelines
+
+Download a binary tarball, or build from source:
+
+```bash
+# macOS arm64 example
+curl -fsSL https://github.com/kellenff/yactt/releases/latest/download/yactt_darwin_arm64.tar.gz \
+  | tar -xz -C /usr/local/bin yactt_darwin_arm64 \
+  && mv /usr/local/bin/yactt_darwin_arm64 /usr/local/bin/yactt
+
+# then
+yactt overview /path/to/repo        # tree dump as JSON
+yactt mcp serve [/path/to/repo]     # MCP server on stdio
+```
+
+The CLI is intentionally thin — `help`, `version`, `overview`, `mcp serve`. Anything with logic lives under `internal/`.
+
+---
+
+## How it works
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  MCP client (agent)                                      │
+└─────────────────────────┬────────────────────────────────┘
+                          │ JSON-RPC 2.0 over stdio
+                          ▼
+┌──────────────────────────────────────────────────────────┐
+│  yactt CLI  (cmd/yactt/main.go)                          │
+│  ─ loads repo, wires 11 tools, runs server               │
+└─────────────────────────┬────────────────────────────────┘
+                          │
+        ┌─────────────────┼─────────────────┐
+        ▼                 ▼                 ▼
+┌───────────────┐ ┌──────────────┐ ┌───────────────────┐
+│ internal/mcp  │ │ internal/tool│ │ internal/persisted│
+│ JSON-RPC      │ │ 10 handlers  │ │ curated-workflow  │
+│ server        │ │ + schemas    │ │ registry (Phase 1.5)│
+└───────┬───────┘ └──────┬───────┘ └─────────┬─────────┘
+        └─────────────────┼─────────────────┘
+                          ▼
+                ┌───────────────────┐
+                │ internal/store    │  per-repo orchestration
+                │   (Repo)          │
+                └─┬──────┬──────┬───┘
+                  │      │      │
+                  ▼      ▼      ▼
+            ┌─────┐ ┌─────┐ ┌─────────┐
+            │parser│ │cache│ │   lsp   │
+            │tree-│ │mem+ │ │ gopls + │
+            │sitter│ │disk │ │ts-lang  │
+            └─────┘ └─────┘ └─────────┘
+```
+
+`store.Load(root)` walks the repo, parses every supported file with tree-sitter, extracts symbols, populates an in-memory file index and a per-repo disk cache (`$XDG_CACHE_HOME/yactt/<sha256(root)[:16]>`), and opportunistically starts `gopls` / `typescript-language-server` against the workspace. Failed language servers fall through to tree-sitter with the provenance marker.
+
+The hard safety valves:
+
+- `MaxFiles` cap (default 50 000) aborts the walk on overflow; partial repo still returned.
+- LSP startup bounded at 15 s overall; per-file workspace warm-up at 5 s.
+- Disk cache bounded at 512 MiB by default; override with `YACTT_DISK_CACHE_MAX_BYTES`.
+
+See [docs/design.md](docs/design.md) for the full architectural rationale.
+
+---
+
+## The 10 tools
+
+The codebase is one node graph; the tools are 10 facets of access.
+
+| Tool | Purpose |
+|---|---|
+| `tree_overview` | Top of the repo tree, depth-limited. Start here. |
+| `node_get` | One or more layers of a node — `summary`, `signature`, `body`, `source`, `tokens`. |
+| `node_source` | Lossless source for a node, optionally line-bounded. |
+| `node_edges` | Cross-references — `callers`, `callees`, `tests`, `overrides`, `imports`. |
+| `search` | Find symbols by name or doc-comment matching. |
+| `find_symbol` | Locate by qualified name path with glob support (e.g. `internal/store/*/Load`). |
+| `get_symbols_overview` | Top-level outline of a single file. |
+| `find_code` | AST-aware (tree-sitter) or regex pattern search across files. |
+| `find_referencing_symbols` | All references to a given symbol. |
+| `edit_impact` | Analyse the blast radius of a proposed set of renames. **Does not apply them.** |
+
+A eleventh tool, `persisted_query`, runs registered curated workflows by id. Out of the box it ships one op: `onboarding` (a one-shot `tree_overview` at depth 2 — the smallest useful workflow).
+
+---
+
+## Status & roadmap
+
+Shipped:
+
+- V1, V2.x, V3 subgraph slice, V3 first slice, V3 method-bodies slice
+- Phase F (per-repo provenance + edge model)
+- Single-source `id.For` + per-receiver keying for call-edges (resolved 2026-07-04)
+- SLSA Build Provenance Level 3 attestations on every release
+
+Next:
+
+- Python grammar (tree-sitter wiring, then `python-lsp-server` if available)
+- Persisted-query step chaining and parameter forwarding
+- Multi-repo / federated query (the "federated" in the tagline awaits)
+- Consumer-side provenance verification inside the SessionStart bootstrap (today: SHA256 + TOFU; tomorrow: `gh attestation verify`)
+
+---
+
+## Trust
+
+- **Dual-licensed**: [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT).
+- **SLSA Build Provenance Level 3**. Verify any release tarball:
+
+  ```bash
+  gh attestation verify yactt_darwin_arm64.tar.gz -R kellenff/yactt
+  ```
+
+- **Read-only by design**. The MCP surface exposes no write tools. `edit_impact` analyses renames; it does not apply them. `yactt mcp serve` makes no outbound network calls except to spawn `gopls` / `typescript-language-server` as child processes, which themselves may fetch from language registries. No telemetry.
+- **Tree-sitter as the unconditional floor.** `yactt mcp serve` works without `gopls` or `typescript-language-server` installed; every answer is then stamped `Provenance.Tool = "tree-sitter"` so an agent can branch on the provenance it trusts.
+- **Bounded resources.** `MaxFiles` defaults to 50 000; disk cache defaults to 512 MiB; LSP startup is bounded at 15 s.
+
+---
+
+## Read more
+
+- Architecture deep dive — [docs/design.md](docs/design.md)
+- Claude Code plugin story — [plugins/yactt/README.md](plugins/yactt/README.md)
+- Latest release — [github.com/kellenff/yactt/releases/latest](https://github.com/kellenff/yactt/releases/latest)
+- `code-explore` skill — [plugins/yactt/skills/code-explore/SKILL.md](plugins/yactt/skills/code-explore/SKILL.md)
