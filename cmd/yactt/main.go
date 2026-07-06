@@ -11,8 +11,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +18,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 
@@ -28,6 +25,7 @@ import (
 	"github.com/kellenff/yactt/internal/mcp"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/persisted"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/tool"
 )
@@ -36,24 +34,23 @@ const usage = `yactt — federated code intelligence for AI agents
 
 Usage:
   yactt overview <path>                   Print the top of the tree for a repo.
-  yactt mcp serve [path] [--audit-log=F]  Run the MCP server on stdio, rooted at path.
+  yactt mcp serve [path] [--audit-log=F]  Run the MCP server on stdio.
+                                          With a path: serves that repo's tools.
+                                          Without: serves the registry (list_projects,
+                                          index_repository, index_status, delete_project).
                                           --audit-log=F writes one JSON line per tool call to F.
   yactt version                           Print version info.
   yactt help                              Show this message.
 
-When path is omitted, mcp serve defaults to the current working directory.
+When path is omitted from "mcp serve", the server runs in registry mode
+- useful for agents that need to discover or manage which repos are
+indexed before drilling into one.
 `
 
 // version is stamped onto the binary at build time via
 // -ldflags="-X main.version=<tag>". Default "dev" covers `go build`
 // outside CI; release CI overrides it with the git tag.
 var version = "dev"
-
-// DefaultMaxDiskCacheBytes is the disk cache's per-repo size cap.
-// 512 MiB fits a small/medium repo's parsed-file cache comfortably
-// without filling disk. Override via YACTT_DISK_CACHE_MAX_BYTES
-// (set to 0 for unlimited growth).
-const DefaultMaxDiskCacheBytes int64 = 512 * 1024 * 1024
 
 func main() {
 	if len(os.Args) < 2 {
@@ -117,19 +114,28 @@ func runOverview(args []string) error {
 	return nil
 }
 
-// runMCPServe starts the MCP server on stdio, bound to the repo at `path`.
-// When `path` is empty, the current working directory is used.
+// runMCPServe starts the MCP server on stdio. Two modes:
+//
+//   - Single-repo mode (one positional path): the server loads that
+//     repo into memory and exposes the 13 code-intelligence tools
+//     against it, plus the registry tools.
+//   - Registry mode (no positional path): the server skips the repo
+//     load and exposes only the four registry tools — useful for
+//     agents that need to discover or manage which repos are indexed
+//     before drilling into one.
 //
 // Flags (parsed positionally so the path argument stays free-form):
 //
 //	--audit-log=<path>   Write one JSON audit line per tools/call dispatch
 //	                     to <path>. The file is created with mode 0600 and
 //	                     appended on subsequent invocations. Omit to disable
-//	                     per-tool audit; the startup line still goes to stderr.
+//	                     per-tool audit; the startup line still goes to stderr
+//	                     in single-repo mode.
 func runMCPServe(args []string) error {
 	var (
-		repoPath  = "."
-		auditPath string
+		repoPath    string // "" → registry mode; otherwise single-repo mode
+		repoPathSet bool
+		auditPath   string
 	)
 	for _, a := range args {
 		switch {
@@ -144,40 +150,57 @@ func runMCPServe(args []string) error {
 			// First non-flag positional wins; subsequent positions are
 			// rejected so a typo (e.g. two paths) doesn't silently
 			// shadow the first.
-			if repoPath != "." {
+			if repoPathSet {
 				return fmt.Errorf("unexpected positional argument: %s", a)
 			}
 			repoPath = a
+			repoPathSet = true
 		}
 	}
-	abs, err := filepath.Abs(repoPath)
-	if err != nil {
-		return err
-	}
-	loadOpts := loadOptsWithDiskCache(abs)
-	repo, errs, err := store.Load(abs, loadOpts...)
-	if err != nil {
-		return fmt.Errorf("load: %w", err)
-	}
-	defer func() { _ = repo.Close() }()
-	if len(errs) > 0 {
-		fmt.Fprintf(os.Stderr, "warning: %d file errors during load\n", len(errs))
-	}
 
-	// Startup audit line on stderr. Always emitted — it carries the
-	// binary's SHA-256 (so a downstream host can cross-check against
-	// the published SHA256SUMS), the resolved root, MaxFiles cap,
-	// grammar set, and per-language LSP status. The host-visible
-	// audit trail is the design's AST09 mitigation.
-	binSHA, _ := audit.BinarySHA256(binaryPath())
-	if err := audit.EmitStartup(os.Stderr, buildStartupInfo(repo, loadOpts, binSHA)); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: startup audit emit: %v\n", err)
+	// Registry handle is constructed up-front in both modes — the
+	// 4 registry tools are useful in single-repo mode too (admin
+	// agents need to add/remove neighbours).
+	regPath := registry.DefaultPath()
+	if regPath == "" {
+		return errors.New("mcp serve: cannot resolve $XDG_CACHE_HOME or $HOME; set XDG_CACHE_HOME")
 	}
-	// Install-hook TOFU assertion. Logs a warning when the running
-	// binary's SHA-256 differs from the (version, sha256) recorded
-	// at install time. Missing TOFU is a no-op (dev installs don't
-	// write one).
-	warnInstallTrustChain(version, binSHA)
+	reg := registry.New(regPath)
+
+	var repo *store.Repo
+	if repoPathSet {
+		abs, err := filepath.Abs(repoPath)
+		if err != nil {
+			return err
+		}
+		loadOpts := loadOptsWithDiskCache(abs)
+		r, errs, err := store.Load(abs, loadOpts...)
+		if err != nil {
+			return fmt.Errorf("load: %w", err)
+		}
+		defer func() { _ = r.Close() }()
+		if len(errs) > 0 {
+			fmt.Fprintf(os.Stderr, "warning: %d file errors during load\n", len(errs))
+		}
+
+		// Startup audit line on stderr. Always emitted — it carries
+		// the binary's SHA-256 (so a downstream host can cross-check
+		// against the published SHA256SUMS), the resolved root,
+		// MaxFiles cap, grammar set, and per-language LSP status. The
+		// host-visible audit trail is the design's AST09 mitigation.
+		binSHA, _ := audit.BinarySHA256(binaryPath())
+		if err := audit.EmitStartup(os.Stderr, buildStartupInfo(r, loadOpts, binSHA)); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: startup audit emit: %v\n", err)
+		}
+		// Install-hook TOFU assertion. Logs a warning when the
+		// running binary's SHA-256 differs from the (version,
+		// sha256) recorded at install time. Missing TOFU is a no-op
+		// (dev installs don't write one).
+		warnInstallTrustChain(version, binSHA)
+		repo = r
+	} else {
+		fmt.Fprintf(os.Stderr, "yactt mcp serve: registry mode (path: %s)\n", regPath)
+	}
 
 	// Optional per-tool audit logger. nil disables emission; the
 	// dispatch path checks for nil before calling.
@@ -208,7 +231,7 @@ func runMCPServe(args []string) error {
 	if auditLogger != nil {
 		srv.WithAudit(auditLogger, audit.ExtractPaths)
 	}
-	registerAllTools(srv, repo)
+	registerAllTools(srv, repo, reg)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -296,64 +319,76 @@ func binaryPath() string {
 	return os.Args[0]
 }
 
-// loadOptsWithDiskCache returns the LoadOption slice that wires the
-// per-repo disk cache when a usable cache dir can be resolved. Cap
-// defaults to DefaultMaxDiskCacheBytes; override via
-// YACTT_DISK_CACHE_MAX_BYTES (set 0 for unlimited growth).
+// loadOptsWithDiskCache is a thin wrapper around
+// registry.LoadOptsWithDiskCache. The cmd tree keeps its name to
+// preserve the existing call sites; the canonical implementation
+// lives in internal/registry so the index_repository tool can
+// share it.
 func loadOptsWithDiskCache(repoRoot string) []store.LoadOption {
-	dir := diskCacheDir(repoRoot)
-	if dir == "" {
-		return nil
-	}
-	maxBytes := DefaultMaxDiskCacheBytes
-	if env := os.Getenv("YACTT_DISK_CACHE_MAX_BYTES"); env != "" {
-		if n, err := strconv.ParseInt(env, 10, 64); err == nil && n >= 0 {
-			maxBytes = n
-		}
-	}
-	return []store.LoadOption{
-		store.WithDiskCache(dir),
-		store.WithDiskCacheMaxBytes(maxBytes),
-	}
+	return registry.LoadOptsWithDiskCache(repoRoot)
 }
 
-// diskCacheDir returns the per-repo disk cache directory under
-// $XDG_CACHE_HOME/yactt/<root-hash>, or $HOME/.cache/yactt/<root-hash>
-// when XDG_CACHE_HOME is unset. Returns "" when neither can be
-// resolved (no cache is then configured).
+// registerAllTools wires the tools onto the server. Behaviour
+// depends on whether `repo` is nil:
 //
-// Per-repo subdirectory is keyed by sha256(repoRoot)[:16] so
-// different repos don't collide and a stale entry can't be served
-// against the wrong tree.
-func diskCacheDir(repoRoot string) string {
-	var base string
-	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
-		base = xdg
-	} else if home, err := os.UserHomeDir(); err == nil && home != "" {
-		base = filepath.Join(home, ".cache")
-	} else {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(repoRoot))
-	return filepath.Join(base, "yactt", hex.EncodeToString(sum[:16]))
-}
+//   - repo != nil (single-repo mode): the 13 code-intelligence
+//     tools + persisted_query + the 4 registry tools. Useful for
+//     agents that need to query a repo AND manage its
+//     neighbours.
+//   - repo == nil (registry mode): only the 4 registry tools +
+//     persisted_query (which still works because it can fall
+//     back to the registry-only toolFunc map). The 13 repo-bound
+//     tools can't exist without a repo, so they aren't
+//     registered — agents in registry mode call
+//     `index_repository` first if they want to drill in.
+//
+// The order is the order in which the design's §5.1 table
+// lists tools; it's also the order clients see in
+// `tools/list`. Every tool declares both an InputSchema and an
+// OutputSchema; the OutputSchema is validated by RegisterTool
+// and must declare a top-level `type:"object"`, which is the MCP
+// contract on `structuredContent`.
+//
+// ponytail: the persisted-query toolFunc map omits the registry
+// tools today (they aren't `tool.ToolFunc`s — they don't take a
+// *store.Repo). That's fine because persisted_query's job is to
+// dispatch to repo-aware workflows; the four registry tools
+// belong to a different lifecycle (manage-the-fleet) and the
+// two never need to share an op ID namespace. Add them when an
+// agent actually needs a persisted `list_all_projects` op.
+func registerAllTools(srv *mcp.Server, repo *store.Repo, reg *registry.Registry) {
+	// Four registry tools — available in BOTH modes.
+	srv.RegisterTool(mcp.ToolDef{
+		Name: "list_projects", Description: "Enumerate every project in the registry. Sorted by path.",
+		InputSchema: tool.ListProjectsSchema, OutputSchema: tool.ListProjectsOutputSchema,
+		Handler: tool.ListProjects(reg),
+	})
+	srv.RegisterTool(mcp.ToolDef{
+		Name: "index_repository", Description: "Walk a repo at `path`, write an entry to the registry, return the row. Mode knob is accepted (only `full` is wired today).",
+		InputSchema: tool.IndexRepositorySchema, OutputSchema: tool.IndexRepositoryOutputSchema,
+		Handler: tool.IndexRepository(reg),
+	})
+	srv.RegisterTool(mcp.ToolDef{
+		Name: "index_status", Description: "Registry row + per-repo cache freshness for `path`. cacheFresh=false means re-running index_repository would write new bytes.",
+		InputSchema: tool.IndexStatusSchema, OutputSchema: tool.IndexStatusOutputSchema,
+		Handler: tool.IndexStatus(reg),
+	})
+	srv.RegisterTool(mcp.ToolDef{
+		Name: "delete_project", Description: "Evict `path` from the registry and remove its per-repo cache directory. Idempotent on missing rows.",
+		InputSchema: tool.DeleteProjectSchema, OutputSchema: tool.DeleteProjectOutputSchema,
+		Handler: tool.DeleteProject(reg),
+	})
 
-// registerAllTools wires the 13 tools from design §5.1 plus the
-// persisted_query tool (Phase 1.5, persistent query registry) onto
-// the server.
-//
-// The registry order is the order in which they appear in the design's §5.1
-// table; it's also the order clients see in `tools/list`. Every tool
-// declares both an InputSchema and an OutputSchema; the OutputSchema is
-// validated by RegisterTool and must declare a top-level `type:"object"`,
-// which is the MCP contract on `structuredContent`.
-//
-// Each tool handler is constructed once and referenced by both the
-// MCP server's ToolDef and the persisted query registry's ToolFunc
-// map — keeping the two registries in lockstep so an op that says
-// "tool: tree_overview" always calls the same closure the agent would
-// call directly.
-func registerAllTools(srv *mcp.Server, repo *store.Repo) {
+	if repo == nil {
+		// Registry mode: stop here. The persisted_query tool is
+		// registered below with an empty toolFunc map, which the
+		// runner translates into "no such op id" errors — fine,
+		// because the example ops all target the 13 code-intel
+		// tools anyway.
+		registerPersistedQuery(srv, nil)
+		return
+	}
+
 	treeOverview := tool.TreeOverview(repo)
 	nodeGet := tool.GetNode(repo)
 	nodeSource := tool.NodeSource(repo)
@@ -390,8 +425,6 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo) {
 	// Persistent query registry (Phase 1.5). Each tool handler is
 	// exposed under its MCP name so an op's Tool field can reference
 	// it directly. The example ops land in persisted/example_ops.go.
-	reg := persisted.NewRegistry()
-	persisted.RegisterExampleOps(reg)
 	toolFuncs := map[string]persisted.ToolFunc{
 		"tree_overview":            treeOverview,
 		"node_get":                 nodeGet,
@@ -407,7 +440,22 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo) {
 		"get_code_snippet":         getCodeSnippet,
 		"get_architecture":         getArchitecture,
 	}
-	runner := persisted.NewRunner(reg, toolFuncs)
+	registerPersistedQuery(srv, toolFuncs)
+}
+
+// registerPersistedQuery wires the persisted_query tool onto the
+// server. Pulled out of registerAllTools because it's the one
+// tool that ships in BOTH modes (single-repo and registry), and
+// duplicating its ToolDef would invite drift.
+//
+// In registry mode (`toolFuncs == nil`), the runner's lookup
+// table is empty — every op id resolves to "unknown tool", which
+// is the right behaviour for agents that haven't drilled into a
+// project yet.
+func registerPersistedQuery(srv *mcp.Server, toolFuncs map[string]persisted.ToolFunc) {
+	preg := persisted.NewRegistry()
+	persisted.RegisterExampleOps(preg)
+	runner := persisted.NewRunner(preg, toolFuncs)
 	srv.RegisterTool(mcp.ToolDef{
 		Name:         "persisted_query",
 		Description:  "Run a registered persisted query by id. Curated workflows (onboarding, etc.) ship as named ops.",

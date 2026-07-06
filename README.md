@@ -96,7 +96,7 @@ The CLI is intentionally thin — `help`, `version`, `overview`, `mcp serve`. An
         ▼                 ▼                 ▼
 ┌───────────────┐ ┌──────────────┐ ┌───────────────────┐
 │ internal/mcp  │ │ internal/tool│ │ internal/persisted│
-│ JSON-RPC      │ │ 13 handlers  │ │ curated-workflow  │
+│ JSON-RPC      │ │ 17 handlers  │ │ curated-workflow  │
 │ server        │ │ + schemas    │ │ registry (Phase 1.5)│
 └───────┬───────┘ └──────┬───────┘ └─────────┬─────────┘
         └─────────────────┼─────────────────┘
@@ -126,9 +126,11 @@ See [docs/design.md](docs/design.md) for the full architectural rationale.
 
 ---
 
-## The 13 tools
+## The 17 tools
 
-The codebase is one node graph; the tools are 13 facets of access.
+The codebase is one node graph; the tools are 17 facets of access.
+
+Thirteen tools operate on a single loaded repo:
 
 | Tool | Purpose |
 |---|---|
@@ -147,6 +149,38 @@ The codebase is one node graph; the tools are 13 facets of access.
 | `get_architecture` | Structural summary: languages, packages, hotspots, dead-code candidates, import cycles. |
 
 A fourteenth tool, `persisted_query`, runs registered curated workflows by id. Out of the box it ships one op: `onboarding` (a one-shot `tree_overview` at depth 2 — the smallest useful workflow).
+
+Four tools manage the multi-repo registry — they work whether or not the server has a repo loaded:
+
+| Tool | Purpose |
+|---|---|
+| `list_projects` | Enumerate every indexed repo (sorted by path). |
+| `index_repository` | Walk a repo at `path`, write an entry to the registry, prime its disk cache. |
+| `index_status` | Registry row + per-repo cache freshness for `path`. `cacheFresh=false` means re-running `index_repository` would write new bytes. |
+| `delete_project` | Evict `path` from the registry and remove its per-repo cache directory. Idempotent. |
+
+## Federated code intelligence
+
+`yactt` ships a multi-repo registry at `$XDG_CACHE_HOME/yactt/projects.json` (or `$HOME/.cache/yactt/projects.json` when `XDG_CACHE_HOME` is unset). The four registry tools above operate against that file; the 13 code-intelligence tools stay bound to whatever repo `yactt mcp serve <path>` loaded at startup.
+
+Two run modes:
+
+- `yactt mcp serve <path>` — single-repo mode. Loads `<path>`, exposes all 17 tools (13 code-intel + 4 registry + `persisted_query`).
+- `yactt mcp serve` (no path) — registry mode. Exposes the 4 registry tools + `persisted_query`. Use this to discover or manage which repos are indexed before drilling into one.
+
+Indexing is decoupled from serving: an agent in registry mode can call `index_repository` to prime a repo's cache, then a separate `yactt mcp serve <that-path>` can serve it with warm caches and zero re-parse.
+
+Example flow in registry mode:
+
+```text
+> list_projects                          # empty
+> index_repository {"path": "/code/svc-a"}
+> list_projects                          # one entry
+> index_status    {"path": "/code/svc-a"} # cacheFresh: true
+> delete_project  {"path": "/code/svc-a"} # gone
+```
+
+The on-disk cache layout is unchanged from the single-repo flow — `$XDG_CACHE_HOME/yactt/<root-hash>/` still holds per-file parsed entries, so a registry-indexed repo serves identically to one you ran `yactt mcp serve` against directly.
 
 ---
 

@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"path/filepath"
 	"testing"
 
 	"github.com/kellenff/yactt/internal/mcp"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/store/repofixture"
 )
@@ -235,5 +237,70 @@ func TestWireShape_ToolsListExposesOutputSchema(t *testing.T) {
 		if probe.Type != "object" {
 			t.Errorf("tool %q: OutputSchema.type = %q, want object", td.Name, probe.Type)
 		}
+	}
+}
+// TestWireShape_RegistryTools mirrors TestWireShape_AllTools for the
+// four registry tools. Those tools aren't repo-bound — they take a
+// *registry.Registry — so a separate test is cleaner than threading
+// the registry through the repo-shaped wireShapeDefs table.
+//
+// Each subtest:
+//
+//  1. registers one registry tool on a fresh MCP server,
+//  2. drives it via stdin with minimal-but-valid args,
+//  3. asserts structuredContent is a JSON object.
+//
+// list_projects and index_status need only JSON plumbing;
+// index_repository and delete_project also need a real on-disk
+// repo to operate against (a tempdir fixture is enough).
+func TestWireShape_RegistryTools(t *testing.T) {
+	reg := registry.New(filepath.Join(t.TempDir(), "projects.json"))
+	fx := repofixture.New(t)
+
+	runOne := func(t *testing.T, name string, def mcp.ToolDef, args string) {
+		t.Helper()
+		stdin := &bytes.Buffer{}
+		stdout := &bytes.Buffer{}
+		s := mcp.NewServer("wire-shape-registry", "0.0.0-test", "2024-11-05", stdout,
+			func() (io.Reader, error) { return stdin, nil },
+		)
+		s.RegisterTool(def)
+
+		req := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      name,
+				"arguments": json.RawMessage(args),
+			},
+		}
+		reqBytes, _ := json.Marshal(req)
+		stdin.Write(reqBytes)
+		stdin.Write([]byte("\n"))
+
+		if err := s.Serve(context.Background()); err != nil {
+			t.Fatalf("%s: Serve: %v", name, err)
+		}
+		assertStructuredContentIsObject(t, stdout)
+	}
+
+	tools := []mcp.ToolDef{
+		{Name: "list_projects", InputSchema: ListProjectsSchema, OutputSchema: ListProjectsOutputSchema, Handler: ListProjects(reg)},
+		{Name: "index_repository", InputSchema: IndexRepositorySchema, OutputSchema: IndexRepositoryOutputSchema, Handler: IndexRepository(reg)},
+		{Name: "index_status", InputSchema: IndexStatusSchema, OutputSchema: IndexStatusOutputSchema, Handler: IndexStatus(reg)},
+		{Name: "delete_project", InputSchema: DeleteProjectSchema, OutputSchema: DeleteProjectOutputSchema, Handler: DeleteProject(reg)},
+	}
+	args := map[string]string{
+		"list_projects":    `{}`,
+		"index_repository": `{"path": "` + fx.Root + `"}`,
+		"index_status":     `{"path": "` + fx.Root + `"}`,
+		"delete_project":   `{"path": "` + fx.Root + `"}`,
+	}
+	for _, def := range tools {
+		def := def
+		t.Run(def.Name, func(t *testing.T) {
+			runOne(t, def.Name, def, args[def.Name])
+		})
 	}
 }

@@ -4,7 +4,10 @@
 //
 //  1. The JSON Schemas (input + output) returned in `tools/list`
 //     round-trip through encoding/json.
-//  2. Each input schema declares a `required` array (no all-optional tools).
+//  2. Every input schema that declares properties requires at
+//     least one of them. A genuinely zero-arg tool (empty
+//     `properties` block) is allowed — list_projects is the
+//     canonical example.
 //  3. Required-field violations are rejected by the handler before any repo
 //     access — the boundary catches missing args without ever reaching the
 //     domain logic.
@@ -43,6 +46,10 @@ func everySchema(t *testing.T) map[string]json.RawMessage {
 		"find_code":                tool.FindCodeSchema,
 		"find_referencing_symbols": tool.FindReferencingSymbolsSchema,
 		"persisted_query":          tool.PersistedQuerySchema,
+		"list_projects":            tool.ListProjectsSchema,
+		"index_repository":         tool.IndexRepositorySchema,
+		"index_status":             tool.IndexStatusSchema,
+		"delete_project":           tool.DeleteProjectSchema,
 	}
 }
 
@@ -67,6 +74,10 @@ func everyOutputSchema(t *testing.T) map[string]json.RawMessage {
 		"find_code":                tool.FindCodeOutputSchema,
 		"find_referencing_symbols": tool.FindReferencingSymbolsOutputSchema,
 		"persisted_query":          tool.PersistedQueryOutputSchema,
+		"list_projects":            tool.ListProjectsOutputSchema,
+		"index_repository":         tool.IndexRepositoryOutputSchema,
+		"index_status":             tool.IndexStatusOutputSchema,
+		"delete_project":           tool.DeleteProjectOutputSchema,
 	}
 }
 
@@ -85,8 +96,12 @@ func TestSchemasAreValidJSON(t *testing.T) {
 	}
 }
 
-// TestSchemasRequiredFields ensures each schema has at least one required field
-// in its `required` array — a tool that accepts no inputs is suspicious.
+// TestSchemasRequiredFields guards the original "no all-optional tools"
+// rule, but with one refinement: a tool that genuinely has no inputs
+// (empty `properties` block) is allowed to declare an empty `required`
+// array. Tools that declare properties are still required to require
+// at least one — the original intent ("don't ship a tool that silently
+// accepts any arg") is preserved.
 func TestSchemasRequiredFields(t *testing.T) {
 	for name, raw := range everySchema(t) {
 		t.Run(name, func(t *testing.T) {
@@ -94,9 +109,10 @@ func TestSchemasRequiredFields(t *testing.T) {
 			if err := json.Unmarshal(raw, &out); err != nil {
 				t.Fatalf("schema %s: %v", name, err)
 			}
+			props, _ := out["properties"].(map[string]any)
 			req, _ := out["required"].([]any)
-			if len(req) == 0 {
-				t.Fatalf("schema %s: required[] is empty", name)
+			if len(props) > 0 && len(req) == 0 {
+				t.Fatalf("schema %s: declared %d properties but required[] is empty", name, len(props))
 			}
 		})
 	}
