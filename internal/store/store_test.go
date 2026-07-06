@@ -759,3 +759,49 @@ func TestLoad_WithDiskCacheCap(t *testing.T) {
 		t.Errorf("second Load: cache entries %d > first-load %d (cap not honored)", len(entries), firstFiles)
 	}
 }
+
+// TestLoad_EvictOrphans_DeletedFile is the integration test for
+// orphan eviction: a source file that exists at first Load but is
+// deleted before the second Load must have its cache entry
+// evicted by the second Load's EvictOrphans pass.
+func TestLoad_EvictOrphans_DeletedFile(t *testing.T) {
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	fix := repofixture.New(t)
+
+	// First load — populates the cache with every fixture file.
+	r1, _, err := store.Load(fix.Root, store.WithDiskCache(cacheDir))
+	if err != nil {
+		t.Fatalf("first Load: %v", err)
+	}
+	defer func() { _ = r1.Close() }()
+	firstFiles := len(r1.Files())
+	if firstFiles == 0 {
+		t.Fatal("first Load indexed zero files; fixture is broken")
+	}
+
+	// Delete a source file from the fixture.
+	if err := os.Remove(fix.LoginPath); err != nil {
+		t.Fatalf("remove LoginPath: %v", err)
+	}
+
+	// Second load — orphan must be evicted by EvictOrphans.
+	r2, errs, err := store.Load(fix.Root, store.WithDiskCache(cacheDir))
+	if err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+	defer func() { _ = r2.Close() }()
+	// Sweep failure must surface via errs only if it failed —
+	// on success the slice is empty.
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "evict orphans") {
+			t.Errorf("unexpected evict error: %v", e)
+		}
+	}
+
+	// Cache count must be strictly less than the first-load count.
+	entries, _ := os.ReadDir(cacheDir)
+	if len(entries) >= firstFiles {
+		t.Errorf("cache dir = %d entries after orphan eviction, want < %d", len(entries), firstFiles)
+	}
+}

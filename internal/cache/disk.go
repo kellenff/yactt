@@ -258,6 +258,58 @@ func readDirNames(dir string) ([]string, error) {
 	return f.Readdirnames(-1)
 }
 
+// EvictOrphans removes cache entries whose source path is not in
+// `validPaths`. The repo calls this at Load time with the paths it
+// just indexed; anything left in the cache that isn't in that set
+// is a file that's been deleted (or otherwise gone missing) and
+// the cache entry is dead weight.
+//
+// Empty `validPaths` evicts everything — a fresh-empty repo
+// legitimately has zero cache entries. Per-entry Remove errors are
+// swallowed (best-effort); a directory-read error propagates.
+//
+// `.tmp` files are skipped — they're crash artefacts, not part of
+// the regular entry lifecycle. Non-hex filenames are also skipped
+// as defence-in-depth: the cache directory is owned by DiskCache
+// and shouldn't contain anything else, but a stray file (manual
+// intervention, future format change, sibling-file name collision)
+// shouldn't be auto-deleted by this pass.
+func (d *DiskCache) EvictOrphans(validPaths []string) error {
+	valid := make(map[string]bool, len(validPaths))
+	for _, p := range validPaths {
+		sum := sha256.Sum256([]byte(p))
+		valid[hex.EncodeToString(sum[:16])] = true
+	}
+	names, err := readDirNames(d.dir)
+	if err != nil {
+		return fmt.Errorf("cache: evict orphans scandir %s: %w", d.dir, err)
+	}
+	for _, name := range names {
+		if !isHexName(name) || strings.HasSuffix(name, ".tmp") {
+			continue
+		}
+		if !valid[name] {
+			_ = os.Remove(filepath.Join(d.dir, name))
+		}
+	}
+	return nil
+}
+
+// isHexName returns true when name is exactly 32 lowercase hex
+// chars — the shape of a sha256[:16] cache key. Used by
+// EvictOrphans to avoid touching non-cache files.
+func isHexName(name string) bool {
+	if len(name) != 32 {
+		return false
+	}
+	for _, c := range name {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
 // keyPath maps an absolute source path to its cache file. The hash
 // is sha256 of the path truncated to 16 bytes (32 hex chars). The
 // hash avoids filesystem-unsafe characters and keeps filenames

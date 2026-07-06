@@ -233,6 +233,22 @@ func Load(root string, opts ...LoadOption) (*Repo, []error, error) {
 		appendErr(err)
 	}
 
+	// Sweep orphan cache entries — files that no longer exist on
+	// disk. The walk has settled r.files, so its keys are an
+	// authoritative "currently valid" set; anything in the cache
+	// directory that isn't in that set is dead weight (a file
+	// the repo deleted since last Load). Best-effort: a sweep
+	// failure is appended to errs but doesn't abort Load.
+	if r.diskCache != nil {
+		paths := make([]string, 0, len(r.files))
+		for p := range r.files {
+			paths = append(paths, p)
+		}
+		if err := r.diskCache.EvictOrphans(paths); err != nil {
+			appendErr(err)
+		}
+	}
+
 	if r.detectGoModule() {
 		_ = r.inferRootPackage()
 	}

@@ -353,3 +353,120 @@ func intToStr(n int) string {
 	}
 	return string(s)
 }
+
+// TestDiskCache_EvictOrphans: a cache entry whose source path is
+// not in validPaths is deleted; entries whose paths ARE in
+// validPaths are preserved. Reproduces the "repo file deleted
+// between runs" scenario.
+func TestDiskCache_EvictOrphans(t *testing.T) {
+	dir := t.TempDir()
+	c, err := cache.NewDiskCache(dir)
+	if err != nil {
+		t.Fatalf("NewDiskCache: %v", err)
+	}
+
+	// Put 3 source files; each becomes a cache entry.
+	p1 := writeGoFile(t, "package a\n")
+	p2 := writeGoFile(t, "package b\n")
+	p3 := writeGoFile(t, "package c\n")
+	for _, p := range []string{p1, p2, p3} {
+		f, _ := source.LoadFile(p, parser.Go{})
+		if err := c.Put(f); err != nil {
+			t.Fatalf("Put %s: %v", p, err)
+		}
+	}
+	if got := lenDir(t, dir); got != 3 {
+		t.Fatalf("setup: cache dir = %d entries, want 3", got)
+	}
+
+	// Sweep with only 2 valid paths — p3's entry is orphan.
+	if err := c.EvictOrphans([]string{p1, p2}); err != nil {
+		t.Fatalf("EvictOrphans: %v", err)
+	}
+	if got := lenDir(t, dir); got != 2 {
+		t.Errorf("after sweep: cache dir = %d entries, want 2", got)
+	}
+	// p3 must be a miss now.
+	if _, err := c.Get(p3, fileMTime(t, p3)); err != cache.ErrMiss {
+		t.Errorf("orphan still cached: err = %v, want ErrMiss", err)
+	}
+	// p1, p2 must still be retrievable.
+	for _, p := range []string{p1, p2} {
+		if _, err := c.Get(p, fileMTime(t, p)); err != nil {
+			t.Errorf("valid entry %s missing after sweep: err = %v", p, err)
+		}
+	}
+}
+
+// TestDiskCache_EvictOrphans_EmptyValid: an empty validPaths
+// evicts every cache entry. Legitimate for a fresh-empty repo
+// (zero source files → zero cache entries).
+func TestDiskCache_EvictOrphans_EmptyValid(t *testing.T) {
+	dir := t.TempDir()
+	c, _ := cache.NewDiskCache(dir)
+	for _, body := range []string{"package a\n", "package b\n"} {
+		p := writeGoFile(t, body)
+		f, _ := source.LoadFile(p, parser.Go{})
+		_ = c.Put(f)
+	}
+	if err := c.EvictOrphans(nil); err != nil {
+		t.Fatalf("EvictOrphans(nil): %v", err)
+	}
+	if got := lenDir(t, dir); got != 0 {
+		t.Errorf("after empty-valid sweep: cache dir = %d, want 0", got)
+	}
+}
+
+// TestDiskCache_EvictOrphans_SkipsNonHex: a non-cache file
+// planted in the directory must NOT be deleted. Defence-in-depth
+// against stray files, manual intervention, future format changes.
+func TestDiskCache_EvictOrphans_SkipsNonHex(t *testing.T) {
+	dir := t.TempDir()
+	c, _ := cache.NewDiskCache(dir)
+	stray := filepath.Join(dir, "README.md")
+	if err := os.WriteFile(stray, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("plant stray: %v", err)
+	}
+	// Plant a short hex name that's NOT 32 chars — also skipped.
+	if err := os.WriteFile(filepath.Join(dir, "short"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("plant short: %v", err)
+	}
+	if err := c.EvictOrphans(nil); err != nil {
+		t.Fatalf("EvictOrphans: %v", err)
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Errorf("non-hex file deleted: err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "short")); err != nil {
+		t.Errorf("short-hex file deleted: err = %v", err)
+	}
+}
+
+// TestDiskCache_EvictOrphans_SkipsTmp: a leftover .tmp file
+// (from a crashed Put) is not deleted by the orphan sweep.
+// Stale-on-crash artefacts have separate cleanup paths.
+func TestDiskCache_EvictOrphans_SkipsTmp(t *testing.T) {
+	dir := t.TempDir()
+	c, _ := cache.NewDiskCache(dir)
+	tmp := filepath.Join(dir, "070024aca372328040c24484fb74ea31.tmp")
+	if err := os.WriteFile(tmp, []byte("x"), 0o644); err != nil {
+		t.Fatalf("plant tmp: %v", err)
+	}
+	if err := c.EvictOrphans(nil); err != nil {
+		t.Fatalf("EvictOrphans: %v", err)
+	}
+	if _, err := os.Stat(tmp); err != nil {
+		t.Errorf(".tmp file deleted by orphan sweep: err = %v", err)
+	}
+}
+
+// lenDir is a tiny helper: count entries in dir. Errors fail
+// the test — should not happen for t.TempDir.
+func lenDir(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir %s: %v", dir, err)
+	}
+	return len(entries)
+}
