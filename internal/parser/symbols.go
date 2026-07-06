@@ -45,8 +45,12 @@ func SymbolKind(s Symbol) domain.NodeKind {
 
 // SymbolSummary produces a "<Kind>: <Name>" line via the summarizer package.
 // Single source of truth — used by tool handlers and search.
+//
+// The Name is passed through domain.SanitizeName to strip zero-width and
+// bidi-override Unicode from the rendered summary (AST05). Raw bytes remain
+// in the tokens layer for callers that need them.
 func SymbolSummary(s Symbol) string {
-	return summarizer.Summarize(kindLabel(s.Kind), "", s.Name)
+	return summarizer.Summarize(kindLabel(s.Kind), "", domain.SanitizeName(s.Name))
 }
 
 func kindLabel(kind string) string {

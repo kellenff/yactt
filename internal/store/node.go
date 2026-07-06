@@ -75,7 +75,7 @@ func MaterializeNode(r *Repo, nodeID id.ID, layerSet map[domain.LayerName]bool) 
 		return nil, ferr
 	}
 
-	out := &domain.Node{ID: nodeID.String(), Name: sym.Name}
+	out := &domain.Node{ID: nodeID.String(), Name: domain.SanitizeName(sym.Name)}
 	switch nodeID.Kind {
 	case id.KindFile:
 		out.Kind = domain.KindFile
@@ -92,7 +92,10 @@ func MaterializeNode(r *Repo, nodeID id.ID, layerSet map[domain.LayerName]bool) 
 		out.Kind = domain.KindPackage
 	}
 
-	// Pull the doc comment so we can build the summary layer.
+	// Pull the doc comment once. It is ATTACKER-AUTHORED prose — only ever
+	// surfaced through the opt-in LayerDocs gate (Node.Docs and, when
+	// LayerDocs is requested, Signature.Docs). The summary layer must
+	// NEVER see it. See docs/security.md §5 (AST05).
 	doc := extractDocComment(f, sym)
 	if layerSet[domain.LayerSummary] {
 		firstLine := ""
@@ -102,13 +105,17 @@ func MaterializeNode(r *Repo, nodeID id.ID, layerSet map[domain.LayerName]bool) 
 				firstLine = line
 			}
 		}
-		text, prov := SummaryMaterializer(out.Kind, sym.Name, doc, firstLine)
+		text, prov := SummaryMaterializer(out.Kind, out.Name, "", firstLine)
 		out.Summary = text
 		out.SummaryProvenance = prov
 	}
 	if layerSet[domain.LayerSignature] {
 		text, types, prov := r.signatureMaterializer(f, sym)
-		sig := &domain.Signature{Text: text, Docs: doc, Provenance: *prov}
+		sigDocs := ""
+		if layerSet[domain.LayerDocs] {
+			sigDocs = doc
+		}
+		sig := &domain.Signature{Text: text, Docs: sigDocs, Provenance: *prov}
 		if len(types) > 0 {
 			sig.Types = types
 		}
@@ -136,6 +143,10 @@ func MaterializeNode(r *Repo, nodeID id.ID, layerSet map[domain.LayerName]bool) 
 		if err == nil {
 			out.Tokens = toks
 		}
+	}
+	if layerSet[domain.LayerDocs] {
+		out.Docs = doc
+		out.DocsProvenance = domain.NewProvenance("tree-sitter", "v0.0.0-20240827").Ptr()
 	}
 	return out, nil
 }

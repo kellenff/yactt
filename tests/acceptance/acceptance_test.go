@@ -131,8 +131,14 @@ func TestNodeGetAcceptance(t *testing.T) {
 	if n.Body == nil || len(n.Body.Stmts) == 0 {
 		t.Fatalf("expected non-empty body")
 	}
-	if !strings.Contains(strings.ToLower(n.Summary), "authenticates") {
-		t.Fatalf("summary should reflect doc-comment, got %q", n.Summary)
+	// AST05 (Issue #2): the default summary layer must NOT include the
+	// doc-comment prose. Assert the absence of "authenticates" and the
+	// presence of a signature-derived fallback instead.
+	if strings.Contains(strings.ToLower(n.Summary), "authenticates") {
+		t.Fatalf("summary leaks doc-comment content (AST05 violation); got %q", n.Summary)
+	}
+	if !strings.HasPrefix(n.Summary, "Function:") {
+		t.Fatalf("summary %q should use the <Kind>: prefix", n.Summary)
 	}
 }
 

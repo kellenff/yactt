@@ -53,10 +53,16 @@ const (
 	LayerBody      LayerName = "body"
 	LayerSource    LayerName = "source"
 	LayerTokens    LayerName = "tokens"
+	// LayerDocs is the doc-comment prose layer. It is opt-in: callers must
+	// explicitly request it because the content is attacker-authored (any
+	// repo author can put anything in a `//` block). Surfaced via Node.Docs
+	// and (when also requested) Signature.Docs. See docs/security.md §5
+	// (AST05) for the threat model.
+	LayerDocs LayerName = "docs"
 )
 
 // AllLayerNames lists the layer set in the order they appear in the design.
-var AllLayerNames = []LayerName{LayerSummary, LayerSignature, LayerBody, LayerSource, LayerTokens}
+var AllLayerNames = []LayerName{LayerSummary, LayerSignature, LayerBody, LayerSource, LayerTokens, LayerDocs}
 
 // LineRange is the inclusive-exclusive line range [Start, End) of a source slice.
 type LineRange struct {
@@ -215,6 +221,11 @@ type Node struct {
 	Body              *FunctionBody `json:"body,omitempty"`
 	Source            *Source       `json:"source,omitempty"`
 	Tokens            []Token       `json:"tokens,omitempty"`
+	// Docs is the raw doc-comment prose for this symbol. ATTACKER-AUTHORED:
+	// any repo author can put arbitrary content in a `//` block. Opt-in only;
+	// callers must request LayerDocs explicitly. See docs/security.md §5 (AST05).
+	Docs           string      `json:"docs,omitempty"`
+	DocsProvenance *Provenance `json:"docsProvenance,omitempty"`
 }
 
 // Repo is a fully-loaded repository view derived from a root path.

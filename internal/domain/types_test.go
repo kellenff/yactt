@@ -152,6 +152,7 @@ func TestAllLayerNames(t *testing.T) {
 		domain.LayerBody,
 		domain.LayerSource,
 		domain.LayerTokens,
+		domain.LayerDocs,
 	}
 	if !reflect.DeepEqual(domain.AllLayerNames, want) {
 		t.Errorf("AllLayerNames = %v, want %v", domain.AllLayerNames, want)

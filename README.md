@@ -180,9 +180,26 @@ Next:
 
 ---
 
+## Security
+
+yactt reads untrusted source code on every MCP call. Full threat model,
+install-hook trust chain, and mitigations for the four OWASP Agentic Skills
+Top 10 findings (AST02 supply chain, AST03 over-privileged access,
+**AST05 doc-comment / identifier-name injection (mitigated — Issue #2)**
+gates prose behind an opt-in `docs` layer and sanitizes identifier names
+at egress; AST09 governance) live in [docs/security.md](docs/security.md).
+
+If you point yactt at a repo you do not fully trust, treat the `source`,
+`tokens`, and `docs` layers as untrusted data. The structured layers
+(`signature`, `body`, `summary`) carry no attacker-authored prose and can
+be trusted as descriptions of structure.
+
+---
+
 ## Read more
 
 - Architecture deep dive — [docs/design.md](docs/design.md)
+- Security & threat model — [docs/security.md](docs/security.md)
 - Claude Code plugin story — [plugins/yactt/README.md](plugins/yactt/README.md)
 - Latest release — [github.com/kellenff/yactt/releases/latest](https://github.com/kellenff/yactt/releases/latest)
 - `code-explore` skill — [plugins/yactt/skills/code-explore/SKILL.md](plugins/yactt/skills/code-explore/SKILL.md)
