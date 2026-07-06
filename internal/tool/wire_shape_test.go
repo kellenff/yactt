@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -157,6 +158,9 @@ var wireShapeDefs = map[string]func(*store.Repo) mcp.ToolDef{
 	"query_graph": func(r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "query_graph", InputSchema: QueryGraphSchema, OutputSchema: QueryGraphOutputSchema, Handler: QueryGraph(r)}
 	},
+	"detect_changes": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "detect_changes", InputSchema: DetectChangesSchema, OutputSchema: DetectChangesOutputSchema, Handler: DetectChanges(r)}
+	},
 }
 
 // TestWireShape_AllTools pins the wire-shape contract for every tool
@@ -246,6 +250,70 @@ func TestWireShape_ToolsListExposesOutputSchema(t *testing.T) {
 			t.Errorf("tool %q: OutputSchema.type = %q, want object", td.Name, probe.Type)
 		}
 	}
+}
+
+// TestWireShape_DetectChanges mirrors TestWireShape_AllTools for the
+// detect_changes tool. The standard repofixture is a fake `.git/` and
+// `git diff` would surface an error against it, so this test uses a
+// per-test real git repo (writeGitRepo is shared with the unit tests).
+func TestWireShape_DetectChanges(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not on PATH: %v", err)
+	}
+	r := writeGitRepo(t,
+		map[string]string{
+			"x.go": `package x
+func Use() int { return 1 }
+`,
+		},
+		map[string]string{
+			"x.go": `package x
+func Use() int { return 99 }
+`,
+		},
+	)
+
+	runOne := func(t *testing.T, args string) {
+		t.Helper()
+		stdin := &bytes.Buffer{}
+		stdout := &bytes.Buffer{}
+		s := mcp.NewServer("wire-shape-detect", "0.0.0-test", "2024-11-05", stdout,
+			func() (io.Reader, error) { return stdin, nil },
+		)
+		s.RegisterTool(wireShapeDefs["detect_changes"](r))
+
+		req := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      "detect_changes",
+				"arguments": json.RawMessage(args),
+			},
+		}
+		reqBytes, _ := json.Marshal(req)
+		stdin.Write(reqBytes)
+		stdin.Write([]byte("\n"))
+
+		if err := s.Serve(context.Background()); err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+		sc := assertStructuredContentIsObject(t, stdout)
+		if _, ok := sc["changes"]; !ok {
+			t.Errorf("envelope key \"changes\" missing: structuredContent = %+v", sc)
+		}
+	}
+
+	t.Run("happy_path", func(t *testing.T) {
+		runOne(t, `{"base":"HEAD~1","head":"HEAD"}`)
+	})
+	t.Run("since_shortcut", func(t *testing.T) {
+		runOne(t, `{"since":"HEAD~1"}`)
+	})
+	t.Run("empty_diff", func(t *testing.T) {
+		// base == head → no diff, but the envelope must still be an object.
+		runOne(t, `{"base":"HEAD","head":"HEAD"}`)
+	})
 }
 // TestWireShape_RegistryTools mirrors TestWireShape_AllTools for the
 // four registry tools. Those tools aren't repo-bound — they take a

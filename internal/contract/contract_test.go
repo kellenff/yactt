@@ -50,6 +50,7 @@ func everySchema(t *testing.T) map[string]json.RawMessage {
 		"index_repository":         tool.IndexRepositorySchema,
 		"index_status":             tool.IndexStatusSchema,
 		"delete_project":           tool.DeleteProjectSchema,
+		"detect_changes":           tool.DetectChangesSchema,
 	}
 }
 
@@ -78,6 +79,7 @@ func everyOutputSchema(t *testing.T) map[string]json.RawMessage {
 		"index_repository":         tool.IndexRepositoryOutputSchema,
 		"index_status":             tool.IndexStatusOutputSchema,
 		"delete_project":           tool.DeleteProjectOutputSchema,
+		"detect_changes":           tool.DetectChangesOutputSchema,
 	}
 }
 
@@ -102,6 +104,13 @@ func TestSchemasAreValidJSON(t *testing.T) {
 // array. Tools that declare properties are still required to require
 // at least one — the original intent ("don't ship a tool that silently
 // accepts any arg") is preserved.
+//
+// The "at least one required" check accepts either a top-level
+// `required` array OR a top-level `anyOf` clause that contains at
+// least one required array. The anyOf form is how tools that accept
+// mutually-exclusive alternatives (e.g. `detect_changes` accepting
+// either `base` or `since`) express their constraint without forcing
+// a single canonical field.
 func TestSchemasRequiredFields(t *testing.T) {
 	for name, raw := range everySchema(t) {
 		t.Run(name, func(t *testing.T) {
@@ -111,8 +120,9 @@ func TestSchemasRequiredFields(t *testing.T) {
 			}
 			props, _ := out["properties"].(map[string]any)
 			req, _ := out["required"].([]any)
-			if len(props) > 0 && len(req) == 0 {
-				t.Fatalf("schema %s: declared %d properties but required[] is empty", name, len(props))
+			anyOf, _ := out["anyOf"].([]any)
+			if len(props) > 0 && len(req) == 0 && len(anyOf) == 0 {
+				t.Fatalf("schema %s: declared %d properties but required[] (and anyOf[]) are empty", name, len(props))
 			}
 		})
 	}
@@ -265,5 +275,13 @@ func TestFindCodeBoundary(t *testing.T) {
 func TestFindReferencingSymbolsBoundary(t *testing.T) {
 	perToolArgBoundary(t, "find_referencing_symbols", tool.FindReferencingSymbols(nil), []boundaryTest{
 		{name: "missing_symbol", args: `{}`, want: "symbol is required"},
+	})
+}
+
+func TestDetectChangesBoundary(t *testing.T) {
+	perToolArgBoundary(t, "detect_changes", tool.DetectChanges(nil), []boundaryTest{
+		{name: "missing_refs", args: `{}`, want: "required"},
+		{name: "both_base_and_since", args: `{"base":"HEAD~1","since":"HEAD~1"}`, want: "mutually exclusive"},
+		{name: "negative_limit", args: `{"base":"HEAD~1","limit":-1}`, want: "limit must be >= 0"},
 	})
 }

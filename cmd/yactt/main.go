@@ -404,6 +404,7 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo, reg *registry.Registry)
 	getArchitecture := tool.GetArchitecture(repo)
 	queryGraph := tool.QueryGraph(repo)
 	searchCode := tool.SearchCode(repo)
+	detectChanges := tool.DetectChanges(repo)
 
 	tools := []mcp.ToolDef{
 		{Name: "tree_overview", Description: "Get the top of the repo tree (depth-limited).", InputSchema: tool.TreeOverviewSchema, OutputSchema: tool.TreeOverviewOutputSchema, Handler: treeOverview},
@@ -421,6 +422,7 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo, reg *registry.Registry)
 		{Name: "get_code_snippet", Description: "Source slice for a symbol by stable id OR qualified name path. One call replaces find_symbol+node_source.", InputSchema: tool.GetCodeSnippetSchema, OutputSchema: tool.GetCodeSnippetOutputSchema, Handler: getCodeSnippet},
 		{Name: "get_architecture", Description: "Structural summary: languages, packages, hotspots, dead-code candidates, import cycles.", InputSchema: tool.GetArchitectureSchema, OutputSchema: tool.GetArchitectureOutputSchema, Handler: getArchitecture},
 		{Name: "query_graph", Description: "Multi-hop graph traversal with edge-kind chains, depth cap, and kind/exclude filters. Composes node_edges across hops.", InputSchema: tool.QueryGraphSchema, OutputSchema: tool.QueryGraphOutputSchema, Handler: queryGraph},
+		{Name: "detect_changes", Description: "Impact of a git-ref diff: changed files, hunks, enclosing function/method per hunk, and callers/tests/overrides per affected symbol. Accepts {base,head} or {since} (Issue #11).", InputSchema: tool.DetectChangesSchema, OutputSchema: tool.DetectChangesOutputSchema, Handler: detectChanges},
 	}
 	for _, t := range tools {
 		srv.RegisterTool(t)
@@ -445,6 +447,7 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo, reg *registry.Registry)
 		"get_code_snippet":         getCodeSnippet,
 		"get_architecture":         getArchitecture,
 		"query_graph":              queryGraph,
+		"detect_changes":           detectChanges,
 	}
 	registerPersistedQuery(srv, toolFuncs)
 }
