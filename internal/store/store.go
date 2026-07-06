@@ -307,6 +307,10 @@ func Load(root string, opts ...LoadOption) (*Repo, []error, error) {
 	// pyright-langserver handles Python sources and stubs from a single
 	// workspace — `.py` and `.pyi` both route to the same client.
 	tryStart(parser.LangPython, "pyright-langserver", lsp.StartPython)
+	// rust-analyzer handles Rust sources from a single workspace — `.rs`
+	// routes to the same client. The language id advertised to the server
+	// is "rust", not the file extension (rust-analyzer rejects "rs").
+	tryStart(parser.LangRust, "rust-analyzer", lsp.StartRust)
 
 	// Eagerly open every parsed file in the server that knows about its
 	// language. Without this warm-up, both gopls and typescript-language-
@@ -361,6 +365,12 @@ func Load(root string, opts ...LoadOption) (*Repo, []error, error) {
 		switch strings.ToLower(filepath.Ext(p)) {
 		case ".py", ".pyi":
 			return "python", true
+		}
+		return "", false
+	})
+	warmFilesFor(r.lsp[parser.LangRust], func(p string) (string, bool) {
+		if strings.ToLower(filepath.Ext(p)) == ".rs" {
+			return "rust", true
 		}
 		return "", false
 	})

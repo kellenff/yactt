@@ -311,8 +311,9 @@ func TestStart_LSPAbsent_RepoLSPNil(t *testing.T) {
 // TestLSPForFile_RoutingPerLanguage is the wire-up test for multi-client
 // LSP. It attaches a stubserver as the TypeScript server, then verifies
 // that `LSPForFile` routes `.ts` and `.js` files to the same client
-// (typescript-language-server speaks both), while `.go` and unknown
-// extensions return nil.
+// (typescript-language-server speaks both), and that `.py`, `.pyi`, and
+// `.rs` files route to their respective per-language clients. `.go` and
+// unknown extensions return nil.
 //
 // Detaches the Go slot first so opportunistic gopls startup on this
 // machine doesn't pre-populate the map and mask routing bugs.
@@ -339,6 +340,7 @@ func TestLSPForFile_RoutingPerLanguage(t *testing.T) {
 	r.lspVersions[parser.LangJavaScript] = r.lspVersions[parser.LangTypeScript]
 
 	r.attachLSPFor(t, parser.LangPython, "pyright-langserver", bin, opts)
+	r.attachLSPFor(t, parser.LangRust, "rust-analyzer", bin, opts)
 
 	// TS files route to the tsserver slot.
 	tsClient, tsTool, _ := r.LSPForFile("/abs/path/foo.ts")
@@ -413,6 +415,20 @@ func TestLSPForFile_RoutingPerLanguage(t *testing.T) {
 	// LangPython resolves directly.
 	if c, _, _ := r.LSPForLang(parser.LangPython); c == nil {
 		t.Error("LSPForLang(python) returned nil; expected the pyright client")
+	}
+
+	// Rust sources route to the rust-analyzer slot.
+	rsClient, rsTool, _ := r.LSPForFile("/abs/path/foo.rs")
+	if rsClient == nil {
+		t.Fatal("LSPForFile(foo.rs) returned nil client")
+	}
+	if rsTool != "rust-analyzer" {
+		t.Errorf("LSPForFile(foo.rs) tool = %q, want rust-analyzer", rsTool)
+	}
+
+	// LangRust resolves directly.
+	if c, _, _ := r.LSPForLang(parser.LangRust); c == nil {
+		t.Error("LSPForLang(rust) returned nil; expected the rust-analyzer client")
 	}
 }
 
