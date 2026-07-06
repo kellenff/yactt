@@ -146,6 +146,29 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # Supply-chain integrity gate (Issue #1, mitigation #3).
+      # `gh attestation verify` re-checks the SLSA Build Provenance attestation
+      # for every published tarball. The build job signed each tarball with the
+      # workflow's OIDC token via Fulcio (the `SLSA build provenance` step
+      # further up); this step is the read-side verification that the
+      # attestation is still present in GitHub's attestation store and still
+      # matches the artifact we're about to ship. Fails the release on
+      # mismatch — better to abort than to ship an artifact whose provenance
+      # has been removed or replaced.
+      - name: verify SLSA attestations
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          # Loop, not xargs: explicit per-file exit codes surface WHICH
+          # artifact failed verify, instead of swallowing the failure behind
+          # a single exit.
+          for tarball in *.tar.gz; do
+            echo "verifying ${tarball}..."
+            gh attestation verify "${tarball}" --repo kellenff/yactt
+          done
+
       - name: inspect artifacts
         working-directory: dist
         run: |

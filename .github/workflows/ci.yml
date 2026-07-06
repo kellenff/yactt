@@ -45,8 +45,51 @@ jobs:
       - name: go test
         run: go test ./...
 
+      # Supply-chain pin gate (Issue #1, mitigation #1).
+      # `go mod verify` re-checks go.sum hashes against the on-disk module
+      # cache — catches tampering or partial downloads. The grep refuses
+      # `replace` directives, which can silently re-route a pinned dependency
+      # to a fork. Tree-sitter grammars (`smacker/go-tree-sitter/{golang,
+      # javascript, typescript/typescript}`) are pinned via pseudo-version
+      # (`v0.0.0-YYYYMMDDHHMMSS-<commit>`) in go.mod — a commit hash, not a
+      # float. The pseudo-version is the contract; CI fails if it is ever
+      # loosened.
+      - name: go mod verify (pin gate)
+        run: |
+          set -euo pipefail
+          go mod verify
+          if grep -E '^\s*replace\s' go.mod; then
+            echo "::error::replace directives in go.mod are not permitted (supply-chain pin gate)" >&2
+            exit 1
+          fi
+
       - name: smoke build (linux/amd64)
         run: go build -trimpath -o /tmp/yactt ./cmd/yactt
+
+  vuln:
+    # Supply-chain CVE gate (Issue #1, mitigation #2). govulncheck queries the
+    # Go vulnerability database for any symbols imported by this module and
+    # fails on known CVEs. Runs in parallel with `test` — it's an offline
+    # query against the v1.24+ vuln DB embedded in the govulncheck binary.
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: govulncheck
+        # Pin to the v1.1.4 module tag (commit d1f380186385b4f64e00313f31743df8e4b89a77).
+        # Go module tags are immutable — unlike action tags, v1.1.4 cannot be
+        # moved to a different commit. `go install pkg@tag` resolves to the
+        # tagged commit; we don't need a SHA here because the Go module proxy
+        # already enforces a content-addressable download (the @tag is the
+        # audit anchor).
+        run: |
+          set -euo pipefail
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          govulncheck ./...
 
       - name: upload smoke binary
         if: always()
