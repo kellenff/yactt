@@ -413,9 +413,13 @@ func (r *Repo) Close() error {
 // only in acceptance tests that need to assert the tree-sitter fallback
 // path independent of whether gopls happens to be on PATH.
 //
-// Not thread-safe — callers should serialize. Production code should
-// use Close().
+// Serialises via the repo's mu write lock so a concurrent LSPForLang
+// read can't observe a half-cleared state where the lsp slot is nil
+// but lspTools / lspVersions still record "gopls". Production code
+// should use Close() instead.
 func (r *Repo) DetachLSPForTest() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if c := r.lsp[parser.LangGo]; c != nil {
 		_ = c.Close()
 	}
@@ -426,10 +430,14 @@ func (r *Repo) DetachLSPForTest() {
 
 // AttachLSPForTest attaches a pre-built gopls stub to the repo. The
 // client is owned by the repo afterwards (Close will shut it down).
+// Serialises via the repo's mu write lock for the same reason as
+// DetachLSPForTest.
 func (r *Repo) AttachLSPForTest(c *lsp.Client) {
 	if c == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if old := r.lsp[parser.LangGo]; old != nil {
 		_ = old.Close()
 	}
