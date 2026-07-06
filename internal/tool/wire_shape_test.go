@@ -139,6 +139,9 @@ var wireShapeDefs = map[string]func(*store.Repo) mcp.ToolDef{
 	"find_code": func(r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "find_code", InputSchema: FindCodeSchema, OutputSchema: FindCodeOutputSchema, Handler: FindCode(r)}
 	},
+	"search_code": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "search_code", InputSchema: SearchCodeSchema, OutputSchema: SearchCodeOutputSchema, Handler: SearchCode(r)}
+	},
 	"find_referencing_symbols": func(r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "find_referencing_symbols", InputSchema: FindReferencingSymbolsSchema, OutputSchema: FindReferencingSymbolsOutputSchema, Handler: FindReferencingSymbols(r)}
 	},
@@ -179,6 +182,7 @@ func TestWireShape_AllTools(t *testing.T) {
 		{toolName: "find_symbol", argsJSON: `{"name_path":"auth/Login","limit":5}`, wantKey: "symbols"},
 		{toolName: "get_symbols_overview", argsJSON: `{"file":"auth/login.go"}`, wantKey: "symbols"},
 		{toolName: "find_code", argsJSON: `{"pattern":"Login","pattern_kind":"regex","limit":10}`, wantKey: "matches"},
+		{toolName: "search_code", argsJSON: `{"pattern":"Login","pattern_kind":"regex","limit":10}`, wantKey: "groups"},
 		{toolName: "find_referencing_symbols", argsJSON: `{"symbol":"fn:auth.Login","kinds":["tests"]}`, wantKey: "references"},
 		{toolName: "get_graph_schema", argsJSON: `{}`},
 		{toolName: "get_code_snippet", argsJSON: `{"name_path":"auth.Login"}`},
