@@ -39,6 +39,12 @@ jobs:
       # Bump via Dependabot/Renovate; never edit the SHA by hand on a whim.
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        # Same as ci.yml — read toolchain from go.mod so macOS runners (which
+        # no longer ship a pre-installed Go) and windows runners get the
+        # version the project declares, not whatever's in PATH.
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: build
         # All `${{ }}` interpolations use GitHub-controlled values
