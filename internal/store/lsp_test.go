@@ -338,6 +338,8 @@ func TestLSPForFile_RoutingPerLanguage(t *testing.T) {
 	r.lspTools[parser.LangJavaScript] = r.lspTools[parser.LangTypeScript]
 	r.lspVersions[parser.LangJavaScript] = r.lspVersions[parser.LangTypeScript]
 
+	r.attachLSPFor(t, parser.LangPython, "pyright-langserver", bin, opts)
+
 	// TS files route to the tsserver slot.
 	tsClient, tsTool, _ := r.LSPForFile("/abs/path/foo.ts")
 	if tsClient == nil {
@@ -360,14 +362,36 @@ func TestLSPForFile_RoutingPerLanguage(t *testing.T) {
 		t.Errorf("LSPForFile(bar.js) tool = %q, want typescript-language-server", jsTool)
 	}
 
-	// Go files don't route through tsserver.
+	// Python sources route to the pyright slot.
+	pyClient, pyTool, _ := r.LSPForFile("/abs/path/foo.py")
+	if pyClient == nil {
+		t.Fatal("LSPForFile(foo.py) returned nil client")
+	}
+	if pyTool != "pyright-langserver" {
+		t.Errorf("LSPForFile(foo.py) tool = %q, want pyright-langserver", pyTool)
+	}
+
+	// Python stub files (.pyi) share the same client (pyright-langserver
+	// handles both from one process — mirrors the TS/JS precedent).
+	pyiClient, pyiTool, _ := r.LSPForFile("/abs/path/types.pyi")
+	if pyiClient == nil {
+		t.Fatal("LSPForFile(types.pyi) returned nil client")
+	}
+	if pyiClient != pyClient {
+		t.Error("LSPForFile(.pyi) returned a different client than LSPForFile(.py)")
+	}
+	if pyiTool != "pyright-langserver" {
+		t.Errorf("LSPForFile(types.pyi) tool = %q, want pyright-langserver", pyiTool)
+	}
+
+	// Go files don't route through tsserver or pyright.
 	if c, _, _ := r.LSPForFile("/abs/path/foo.go"); c != nil {
 		t.Error("LSPForFile(foo.go) returned a client; expected nil (Go slot detached)")
 	}
 
-	// Unknown extension returns nil.
-	if c, _, _ := r.LSPForFile("/abs/path/foo.py"); c != nil {
-		t.Error("LSPForFile(foo.py) returned a client; expected nil")
+	// Truly unknown extension returns nil.
+	if c, _, _ := r.LSPForFile("/abs/path/foo.rb"); c != nil {
+		t.Error("LSPForFile(foo.rb) returned a client; expected nil")
 	}
 
 	// LangGo still reports nil since we detached.
@@ -384,6 +408,11 @@ func TestLSPForFile_RoutingPerLanguage(t *testing.T) {
 	}
 	if directTS != directJS {
 		t.Error("LSPForLang(ts) and LSPForLang(js) returned different clients")
+	}
+
+	// LangPython resolves directly.
+	if c, _, _ := r.LSPForLang(parser.LangPython); c == nil {
+		t.Error("LSPForLang(python) returned nil; expected the pyright client")
 	}
 }
 

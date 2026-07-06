@@ -86,6 +86,7 @@ func TestByName(t *testing.T) {
 		parser.LangGo,
 		parser.LangTypeScript,
 		parser.LangJavaScript,
+		parser.LangPython,
 	} {
 		t.Run(string(name), func(t *testing.T) {
 			lang, err := parser.ByName(name)
@@ -97,7 +98,7 @@ func TestByName(t *testing.T) {
 			}
 		})
 	}
-	if _, err := parser.ByName(parser.Name("python")); !errors.Is(err, parser.ErrUnsupported) {
+	if _, err := parser.ByName(parser.Name("ruby")); !errors.Is(err, parser.ErrUnsupported) {
 		t.Errorf("unsupported lang err = %v, want ErrUnsupported", err)
 	}
 }
@@ -111,7 +112,7 @@ func TestAllContainsKnown(t *testing.T) {
 	for _, l := range all {
 		names[l.Name()] = true
 	}
-	for _, want := range []parser.Name{parser.LangGo, parser.LangTypeScript, parser.LangJavaScript} {
+	for _, want := range []parser.Name{parser.LangGo, parser.LangTypeScript, parser.LangJavaScript, parser.LangPython} {
 		if !names[want] {
 			t.Errorf("All() missing %q: %v", want, all)
 		}
@@ -909,5 +910,215 @@ function helper() {}
 	}
 	if receivers["login"] != "Server" || receivers["create"] != "Server" {
 		t.Errorf("receiver disambiguation failed: %+v", receivers)
+	}
+}
+
+// --- Python ------------------------------------------------------------
+
+// parsePy runs the Python grammar against an inline source snippet and
+// returns the root node. Used by collaboration tests that need a real
+// parse tree.
+func parsePy(t *testing.T, src string) *sitter.Node {
+	t.Helper()
+	lang := parser.Python{}
+	root, err := sitter.ParseCtx(context.Background(), []byte(src), lang.Grammar())
+	if err != nil {
+		t.Fatalf("ParseCtx: %v", err)
+	}
+	if root == nil {
+		t.Fatal("ParseCtx returned nil root")
+	}
+	return root
+}
+
+func TestDetectPython(t *testing.T) {
+	cases := []string{
+		"/abs/path/foo.py", "relative/bar.py", "CamelCase.PY",
+		"pkg/types.pyi", "stubs/widget.pyi",
+	}
+	for _, p := range cases {
+		t.Run(p, func(t *testing.T) {
+			lang, err := parser.Detect(p)
+			if err != nil {
+				t.Fatalf("Detect(%q): %v", p, err)
+			}
+			if lang.Name() != parser.LangPython {
+				t.Errorf("Name = %q, want %q", lang.Name(), parser.LangPython)
+			}
+		})
+	}
+}
+
+func TestModulePathPy(t *testing.T) {
+	// Python has no file-local module name — always "".
+	for _, src := range []string{
+		"",
+		"def foo(): pass\n",
+		"import os\n\nclass Foo: pass\n",
+	} {
+		t.Run(src, func(t *testing.T) {
+			var lang parser.Language = parser.Python{}
+			if got := lang.ModulePath(nil, []byte(src)); got != "" {
+				t.Errorf("ModulePath = %q, want empty", got)
+			}
+		})
+	}
+}
+
+const pyFunctions = `def login(user, password):
+    return True
+
+async def fetch(url):
+    return None
+
+def helper():
+    pass
+`
+
+func TestExtractSymbolsPyFunction(t *testing.T) {
+	root := parsePy(t, pyFunctions)
+	syms, err := parser.ExtractSymbols(parser.Python{}, root, []byte(pyFunctions))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	if len(syms) != 3 {
+		t.Fatalf("got %d symbols, want 3: %+v", len(syms), syms)
+	}
+	names := map[string]string{}
+	for _, s := range syms {
+		if s.Kind != "function_declaration" {
+			t.Errorf("Kind = %q, want function_declaration", s.Kind)
+		}
+		names[s.Name] = s.Kind
+	}
+	if names["login"] != "function_declaration" || names["fetch"] != "function_declaration" || names["helper"] != "function_declaration" {
+		t.Errorf("names = %v, want all function_declaration", names)
+	}
+}
+
+const pyClassOnly = `class Server:
+    def login(self, user):
+        return True
+
+    def logout(self):
+        return None
+`
+
+func TestExtractSymbolsPyClass(t *testing.T) {
+	root := parsePy(t, pyClassOnly)
+	syms, err := parser.ExtractSymbols(parser.Python{}, root, []byte(pyClassOnly))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	counts := map[string]int{}
+	for _, s := range syms {
+		counts[s.Kind]++
+	}
+	if counts["class_declaration"] != 1 {
+		t.Errorf("class_declaration count = %d, want 1: %+v", counts["class_declaration"], syms)
+	}
+	if counts["method_declaration"] != 2 {
+		t.Errorf("method_declaration count = %d, want 2: %+v", counts["method_declaration"], syms)
+	}
+}
+
+func TestExtractSymbolsPyMethodReceiver(t *testing.T) {
+	root := parsePy(t, pyClassOnly)
+	syms, err := parser.ExtractSymbols(parser.Python{}, root, []byte(pyClassOnly))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	var methods []parser.Symbol
+	for _, s := range syms {
+		if s.Kind == "method_declaration" {
+			methods = append(methods, s)
+		}
+	}
+	if len(methods) != 2 {
+		t.Fatalf("got %d methods, want 2: %+v", len(methods), syms)
+	}
+	for _, m := range methods {
+		if m.Receiver != "Server" {
+			t.Errorf("method %q Receiver = %q, want Server", m.Name, m.Receiver)
+		}
+	}
+}
+
+const pyDecorated = `@staticmethod
+def helper():
+    return 1
+
+@app.route("/login")
+def login():
+    return "ok"
+
+@dataclass
+class User:
+    name: str
+`
+
+func TestExtractSymbolsPyDecorated(t *testing.T) {
+	root := parsePy(t, pyDecorated)
+	syms, err := parser.ExtractSymbols(parser.Python{}, root, []byte(pyDecorated))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	counts := map[string]int{}
+	names := map[string]bool{}
+	for _, s := range syms {
+		counts[s.Kind]++
+		names[s.Name] = true
+	}
+	// Two decorated functions + one decorated class.
+	if counts["function_declaration"] != 2 {
+		t.Errorf("function_declaration count = %d, want 2: %+v", counts["function_declaration"], syms)
+	}
+	if counts["class_declaration"] != 1 {
+		t.Errorf("class_declaration count = %d, want 1: %+v", counts["class_declaration"], syms)
+	}
+	if !names["helper"] || !names["login"] || !names["User"] {
+		t.Errorf("names = %v, want helper, login, User", names)
+	}
+}
+
+const pyDecoratedMethod = `class Server:
+    @staticmethod
+    def create():
+        return Server()
+
+    @property
+    def name(self):
+        return "s"
+`
+
+func TestExtractSymbolsPyDecoratedMethod(t *testing.T) {
+	root := parsePy(t, pyDecoratedMethod)
+	syms, err := parser.ExtractSymbols(parser.Python{}, root, []byte(pyDecoratedMethod))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	var methods []parser.Symbol
+	for _, s := range syms {
+		if s.Kind == "method_declaration" {
+			methods = append(methods, s)
+		}
+	}
+	if len(methods) != 2 {
+		t.Fatalf("got %d methods, want 2: %+v", len(methods), syms)
+	}
+	for _, m := range methods {
+		if m.Receiver != "Server" {
+			t.Errorf("decorated method %q Receiver = %q, want Server", m.Name, m.Receiver)
+		}
+	}
+}
+
+func TestExtractSymbolsPyNilRoot(t *testing.T) {
+	syms, err := parser.ExtractSymbols(parser.Python{}, nil, nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(syms) != 0 {
+		t.Errorf("got %d symbols, want 0", len(syms))
 	}
 }
