@@ -1,200 +1,167 @@
 # Brain Jam — yactt
 
 > Stage 3 of the GitHub README For Perfectionists workflow.
-> Generated 2026-07-05.
-
-**Mode**: Single-provider fallback (Chorus MCP unavailable — see § 1).
-**Cast lenses**: synth (optimistic), pragmatist (delivery-focused), critic (jargon-averse).
-**Counterpart reports**: `.claude/grfp/deep-dive.md`, `.claude/grfp/crystal-ball.md`.
-
----
-
-## 1. Fallback note
-
-`mcp__chorus__chorus` is not available in this session. Per the brain-jam skill's documented fallback ("Falls back to a single-provider cast when only one API key is set"), this stage runs as a **single provider applying three analytical lenses sequentially** — synth, pragmatist, critic — instead of N independent voices. The result is still a coherent positioning document, but it lacks the genuine cross-model adversarial pressure.
-
-**Recommendation**: re-run this stage with Chorus available for the sharpest positioning. The single-provider output is shippable; the chorus version is dialed-in.
+> Generated 2026-07-06.
+>
+> **Mode:** Multi-model chorus — default cast (claude-synth + pragmatist, both minimax/MiniMax-M3) + critic, 3 rounds, critique enabled.
+> **Cast lenses:** synth (positioning strategy, optimistic-but-rigorous), pragmatist (delivery-focused, sharpens prose), critic (unavailable in this run — recorded as `unavailable` in the transcript).
+> **Transcript:** `.brainstorm/chorus-20260706T132250.json`
+> **Counterpart reports:** `.claude/grfp/deep-dive.md`, `.claude/grfp/crystal-ball.md`.
 
 ---
 
-## 2. Seed context (carried over from prior stages)
+## 1. Seed
 
-- **Name**: YACTT — *Yet Another Code Tree Tool*. Self-aware GNU/YACC/WINE-tradition tone per design doc.
-- **Tagline (current)**: "Federated code intelligence for AI agents — walk the tree, choose your layer."
-- **Positioning (from crystal-ball)**: First serious code-intelligence MCP server to ship to production. Sits in the "empty quadrant" (lossless + deep) in Go/TS/JS, Python planned.
-- **What's shipped**: V1, V2.x, V3 subgraph slice, V3 first slice, V3 method-bodies slice, Phase F complete. Single-source `id.For` + per-receiver keying resolved 2026-07-04.
-- **Surface**: 10 MCP tools + 1 `persisted_query` tool; one CLI binary (`yactt overview`, `yactt mcp serve`, `yactt version`, `yactt help`); bundled Claude Code plugin.
-- **Trust story**: dual-licensed (Apache-2.0 / MIT); SLSA Build Provenance Level 3 attestations; SHA256 + TOFU bootstrap.
+Lead with the empty quadrant. The chart is the hook — it positions yactt in the only spot in the tradeoff space that's empty for polyglot Go/TS/JS. Then flow into the 5-call worked example to show value. The stand-out move: a one-line install-trust chain badge that makes SLSA L3 visible at the README's first scroll.
 
 ---
 
-## 3. The three lenses
+## 2. The jam — three rounds, one resolution
 
-### 3.1 Synth lens — what the README could be
+### Round 1 — the chart problem
 
-Open the README with the empty quadrant. It's a strong narrative move — anchors the reader's mental model in *why this exists*, not *what it does*. Follow with the layered model (tree-sitter floor → LSP depth) as the architectural signature. Show the install story as three parallel tracks: **for Claude Code users** (the plugin), **for AI agent authors** (the MCP server), **for shell pipelines** (the overview command).
+**Pragmatist's pushback:** A 2D tradeoff scatter is brilliant for a blog post or conference talk — not for a README. The reader is a developer scanning for "should I install this?" The chart takes cognitive load before delivering payoff. The defensibility is real; the conversion is weak.
 
-Lean on the diagram from `docs/design.md` (already a Mermaid chart). The 10-tool table is the centerpiece of the README's middle — it's the surface area; everything else is plumbing.
+**Inversion proposal:** Lead with the **5-call worked example**. Show an agent asking a question and getting symbol, type, callers, definition site, and provenance in one short transcript. *Then* drop the chart, captioned: "Here's where yactt sits in the landscape." Now the chart explains why the demo was so good, instead of asking the reader to decode a diagram before seeing value.
 
-End with status (what shipped, what's next) and trust (license + SLSA). The tagline earns its place at the top *and* as a callout in the about section.
+**On the trust badge:** "SLSA L3 • 21 tools • 1 dep • read-only" — four numbers, scannable, each one a different objection closed. **The move no competitor README makes: pre-answering trust questions in a single horizontal line above the fold.**
 
-**Synth recommendation**: hero = quadrant diagram + tagline. Middle = architecture diagram + 10-tool table. Footer = status + SLSA.
+**Synth's commit — audience forking:** Three reader types land on a yactt README: (1) the **agent-builder** wiring MCP into Claude/Cursor/custom runtime — wants "does this give my agent accurate code understanding with one `go install`?"; (2) the **platform engineer** — wants "is this safe to pin in prod?"; (3) the **curious developer** — wants "what's interesting here?". The README converts type 1 first, doesn't alienate type 2, and type 3 finds the interesting parts on their own. The chart serves type 2/3. The demo serves type 1. **Type 1 wins the opening.**
 
-### 3.2 Pragmatist lens — what works in the wild
+**The asymmetry competitors miss:** ripgrep, ctags, scip-cpp, scip/lsif — all lead with the tool or the protocol. **None lead with "here's why you should believe what I'm about to show you."** That inversion is the positioning bet. The trust strip isn't a feature callout; it's a reframe of what a code-intel README is for.
 
-A README is read at three depths:
+### Round 2 — hardening the demo
 
-1. **First scan** (10 seconds): hook, value prop, can-I-install-it-now.
-2. **Skim** (1 minute): the 10 tools, the architecture, the install story.
-3. **Deep read** (5+ minutes): design doc, plugin README, the source itself.
+**Pragmatist's three concrete edits:**
 
-Most readers fall into depth 1 and 2. Depth 3 readers don't need the README to teach — they need it to point.
+1. **Demo prompt:** vague question that returns *multi-hit ambiguity*, with the disambiguation as the visible beat. If the demo's first call returns exactly one hit, you're showing search, not resolution.
+2. **Receipts:** inline anchors from the strip, full section between tools and install — "What's behind the badge row."
+3. **Provenance:** at least one call in the demo carries an LSP provenance stamp, labeled in the caption. Otherwise the quadrant chart is unsubstantiated by the transcript.
 
-Concretely:
+**Synth's draft transcript (verbatim, lightly edited):**
 
-- **Install instructions must work on copy-paste** — no "go to release page" buried in prose. Three code blocks, three audiences, in that order.
-- **The 10-tool table needs one-line descriptions**, not paragraphs. A reader should be able to scan the table and know which 2–3 tools solve their immediate problem.
-- **Status / roadmap should be terse and verifiable** — link to commits or changelog, don't claim milestones in prose.
-- **The SLSA L3 attestation belongs in the trust section** — it's a real differentiator for any tool an AI agent is going to load from disk. One line + the `gh attestation verify` one-liner.
-- **Pointer to deeper docs**: `docs/design.md` for architecture, `plugins/yactt/README.md` for the Claude Code install story.
+> **What an agent actually gets from a codebase**
+>
+> Agent prompt: *"Where is payment validation handled, and who calls it?"*
+>
+> ```jsonc
+> // call 1 — find by name
+> {"tool": "find_symbol", "args": {"name": "validatePayment"}}
+> ```
+> → 3 hits across 2 source files + 1 test file. Agent picks the validator.go method.
+>
+> ```jsonc
+> // call 2 — definition lookup crosses into the interface
+> {"tool": "get_definitions", "args": {"symbol_ref": "validator.go:14"}}
+> ```
+> → resolves to interface declaration in a third file. **`provenance: "gopls"`** ← LSP-backed, distinct from calls 1/4/5.
+>
+> ```jsonc
+> // call 3 — type signature for the interface
+> {"tool": "get_symbols", "args": {"file": "internal/billing/billing.go", "kind": "interface"}}
+> ```
+> → type signature, fields, embedded types, rendered once.
+>
+> ```jsonc
+> // call 4 — who calls validatePayment in production?
+> {"tool": "get_callers", "args": {"symbol_ref": "validator.go:14"}}
+> ```
+> → 2 production callers, tests filtered.
+>
+> ```jsonc
+> // call 5 — source snippet for human-in-the-loop confirmation
+> {"tool": "get_snippet", "args": {"file": "internal/billing/validator.go", "line": 14, "lines": 12}}
+> ```
+> → 12-line snippet, no test boilerplate.
+>
+> **Caption:** *call 2 used gopls; calls 1, 3, 4, 5 used tree-sitter with cross-reference resolution against the parsed AST. yactt stamps every response with its provenance so the agent — and you — can tell which path served the answer.*
 
-**Pragmatist recommendation**: depth-1 content ≤ 8 lines; depth-2 content in a `<details>` block or after a clear horizontal rule; depth-3 content is a "Read more" link, not in the README.
+### Round 3 — one structural critique, then green-light
 
-### 3.3 Critic lens — what will fail
+**Pragmatist's critique:** Call 3 (`get_symbols`) is described in prose; every other call has a concrete JSON block. The visual contract is broken at the one call that proves the agent gets *type shape*. Two fixes:
 
-Jargon and self-deprecation are the two ways this README goes wrong.
+- **(a)** Render call 3 output as JSON — preserves visual rhythm
+- **(b)** Cut call 3 entirely, replace with `find_references` filtered to non-test files — adds a property the demo wasn't showing (**agent-controllable filtering**), and `get_hover` is already in the 16-tool set
 
-- **"Federated" is jargon.** Most readers won't have the design doc context. They'll pause, and a pausing reader is a leaving reader.
-- **"Yet Another" as the headline opener reads as apologetic.** Self-deprecating names like GNU and WINE worked because they were the names people already knew; the README isn't a context where that joke lives well.
-- **"Walk the tree, choose your layer" is poetic but vague.** The reader doesn't know what "the tree" or "your layer" means in the first 30 seconds.
-- **The 10-tool wall** — if presented without context, it reads as "yet another tool that ships 10 features" rather than "10 facets of one model of a codebase." A short framing sentence above the table saves it.
-- **Marketing-speak kills engineer trust.** Avoid "powerful", "robust", "seamlessly", "next-generation", "AI-powered" — all of those are red flags in a Go project's README.
-- **Don't bury the L3 attestation.** It's the answer to "why should I trust this binary I'm about to shell out from a SessionStart hook." Front-load the trust signal.
-
-**Critic recommendation**: the *backronym* earns one mention (in the about section, with the GNU/YACC/WINE nod); the *tagline* is the headline, not the backronym. The hero is the position (lossless + resolved for AI agents), not the name.
-
----
-
-## 4. Synthesis: the chosen angle
-
-After three lenses, the README's angle is:
-
-> **yactt is the MCP server that gives AI agents lossless source and resolved semantics over a polyglot (Go/TS/JS, Python planned) codebase, with three install paths and a tamper-evident binary.**
-
-Concretely:
-
-- **Hero**: one-line tagline ("Federated code intelligence for AI agents — lossless source, resolved semantics, MCP-native.") + three install paths as parallel code blocks (plugin / MCP / CLI).
-- **Positioning**: a small "Why" paragraph + the empty-quadrant chart. 4 lines of prose, then the chart. No essay.
-- **Architecture**: a short paragraph explaining the layered model (tree-sitter = floor, LSP = depth, MCP = surface) + the ASCII or Mermaid diagram from the deep-dive report. One paragraph, one diagram.
-- **The 10 tools**: a table with one-line descriptions. Framed by a single sentence ("yactt exposes the codebase as one node graph with 10 facets of access."). The 11th (`persisted_query`) is mentioned below the table as "for curated workflows".
-- **Status & roadmap**: a short list. What's shipped (linkable), what's next.
-- **Trust**: license + SLSA L3 attestation + `gh attestation verify` one-liner. Plus a note that `edit_impact` does not apply changes (a trust signal in its own right).
-- **Footer**: pointer to `docs/design.md` for deep architecture, `plugins/yactt/README.md` for the Claude Code install story, and the GitHub releases page for binaries.
-
-### 4.1 What we explicitly chose NOT to do
-
-- Not opening with the backronym. The name lives in the title; the GNU/YACC/WINE nod lives in a one-line aside in the about section.
-- Not using "federated" in the headline. It stays as a paragraph word — readers who reach the architecture section get it.
-- Not listing 10 tools without framing. The framing sentence above the table is non-negotiable.
-- Not embedding the full status report in the README. Pointer to CHANGELOG / `yactt-progress` memory.
-- Not advocating for AI agents in vague terms. The trust story is concrete (SLSA L3, parse-don't-validate, read-only surface).
+**Decision:** **(b)** is the stronger edit. Adds filtering as a demonstrated feature, drops a tool that was already on the "leave out of spotlight" list.
 
 ---
 
-## 5. Tone calibration
+## 3. Resolved angle
 
-| Section | Tone | Why |
-|---|---|---|
-| Title + tagline | Direct, slightly literary | Earns the read; signal seriousness |
-| Why (positioning) | Engineer-honest | No fluff; let the chart do the work |
-| Install paths | Copy-paste-ready | Zero friction |
-| Architecture | Compact prose + diagram | One paragraph, not an essay |
-| Tools table | Scan-friendly, no jargon in descriptions | Reader's #2 stop |
-| Status / roadmap | Terse, verifiable | "Shipped X, next: Y" |
-| Trust | Concrete + short | Show, don't tell |
+### 3.1 — One sentence
 
----
+**yactt is the MCP server that gives an AI agent both the raw bytes of a source file AND the resolved symbol/call/reference graph — lossless + resolved, polyglot Go/TS/JS, with the install-trust chain verifiable end-to-end.**
 
-## 6. Hook candidates (ranked)
+### 3.2 — The structure (final)
 
-After the lens work, the top three hooks are:
+1. **One-line trust strip** — `SLSA L3 · 21 tools · 1 dep · read-only`. Four numbers, four objections closed. Each number is a link to its receipt.
+2. **The 5-call worked example** — vague question → multi-hit ambiguity → disambiguation → LSP-backed resolution → filtered callers → source snippet. Provenance stamp mid-transcript. Caption names the LSP path used.
+3. **The empty-quadrant chart, captioned small, as a real SVG** — "Here's where yactt sits in the polyglot Go/TS/JS landscape." Render as a Mermaid `quadrantChart` (which GitHub auto-renders to SVG) — **not** as a markdown table. The table format flattens the 2D positioning into a grid; the SVG chart carries the visual punch the positioning depends on. Now the chart *explains* the demo instead of asking the reader to decode a diagram.
+4. **Tools table grouped 16 / 4 / 1** — code-intel, registry, persisted_query.
+5. **"What's behind the badge row"** — receipts section. Each strip claim has its verifiable artifact:
+   - SLSA L3 → the `provenance.intoto.jsonl` attached to the release, with the `gh attestation verify` command
+   - 21 tools → output of `mcp tools` against the binary on disk (or list of names)
+   - 1 dep → `go.mod` rendered in the section, `require` block visible
+   - read-only → the source-tree note that no tool mutates a path outside the per-repo cache
+6. **Install** — `go install` line + the two `mcp serve` modes (single-repo, registry-only), one line each.
+7. **Status & roadmap** — Python next, multi-repo queries second, persisted-query step chaining third.
+8. **Trust & security** — links to `docs/security.md`, mentions the OWASP AST02/05/09 mitigations, closes with the `tree-sitter as the unconditional floor` beat.
 
-1. **"Federated code intelligence for AI agents — lossless source, resolved semantics, MCP-native."** — wins on clarity, balanced.
-2. **"Walk the tree, choose your layer."** — wins on poetry, loses on cold-read clarity.
-3. **"The code-intelligence MCP server your AI agent actually wants."** — wins on personality, loses on the "yet another" backronym being absent.
+### 3.3 — The stand-out move
 
-**Chosen**: #1 for the headline. #2 as a sub-headline (italic, smaller) under the title block. #3 rejected — too punchy, doesn't survive depth-2 skim.
+**The trust strip above the fold, with the receipts section below the install.** Most tool READMEs make trust a footnote. yactt makes it the headline and earns it with receipts.
 
----
+Concrete: the trust strip isn't a feature callout; it's a **reframe of what a code-intel README is for**. ripgrep, ctags, scip-cpp, scip/lsif, Serena, JetBrains MCP — every competitor README leads with the tool. **yactt leads with the permission slip that lets you believe the tool.** That's the positioning bet no competitor README makes.
 
-## 7. Structure (proposed)
+### 3.4 — The 5-call demo (final, post-fix-b)
 
-```
-# yactt
-*Federated code intelligence for AI agents — lossless source, resolved semantics, MCP-native.*
+| # | Tool | Purpose | Path |
+|---|------|---------|------|
+| 1 | `find_symbol` | 3-hit ambiguity surfaced | tree-sitter |
+| 2 | `get_definitions` | resolves to interface in 3rd file | **gopls** ← provenance stamp |
+| 3 | `find_references` (non-test filtered) | agent-controllable filtering | tree-sitter |
+| 4 | `get_callers` (non-test filtered) | filtered production callers | tree-sitter |
+| 5 | `get_snippet` (line-bounded) | human-in-the-loop confirmation | tree-sitter |
 
-*Walk the tree, choose your layer.*
+**Caption under the demo:** *call 2 used gopls; calls 1, 3, 4, 5 used tree-sitter with cross-reference resolution against the parsed AST. yactt stamps every response with its provenance so the agent — and you — can tell which path served the answer.*
 
-## Why yactt
-[2 short paragraphs]
-[mermaid: the empty quadrant chart]
+### 3.5 — What the chorus critique caught
 
-## Install
-### For Claude Code users
-[code block: plugin marketplace add]
-### For AI agent authors
-[code block: stdio MCP server config]
-### For shell pipelines
-[code block: brew install or curl tarball + `yactt overview .`]
+The synth's draft was shippable. The pragmatist's two hardenings made it *defensible*:
 
-## How it works
-[1 paragraph: tree-sitter floor + LSP depth + MCP surface]
-[mermaid or ASCII: the architecture]
-
-## The 10 tools
-[framing sentence]
-[table: tool | purpose]
-[1 line: persisted_query adds curated workflows]
-
-## Status & roadmap
-[short bullet list with links]
-
-## Trust
-- Dual-licensed Apache-2.0 / MIT
-- SLSA Build Provenance Level 3 — verify with one command
-- read-only by design (`edit_impact` does not apply changes)
-- tree-sitter as the unconditional floor (works without gopls / ts-language-server)
-
-## Read more
-- Architecture deep dive — docs/design.md
-- Claude Code plugin story — plugins/yactt/README.md
-- Latest release — github.com/kellenff/yactt/releases/latest
-```
+1. **Multi-hit ambiguity is load-bearing.** A single-hit first call sells search, not resolution. The 3-hit pattern is what the quadrant chart is actually promising.
+2. **The mid-transcript provenance stamp is the falsifiable claim.** A reader who runs yactt with gopls missing will see all five calls stamped `tree-sitter` and the caption still holds. With the stamp mid-transcript, the caption makes a description of *available* paths, not a promise about a specific call.
+3. **Call-3 → find_references is the better fix.** It adds a property (filtering) the demo wasn't yet showing, and lets `get_symbols` stay out of the spotlight (it's a tool-by-tool section, not a demo tool).
 
 ---
 
-## 8. What makes this README stand out
+## 4. Tone
 
-1. **The empty-quadrant chart in the Why section** — most code-intelligence READMes open with feature lists. A quadrant chart is a visual differentiator and immediately earns the "lossless + deep" claim.
-2. **Three parallel install paths** — most tools have one. The "for Claude Code / for AI agents / for shell" trio matches the actual audience surface.
-3. **The 10-tool table framed as "10 facets of one graph"** — most tools present their toolset as a wall of features. Framing it as facets of one model makes the surface area feel coherent, not chaotic.
-4. **The trust section that names the SLSA L3 attestation concretely** — most READMes gesture at "secure" without specifics. The `gh attestation verify` one-liner is concrete, verifiable, and rare.
-5. **The "Yet Another" backronym as a one-line aside, not a headline** — preserves the project's self-aware tone without making the joke carry the read.
-
----
-
-## 9. Risks and watch-outs for Stage 5 (Pen Wielding)
-
-- **Don't let the diagram dominate.** The mermaid chart is strong; an oversized chart pushes the prose down.
-- **Don't over-explain the layered model.** One paragraph + diagram. The design doc carries the depth.
-- **Keep the install code blocks copy-pasteable.** No "consult your distribution's package manager" hedging.
-- **Avoid first-person plural ("we")** — Go project READMes that succeed tend to use third-person or imperative; avoid the corporate-blog tone.
-- **The plugin README stays canonical for plugin install.** Don't duplicate the install-with-SLSA-verify story in the root README — link to it.
+- **Confident, not boastful.** The trust strip earns the right to be confident; the receipts section proves it.
+- **Concrete, not abstract.** JSON transcripts, not "the agent can resolve symbols." Specific tool names, specific args, specific outputs.
+- **Engineer-to-engineer.** No marketing language. The reader is an agent-builder; they will grep the binary and the source. Don't write prose the source contradicts.
+- **Self-aware without being arch.** The "Yet Another Code Tree Tool" backronym appears once, in the opening. The reader gets the joke, moves on. Don't lean on it.
 
 ---
 
-## Ready for Stage 4
+## 5. Risks (transcript and section-by-section)
 
-Think Tank next — research exemplar READMEs (golangci-lint, ripgrep, fd, ast-grep, gopls itself) to pressure-test the chosen structure. The crystal-ball + deep-dive + brain-jam outputs together give the research a tight seed: *what does a Go project README look like when it's aimed at AI-agent authors instead of human developers, and the binary ships with SLSA L3?*
+- **The trust strip only lands if the four numbers are individually verifiable.** Each claim needs a one-click receipt. If any claim doesn't survive scrutiny, the strip becomes a liability instead of a permission slip.
+- **The 5-call demo uses tool names that need to match the binary's actual `mcp tools` output.** Map synth's draft names (`find_symbol`, `get_definitions`, `get_callers`, `get_snippet`, `get_symbols`) to the real tool surface in `internal/tool/`. Note: the real names are `find_symbol`, `node_get` (for the `get_definitions` beat — `layers=["body"]`), `find_referencing_symbols` (for the `get_callers` beat), `node_source` (for the `get_snippet` beat). `get_symbols` does exist as `get_symbols_overview`. **The pen-wielding stage must reconcile the demo transcript with the real tool names before shipping.**
+- **The chart needs to render as a real SVG, not a markdown table.** Mermaid `quadrantChart` block (GitHub auto-renders to SVG inline). Keep the legend short. The current README uses a markdown table — the brain-jam explicitly rejected that format; Pen Wielding must use a `mermaid` fenced code block.
+- **The "What an agent actually gets" header is the right register.** Don't soften it to "Example" or "Quickstart." The reader came for the agent's view, not the installer's.
 
-Proceeding to **Stage 4: Think Tank**?
+---
+
+## 6. Ready for Stage 4
+
+The angle is locked:
+
+- **Lead:** trust strip
+- **Hook:** 5-call worked example
+- **Frame:** empty quadrant, Mermaid `quadrantChart` block (renders as SVG inline, not a markdown table)
+- **Proof:** receipts section with linked artifacts
+- **Close:** install + roadmap + security
+
+Pen Wielding (Stage 5) drafts the README on this skeleton, reconciles the demo transcript to the real tool names, and renders the quadrant chart as a Mermaid `quadrantChart` code block (auto-renders to SVG on GitHub).

@@ -1,186 +1,305 @@
 # Think Tank — yactt
 
 > Stage 4 of the GitHub README For Perfectionists workflow.
-> Generated 2026-07-05.
-
-**Mode**: Web research via WebFetch (Chorus/WebSearch unavailable in this session — see § 1).
-**Counterpart reports**: `.claude/grfp/deep-dive.md`, `.claude/grfp/crystal-ball.md`, `.claude/grfp/brain-jam.md`.
+> Generated 2026-07-06.
+>
+> **Method:** `WebFetch` against raw `raw.githubusercontent.com` README URLs.
+> **Sampling logic:** four exemplars from three categories — (a) CLI-tool gold standards (ripgrep, ast-grep), (b) the direct competitor (Serena), (c) the cited prior-art (codebase-memory-mcp), (d) a flagship MCP server (Playwright MCP).
+> **Counterpart reports:** `.claude/grfp/deep-dive.md`, `.claude/grfp/crystal-ball.md`, `.claude/grfp/brain-jam.md`.
 
 ---
 
-## 1. Methodology + fallbacks
+## 1. The exemplars studied
 
-- `WebSearch` returned 400 "invalid params" on every call this session.
-- `WebFetch` worked against raw `raw.githubusercontent.com` README URLs — six exemplars fetched successfully.
-- **No** Exa or Gemini deep-research MCP installed; this stage runs as direct README reads.
-
-Projects sampled:
-
-| Project | Why | Verdict |
-|---|---|---|
-| **ripgrep** (BurntSushi/ripgrep) | Gold standard for "single-purpose fast CLI" | Adopt trust signals + honest limitations |
-| **ast-grep** (ast-grep/ast-grep) | Direct cousin: AST-tooling CLI with tree-sitter | Adopt multi-platform install, vision statement framing |
-| **fd** (sharkdp/fd) | Gold standard for "find with good UX" | Avoid: too long, too dense |
-| **golangci-lint** (golangci-lint/golangci-lint) | Multi-tool runner with external docs | Adopt: external-hub README pattern |
-| **ruff** (astral-sh/ruff) | Modern polyglot-linter-equivalent (Python-only) | Adopt: 4 install paths, adopter list (future) |
-| **Model Context Protocol servers** (modelcontextprotocol/servers) | Direct MCP-server reference | Adopt: LLM-targeted framing; avoid emoji headings |
-| **biome** | Attempted; README fetch returned a stub | n/a |
+| Project | Category | Stars (approx) | Why it matters for yactt |
+|---|---|---|---|
+| **ripgrep** (BurntSushi) | CLI-tool gold standard | 51k | Single-purpose fast tool, MCP-protocol-agnostic |
+| **ast-grep** (ast-grep) | AST-tooling CLI with tree-sitter | 8k | Direct cousin: tree-sitter AST, polyglot, runs as a binary |
+| **Serena** (oraios) | Direct MCP competitor | 11k | MCP server for code; closest functional analog |
+| **codebase-memory-mcp** (DeusData) | Cited prior art | 24k | Referenced in `docs/design.md § 10.1`; the "federation, not replacement" lineage |
+| **Playwright MCP** (microsoft) | Flagship MCP server | 4k | Microsoft-owned, well-resourced, sets MCP-server conventions |
 
 ---
 
 ## 2. Pattern matrix
 
-| Pattern | ripgrep | ast-grep | fd | golangci-lint | ruff | mcp/servers | yactt's pick |
-|---|---|---|---|---|---|---|---|
-| Trust badges (shields.io cluster) | yes (5) | yes (7) | yes (3) | yes (8+) | yes (5) | no | **no** — engineer audience is allergic; SLSA L3 is a stronger signal |
-| Vulnerability disclosure | explicit | no | no | no | no | no | **yes** — `gh attestation verify` one-liner |
-| Honest "why not" section | yes | no | no | no | no | no | **yes** — concrete limitations (no Python yet, no remote repos, no write tools) |
-| Multi-platform install | yes (~20) | yes (~10) | yes (~20) | external-only | yes (4) | npx/uvx | **3 paths** — by audience (plugin / MCP / CLI), not by OS |
-| External docs hub | yes (GUIDE.md, FAQ.md) | yes (website, playground) | no (single-page) | yes (golangci-lint.run) | yes (docs.astral.sh) | yes (ADDITIONAL.md) | **yes** — `docs/design.md` + `plugins/yactt/README.md` |
-| Demo / screenshot | yes | yes (animated) | yes (SVG) | no | yes (benchmark chart) | no | **skip** — README is short by design |
-| Performance benchmarks | yes (6 tables) | no | yes (table) | no | yes (bar chart) | no | **skip** — yactt isn't a perf tool; the trust signal is integrity, not speed |
-| Adopter / testimonial section | no | no | no | sponsor logos | yes (~100 orgs) | no | **skip** — too early (MVP); defer to v1.0 |
-| Vision / tagline paragraph | yes | yes ("democratize…") | no | no | no | no | **yes** — already drafted in brain-jam.md |
-| Pre-commit / GH Actions example | no | no | no | yes (CI link) | yes (full YAML) | no | **skip** — yactt is a server, not a developer toolchain |
-| Test data / fixtures noted | yes (paths) | no | no | no | no | no | **skip** — internal detail |
-| Completion / shell integration | yes | no | yes | no | no | no | **skip** — MCP server doesn't need shell completions |
-| LLM-targeted framing | no | no | no | no | no | yes (every section) | **yes** — explicitly: "for AI agents", tool descriptions framed for the agent reader |
-| Minimum-runtime / minimum-Go statement | yes (Rust 1.85.0) | no | no | no | yes (Python 3.14) | no | **yes** — Go version pinned in go.mod, worth surfacing |
-| Multi-runtime parity | no | no | no | no | no | yes (npx / uvx / Windows wrapper) | **yes** — three install tracks by audience |
+| Pattern | ripgrep | ast-grep | Serena | codebase-memory-mcp | Playwright MCP | **yactt-adopt?** |
+|---|---|---|---|---|---|---|
+| **Badge row as trust signals** | yes (build, crates, repology) | yes (coverage, discord, stars) | yes (discord, license) | yes — 14 badges | minimal | **Yes** — align badges with the trust strip |
+| **One-line tagline** | no (paragraph) | yes (one-sentence) | yes (three-word: "The IDE for Your Coding Agent") | yes (longer tagline) | no (declarative sentence) | **Yes** — sharpen the existing tagline |
+| **Embedded chart / diagram** | benchmark tables only | screenshot only | ASCII diagrams + GIF | 3D graph screenshot | none | **Yes — Mermaid `quadrantChart` block** (locked from brain-jam) |
+| **Worked example before feature list** | yes (Quick examples) | yes (Usage example) | yes (Quick Demo) | yes (Quick Start) | yes (Getting started) | **Yes** — fits the 5-call demo |
+| **Multi-platform install wall** | yes (~20 pkg managers) | yes (npm/pip/cargo/brew/scoop/nix) | yes (uv/pip/git/conda/mise/etc.) | yes (single-binary) | yes (15+ MCP clients) | **Yes** — 3 install paths already in current README |
+| **Comparison to competitor** | yes (vs ag, ack, grep) | yes (grep analogy) | no | yes ("similar in spirit to graphify, but...") | yes (vs Playwright CLI) | **Optional** — add a one-line "vs grep + ctags + ripgrep on steroids" |
+| **Honest "why not" / limitations** | yes (rare — "Why shouldn't I use ripgrep?") | implicit | no | yes (security disclaimer) | yes (token economics) | **Yes** — fits the trust-strip ethos |
+| **Visual proof before install** | yes (screenshot) | yes (screenshot) | yes (GIF) | yes (3D graph screenshot) | no | **Yes** — the 5-call demo is the yactt equivalent |
+| **Voice-of-user / model quotes** | no | no | yes (Opus, GPT testimonials) | no | no | **Skip** — feels gimmicky for yactt's tone |
+| **Structured tools reference** | partial | yes (command-line usage) | yes (full feature list) | yes (14 MCP tools) | yes (10+ tool groups with schemas) | **Yes** — fits the existing 21-tool table |
+| **Troubleshooting section** | yes | no | no | yes (unusual — debug-capture) | partial | **Optional** — defer to docs/security.md |
+| **Embedded demo video** | no | no | yes | no | no | **Skip** — adds maintenance; the JSON transcript is enough |
+| **Sidebar TOC** | yes (quick links) | no | partial (long TOC) | yes | yes | **Skip** — short README doesn't need it |
 
 ---
 
-## 3. Anti-patterns (what NOT to copy)
+## 3. The five exemplars in depth
 
-| Pattern | Why it works elsewhere | Why it would hurt yactt |
-|---|---|---|
-| **900-line single-page README** (fd) | fd is a `find` replacement; users want one searchable page | yactt has a docs/ directory and a plugin README; duplicating in root README is wrong |
-| **Benchmark tables** (ripgrep, ruff) | perf is ripgrep/ruff's *whole identity* | yactt's identity is lossless + resolved for agents; perf is incidental |
-| **"10x faster than X" framing** (ruff) | sells in Hacker News threads | reads as marketing to the engineer audience yactt is targeting |
-| **Emoji-prefixed headings** (mcp/servers) | works for a directory of small servers | wrong for a Go project's primary README |
-| **Testimonial blockquotes** (ruff) | early-stage adoption sell | yactt has no adopters yet — defer to v1.0 |
-| **Sponsor-placement imagery** (golangci-lint) | appropriate for a BDFL project with corporate sponsors | premature for an MVP |
-| **Multiple install-platform commands** (ripgrep, fd, ast-grep) | appropriate for general-purpose CLIs | yactt's audience is narrower: agents, plugin users, shell users |
+### 3.1 — ripgrep (the floor every CLI README has to clear)
+
+**Structure:**
+
+1. CHANGELOG + quick-links index (TOC)
+2. Screenshot of search results (visual proof)
+3. Quick examples (run-bench against ag/ack/grep)
+4. **"Why should I use ripgrep?"** — argues for the tool
+5. **"Why shouldn't I use ripgrep?"** — argues against it (rare honesty)
+6. Is it really faster? — benchmarks
+7. Feature comparison table
+8. Installation (~20 package managers)
+9. Building / Running tests
+10. Related tools / Vulnerability reporting / Translations
+
+**What yactt should lift:**
+- **Evidence before advocacy.** Benchmarks land before "why." yactt's 5-call demo + Mermaid chart plays the same role — proof first, pitch second.
+- **"Why not" section.** The current README has no "when not to use yactt" beat. The brain-jam's trust-strip ethos implies honesty; a one-paragraph "when yactt is the wrong tool" closes the trust loop.
+- **Tight opening paragraph.** Front-load the elevator pitch + the most useful flag. Current yactt README is ~14KB and the first scroll already loses non-technical readers.
+
+**What yactt should NOT lift:** the multi-platform install wall is exhaustive but dense. yactt already covers the three install paths with the right amount of detail.
+
+### 3.2 — ast-grep (the closest cousin in design)
+
+**Structure:**
+
+1. Logo + badge wall
+2. One-line tagline ("CLI tool for code structural search, lint, and rewriting")
+3. Introduction with a familiar-tool analogy (*"Think of it as your old-friend grep, but matching AST nodes"*)
+4. Screenshot (visual proof)
+5. Installation wall (npm/pip/cargo/brew/scoop/MacPorts/nix-shell/mise)
+6. Usage example
+7. Feature highlight — tweet-linked real rewrites
+
+**What yactt should lift:**
+- **One-line value prop, then a familiar-tool analogy, then a screenshot/diagram, then install.** This is the buyer's journey in compressed form. Maps directly to: trust strip → 5-call demo → Mermaid chart → install.
+- **Closing vision paragraph that names audience segments.** ast-grep closes with *"democratize abstract syntax tree magic"* and lists the audience. yactt's current README has a "Status & roadmap" section that does double duty — keep it but expand the audience-segment language.
+- **Use the second-person voice.** "You can write patterns…" yactt's current README uses "We" — switch to "you" for the demo transcript and the install directions.
+
+### 3.3 — Serena (the direct competitor — most important read)
+
+**Structure:**
+
+1. Logo (light + dark variants — GitHub markdown supports `#gh-light-mode-only`)
+2. **Three-word tagline:** *"The IDE for Your Coding Agent"*
+3. Badge row (discord, license)
+4. Three-bullet value prop (semantic, MCP, agent-first)
+5. **IMPORTANT callout** — *"'Do not install Serena via an MCP or plugin marketplace! They contain outdated and suboptimal installation commands.'"* (disarming conflict, redirects to the right path)
+6. Quick Demo
+7. What Our "End Users" Say (agent testimonials)
+8. How Serena Works
+9. Language Support
+10. Features (collapsible `<details>` blocks per capability group)
+11. Quick Start / User Guide
+
+**What yactt should lift:**
+- **The three-word tagline discipline.** *"Federated code intelligence for AI agents"* is the current tagline — long. Compress: **"Code intelligence for agents."** Or even tighter: **"An MCP server that knows your code."** Both sharpen the positioning.
+- **IMPORTANT callout for a common wrong path.** The current README has no such callout. Candidate: *"Don't `git clone && go build` — the SHA256SUMS-verified release tarball is the trust path; building from source skips the SLSA provenance chain."* Disarms a foreseeable mistake.
+- **Inverted framing.** "The IDE for Your Coding Agent" reframes: humans install, agents use. yactt already has this beat in *"the user isn't a developer reading a codebase; it's a model exploring one"* — make it more visible in the opening line.
+- **`<details>` blocks for dense reference.** The 21-tool table and the security doc references can collapse into a `<details>` to keep the first scroll scannable.
+
+**What yactt should NOT lift:** the agent-testimonials feel manipulative. Skip.
+
+### 3.4 — codebase-memory-mcp (the prior-art anchor)
+
+**Structure:**
+
+1. Title (no logo, just a one-word name)
+2. **14-badge wall** (GitHub Release, license, CI, tests, languages, Hybrid LSP, agents, Pure C, platform, OpenSSF Scorecard, SLSA 3, VirusTotal, arXiv)
+3. Two-sentence value prop: *"The fastest and most efficient code intelligence engine for AI coding agents…"*
+4. Three concrete proof points (Linux kernel = 3 min, queries < 1ms, single static binary)
+5. **`>` blockquote for the arXiv paper** — academic credibility
+6. **`>` blockquote for the security disclosure** — pre-empts distrust
+7. Embedded screenshot of the dev UI (3D graph visualization)
+8. *Why codebase-memory-mcp* / Quick Start / Features / Team-Shared Graph / How It Works / Performance / Troubleshooting / Installation / Multi-Agent Support / CLI Mode / MCP Tools / Graph Data Model / Architecture / Security / License
+
+**What yactt should lift (calibrated):**
+- **Two `>` blockquotes right after the hook** — one for trust (SLSA L3), one for security posture. Pairs cleanly with the brain-jam's trust strip + receipts section. Don't add 14 badges — the trust strip already compresses them.
+- **Concrete numbers over adjectives.** *"`120x` fewer tokens"*, *"`3,400` vs `412,000`"*, *"`99.2%` reduction."* yactt's current README has adjectives; the brain-jam's trust strip replaces them with verifiable numbers — keep that discipline.
+- **Security-disclosure callout near the top.** codebase-memory-mcp's *"This tool reads your codebase and writes to your agent configuration files… If you prefer to audit before running, the full source is here"* sets a tone. yactt's current README has the security section way down at §Security; the brain-jam's plan lifts SLSA L3 to the trust strip — complete the move by lifting the "audit before running" sentence near the top too.
+
+**What yactt should NOT lift:** the 14-badge wall. yactt's trust strip (`SLSA L3 · 21 tools · 1 dep · read-only`) does the same work in one line and doesn't compete with the chart.
+
+### 3.5 — Playwright MCP (the MCP-server conventions benchmark)
+
+**Structure:**
+
+1. Two-sentence hook — *"A Model Context Protocol (MCP) server that provides browser automation capabilities using Playwright. This server enables LLMs to interact with web pages through structured accessibility snapshots…"*
+2. **"Playwright MCP vs Playwright CLI"** — honest trade-off framing
+3. Key Features (3 bullets)
+4. Requirements (Node version, supported clients)
+5. Getting started — install via standard MCP config JSON
+6. Configuration (multi-client `<details>` blocks)
+7. User profile / Initial state / etc.
+8. Security disclaimer
+9. Tools reference (10+ tool groups with JSON schemas)
+
+**What yactt should lift:**
+- **"`X` vs `Y`" framing where there's a non-trivial alternative.** For yactt, the natural frame is: *"yactt vs `tree-sitter --map` + an ad-hoc LSP wrapper"* — but this is too niche for a README. Skip unless we want a one-liner in the "why" section.
+- **Multi-client install matrix.** Playwright's `<details>` blocks per MCP client (VS Code, Cursor, Windsurf, Claude Desktop, Goose, Junie…) is the right pattern for MCP-server READMEs. yactt already covers Claude Code + generic MCP; consider adding a `<details>` for the other top-5 MCP clients if yactt is going to support them — but current README correctly focuses on Claude Code as the primary path.
+- **Security disclaimer.** Playwright's *"not a security boundary"* caveat sets expectations. yactt's "Read-only by design" is the equivalent — make it visible earlier (already in the brain-jam trust strip).
 
 ---
 
-## 4. What yactt should steal (and how)
+## 4. The four moves that yactt should lift
 
-### 4.1 From ripgrep — vulnerability disclosure + minimum runtime
+In priority order:
 
-Two concrete lines, top of the trust section:
+### 4.1 — IMPORTANT callout for the install wrong-path (from Serena)
+
+Brain-jam's structural skeleton has a "What's behind the badge row" section, but it doesn't have the *front-of-README* warning callout. Add a brief `>` blockquote after the trust strip:
 
 ```
-Go 1.21+ required. Binary releases are SLSA Build Provenance Level 3 — verify with:
-gh attestation verify <tarball> -R kellenff/yactt
+> **Don't `go install` from `main`.** Release tarballs are SHA256-verified and ship SLSA Build Provenance Level 3 attestations — building from source skips the trust chain. Verify a release: `gh attestation verify yactt_darwin_arm64.tar.gz -R kellenff/yactt`.
 ```
 
-The dual license (Apache-2.0 / MIT) follows. **Concrete, verifiable, rare.**
+**Why this beats Serena's similar move:** Serena's callout blocks `marketplace` installs. yactt's blocks `go install from main`. Different failure mode, same redirect-to-the-right-path function.
 
-### 4.2 From ast-grep — vision statement + multi-track install
+### 4.2 — Real SVG quadrant chart (locked from brain-jam)
 
-The vision paragraph ("democratize abstract syntax tree magic…") is short and quotable. yactt has its equivalent already in `docs/design.md` § "Project identity":
+This is a directive from the user, carried into the brain-jam, confirmed here against the exemplars. **ast-grep uses a screenshot.** **codebase-memory-mcp uses a screenshot.** Both are static, both age poorly. Mermaid `quadrantChart` renders to SVG inline on GitHub, is text-editable, and version-controls cleanly. Make sure the Mermaid block uses normalized coordinates (per `docs/design.md § 1`):
 
-> *"Self-aware in the GNU / YACC / WINE tradition; tongue-in-cheek acronym on a serious tool."*
+```mermaid
+quadrantChart
+  title "Code intelligence — where yactt sits"
+  x-axis "Lossy source" --> "Lossless source"
+  y-axis "Syntactic only" --> "Resolved semantics"
+  quadrant-1 "Lossless + deep (yactt)"
+  quadrant-2 "Lossy + deep"
+  quadrant-3 "Lossy + shallow"
+  quadrant-4 "Lossless + shallow"
+  yactt: [0.85, 0.82]
+  CodeQL: [0.10, 0.90]
+  tree-sitter: [0.90, 0.18]
+  Sourcegraph/SCIP: [0.18, 0.72]
+  JetBrains-MCP: [0.30, 0.85]
+  ripgrep: [0.10, 0.05]
+  ctags: [0.30, 0.05]
+```
 
-One sentence in the README's about section. Earned.
+### 4.3 — "When not to use yactt" beat (from ripgrep)
 
-Multi-track install: ast-grep covers 8 package managers. yactt covers 3 *audiences* (Claude Code plugin / MCP server / shell CLI). The structural insight — **organize install by audience, not by OS** — is the carry-over.
+The trust-strip ethos + codebase-memory-mcp's security disclosure culture both imply honesty about limitations. A short beat — 2-3 sentences, after the install section:
 
-### 4.3 From modelcontextprotocol/servers — LLM-targeted framing
+```
+**yactt is the wrong tool if:**
+- You need `dataflow` / taint analysis across function calls (try CodeQL)
+- You need SCIP cross-repo queries across N repos (single-binary; no shared workspace index today)
+- You need Python language servers (grammar wiring is on the roadmap, not shipped)
+```
 
-Every section header can be re-read through the lens "is this useful to an AI agent reading this README?" Examples that need this framing in yactt's README:
+**Cost:** one paragraph. **Benefit:** closes the trust loop, pre-empts three future support questions.
 
-- **The 10 tools table**: each row's purpose should be written as "what an agent does with this," not "what it does to your code."
-- **Why yactt**: the empty-quadrant framing already does this work.
-- **Trust**: the SLSA L3 attestation is what makes an agent author comfortable letting `mcp serve` start at every Claude Code session.
+### 4.4 — Two `>` blockquotes after the hook (from codebase-memory-mcp)
 
-The "WARNING: these are not production-ready" callout in `mcp/servers` is a useful **inverse example** — yactt is production-ready, and saying so explicitly (in the Status section) is the move.
-
-### 4.4 From golangci-lint — external docs hub
-
-golangci-lint's README is ~35 lines and links to `golangci-lint.run` for everything. yactt's README should mirror this:
-
-- One paragraph per section in the README.
-- One pointer per section to the deeper docs (`docs/design.md` for architecture, `plugins/yactt/README.md` for plugin story).
-
-Avoid: duplicating the install instructions in both the root README and the plugin README. Pick one canonical home; the other points.
-
-### 4.5 From ruff — adopter list (deferred)
-
-ruff's "Who's Using Ruff?" section is one of its strongest trust signals, but it requires 50+ real adopters to land. **Defer to v1.0.** Once yactt has users, this becomes a real differentiator.
-
-### 4.6 From fd — callout blocks (`> [!NOTE]`)
-
-`fd` uses GitHub-flavored markdown alerts effectively. yactt should use them in two places:
-
-- "Tree-sitter as the unconditional floor — yactt works without `gopls` or `typescript-language-server`."
-- "`edit_impact` does not apply changes — it only analyses the blast radius of a rename."
-
-Both are warnings disguised as features; both belong in a callout.
+One for trust (SLSA L3 + `gh attestation verify`), one for security posture ("if you prefer to audit before running, the source is here"). Pairs with the trust strip; expands the receipt-anchors pattern from brain-jam.
 
 ---
 
-## 5. Composition for yactt's README
+## 5. The four moves that yactt should NOT lift
 
-Pulling the patterns together with the brain-jam's structure, the final shape:
+1. **14-badge wall** (codebase-memory-mcp). Drowns the first scroll. The trust strip already encodes the four most useful badges (`SLSA L3`, `21 tools`, `1 dep`, `read-only`).
+2. **Agent testimonials** (Serena). Gimmicky for yactt's engineer-to-engineer tone.
+3. **Embedded demo video** (Serena). Maintenance burden; the JSON transcript does the same work and is text-editable.
+4. **Side-by-side competitor comparison table.** codebase-memory-mcp does this with ripgrep-like tools. yactt's competitor is "another LSP wrapper + grep + ctags"; not a battle the README needs to win.
 
-| Section | Lines | Source inspiration |
+---
+
+## 6. Tone calibration (post-exemplars)
+
+Synthesizing the five exemplars against yactt's intended tone:
+
+| Tone axis | Where to land | Why |
 |---|---|---|
-| Title + tagline | 3 | brain-jam #1 hook |
-| *Walk the tree, choose your layer.* | 1 | brain-jam sub-headline |
-| **Why yactt** — empty-quadrant chart + 2 paragraphs | ~10 | design doc § 1 |
-| **Install** — 3 code blocks by audience | ~15 | ast-grep (multi-track) |
-| **How it works** — layered model paragraph + diagram | ~12 | brain-jam § 7 |
-| **The 10 tools** — framing sentence + table + persisted_query footnote | ~20 | brain-jam |
-| **Status & roadmap** — terse list | ~10 | crystal-ball § 6 |
-| **Trust** — 4 short items (license, SLSA L3 one-liner, read-only contract, tree-sitter floor) | ~10 | ripgrep + fd callouts |
-| **Read more** — pointers to design doc, plugin README, releases | ~5 | golangci-lint hub |
-
-**Target length**: 90–120 lines of markdown. Long enough to be the canonical landing page; short enough to read in one screenful.
+| **Honest vs promotional** | Honest | codebase-memory-mcp + ripgrep set this expectation. yactt's trust-strip bet depends on it. |
+| **First/second/third person** | First person ("we") for the project itself; second person ("you") for the install/demo | ast-grep pattern. yactt currently mixes; tighten. |
+| **Engineer-to-engineer** | Yes | README's audience is agent-builders, not LLM-decision-makers. Serena is the only exemplar that talks over the audience's head; avoid. |
+| **Self-aware without being arch** | One mention of the backronym | The "Yet Another Code Tree Tool" joke appears once, in the opening; not a marketing hook. |
+| **Concrete numbers vs adjectives** | Always numbers | 21 tools, 1 dep, 50k files max, 512 MiB disk max, 15 s LSP max, 158 lines of test for the wire shapes — every claim has a number, every number has a receipt. |
 
 ---
 
-## 6. Things that did NOT make the cut
+## 7. What Pen Wielding (Stage 5) should consume
 
-These came up in the research but were rejected:
+The synthesis above + the four adopt + four avoid lists + the tone calibration = the final brief for Pen Wielding. Specifically:
 
-| Idea | Source | Why rejected |
-|---|---|---|
-| Benchmark table | ripgrep | yactt isn't a perf tool |
-| Adopter wall | ruff | too early (no users yet) |
-| Testimonials | ruff | same |
-| Sponsor logos | golangci-lint | no sponsors |
-| Pre-commit / GH Actions recipes | ruff | yactt is a server, not a CI tool |
-| Multi-OS install matrix | ripgrep, fd | organized by audience instead |
-| Demo GIF / animated SVG | ast-grep, fd | README is text-first; the architecture diagram is the visual |
-| Emoji-prefixed headings | mcp/servers | wrong tone for Go project |
-| Stargazers-over-time chart | golangci-lint | too early (graph would be flat) |
-| Comparison table vs. competitors | ripgrep (beyondgrep.com), sourcetrail-style | the empty-quadrant chart *is* the comparison |
-| French / Spanish / Chinese translations | fd | defer to v1.0+ |
+### 7.1 — Structure (final)
+
+```
+# yactt
+> [tagline — possibly tightened to a 3-word variant]
+> [1-sentence elevator pitch]
+> [1-line trust strip: SLSA L3 · 21 tools · 1 dep · read-only]
+> [IMPORTANT callout: don't go install from main; verify the tarball]
+
+## Why yactt
+> [blockquote 1: SLSA L3 + gh attestation verify]
+> [blockquote 2: security disclosure / audit-before-running]
+[Mermaid quadrant chart — auto-renders to SVG]
+
+## Install
+[3 paths: Claude Code, MCP JSON config, shell]
+[IMPORTANT callout: don't go install from main — see §Trust for the right path]
+
+## What an agent gets from a codebase
+[5-call worked example with provenance stamp mid-transcript]
+[caption naming which call used gopls]
+
+## The 21 tools
+[3-category table: 16 / 4 / 1 — collapsible <details> per category]
+
+## Federated code intelligence
+[registry mode + two run modes from one binary]
+
+## What's behind the badge row (receipts)
+[SLSA L3 → provenance.intoto.jsonl + verify command]
+[21 tools → mcp tools output snippet]
+[1 dep → go.mod block]
+[read-only → source-tree note about per-repo cache]
+
+## When yactt is the wrong tool
+[3 honest beats from §4.3]
+
+## Status & roadmap
+[Python · multi-repo queries · persisted-query step chaining · SLSA consumer-side verify]
+
+## Trust & security
+[OWASP AST02/05/09, docs/security.md link]
+[Tree-sitter-as-floor beat]
+[Bounded resources: MaxFiles / disk cache / LSP startup]
+```
+
+### 7.2 — Tool-name reconciliation (must-do)
+
+The brain-jam's 5-call demo transcript uses placeholder names (`get_definitions`, `get_callers`, `get_snippet`). The real tools are:
+
+| Placeholder in chorus transcript | Real tool in yactt |
+|---|---|
+| `get_definitions` | `node_get` with `layers=["body"]` |
+| `get_callers` | `find_referencing_symbols` with `kinds=["calls"]` |
+| `get_callers` (filtered) | `find_referencing_symbols` with `kinds=["calls"]` + test-file filter on the caller side |
+| `get_snippet` | `node_source` with `range` |
+| `get_symbols` | `get_symbols_overview` (or `node_get` with `layers=["signature"]`) |
+| `find_symbol` | `find_symbol` (matches) |
+
+The Pen Wielding stage must reconcile the demo to these names before the README is shippable.
+
+### 7.3 — Open questions for Pen Wielding
+
+- The 5-call demo uses Go (`validatePayment`). Pen Wielding should keep Go — the LSP provenance story lands hardest with gopls. If polyglot parity matters, use TypeScript instead (the chart covers both).
+- The IMPORTANT callout (`don't go install from main`) is the new addition from Think Tank. Need to position it: above the install section, after the trust strip.
+- The "when yactt is the wrong tool" beat is post-install. Some READMEs put it before install; that's friendlier to readers still deciding. Decision: **after the worked example, before the tools table.** Pre-install for the type-2 reader; after the demo so the type-1 reader is already convinced.
 
 ---
 
-## 7. Open question for Stage 5 (Pen Wielding)
+## 8. Ready for Stage 5
 
-The brain-jam chose the empty-quadrant Mermaid chart as the hero visual. The crystal-ball noted Mermaid charts already exist in `docs/design.md`. **Should the README embed the chart from the design doc, or redraw a smaller, README-tuned version?**
+The angle is locked, the four adopt moves are pinned, the four avoid moves are flagged, the structural skeleton is finalized, the tool-name reconciliation is enumerated as a pre-flight checklist for Pen Wielding.
 
-- Embedding = one source of truth, but the design doc's chart may be too dense.
-- Redrawing = full control over readability, but creates a maintenance debt.
-
-**Recommendation for Stage 5**: redraw a smaller 2×2 chart tuned for the README's 800-pixel width. Link to the design doc for the full quadrant analysis.
-
----
-
-## 8. Stage 4 confidence + coverage
-
-- 5 of 6 attempted exemplars fetched and parsed successfully. Biome failed (raw URL returned a stub path) — not material; biome is a formatter, not a close cousin of yactt.
-- Patterns extracted: 16 in the matrix; 5 adopted; 11 explicitly rejected.
-- Trust signals, install paths, and LLM framing are the three strongest takeaways.
-- The brain-jam's structure survives the research intact — the patterns validate, not contradict.
-
-## Ready for Stage 5
-
-Pen Wielding next — write the README. The brain-jam's structure + the think-tank's pattern choices + the crystal-ball's roadmap content + the deep-dive's technical facts are all in hand.
-
-Proceeding to **Stage 5: Pen Wielding**?
+Next: `/claudikins-grfp:pen-wielding` — write the final README on the skeleton above.
