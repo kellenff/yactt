@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os/exec"
 	"path/filepath"
 	"time"
@@ -60,9 +61,19 @@ func StartCommand(ctx context.Context, argv []string, opts Options) (*Client, er
 	return c, nil
 }
 
-// fileURI returns the file:// URI form of path. Used to populate RootURI.
+// fileURI returns the file:// URI form of path. Used to populate RootURI
+// and per-file TextDocument identifiers.
+//
+// Cleaning the path before concatenation matters: a path with `..`,
+// `/./`, or trailing `/` would otherwise produce a malformed URI that
+// LSP servers parse inconsistently (some treat `..` literally, some
+// resolve, some reject). Reserved characters — spaces, `#`, `?`,
+// and others the URI grammar treats specially — are percent-encoded
+// by `net/url` per RFC 3986 so paths containing them stay valid URIs.
 func fileURI(path string) string {
-	return "file://" + path
+	cleaned := filepath.ToSlash(filepath.Clean(path))
+	u := url.URL{Scheme: "file", Path: cleaned}
+	return u.String()
 }
 
 // OpenFile is the minimum information `OpenWorkspace` needs for each
