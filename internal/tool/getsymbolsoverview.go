@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/kellenff/yactt/internal/domain"
@@ -97,13 +98,18 @@ func buildOverviewNode(repo *store.Repo, file string, s parser.Symbol) SymbolsOv
 	}
 }
 
-// resolveFile attempts to find the on-disk absolute path matching either an
-// absolute or repo-relative `p`.
+// resolveFile attempts to find the on-disk absolute path matching either
+// an absolute or repo-relative `p`. The match must land on a real file
+// inside the repo — anything resolving outside the repo (via `..`,
+// an absolute path to elsewhere, etc.) is rejected by the Files() filter
+// at the end. `filepath.Clean` normalises `/./`, `//`, and trailing
+// separators before the lookup so the match against repo.Files is
+// apples-to-apples.
 func resolveFile(repo *store.Repo, p string) (string, bool) {
 	if strings.HasPrefix(p, repo.Root()) {
-		return p, true
+		return filepath.Clean(p), true
 	}
-	full := repo.Root() + "/" + strings.TrimPrefix(p, "/")
+	full := filepath.Join(repo.Root(), strings.TrimPrefix(p, "/"))
 	for _, f := range repo.Files() {
 		if f == full {
 			return f, true
