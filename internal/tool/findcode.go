@@ -57,6 +57,14 @@ var FindCodeSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
+// maxRegexPatternBytes caps find_code regex pattern length. Go's regexp
+// is RE2-based and not vulnerable to catastrophic backtracking, but the
+// realistic DoS surface is *pattern length*: the compiled state machine
+// allocates O(pattern) memory and matching runs in O(N*M) per line. A 4
+// KiB pattern is far past any sensible search request and stays well
+// below the per-MCP-request budget (~10 KiB serialised frames).
+const maxRegexPatternBytes = 4 * 1024
+
 // FindCodeOutputSchema declares the structuredContent shape of find_code.
 // The list of matches is wrapped in an envelope object so the wire frame
 // satisfies the MCP spec's "object" requirement on structuredContent. See
@@ -103,6 +111,9 @@ func FindCode(repo *store.Repo) func(ctx context.Context, args json.RawMessage) 
 		}
 		switch a.PatternKind {
 		case "regex":
+			if len(a.Pattern) > maxRegexPatternBytes {
+				return nil, fmt.Errorf("find_code: pattern too long: %d > %d bytes", len(a.Pattern), maxRegexPatternBytes)
+			}
 			rx, err := regexp.Compile(a.Pattern)
 			if err != nil {
 				return nil, fmt.Errorf("find_code: invalid regex: %w", err)
