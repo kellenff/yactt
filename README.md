@@ -89,7 +89,7 @@ The CLI is intentionally thin — `help`, `version`, `overview`, `mcp serve`. An
                           ▼
 ┌──────────────────────────────────────────────────────────┐
 │  yactt CLI  (cmd/yactt/main.go)                          │
-│  ─ loads repo, wires 19 tools, runs server               │
+│  ─ loads repo, wires 20 tools, runs server               │
 └─────────────────────────┬────────────────────────────────┘
                           │
         ┌─────────────────┼─────────────────┐
@@ -126,11 +126,11 @@ See [docs/design.md](docs/design.md) for the full architectural rationale.
 
 ---
 
-## The 19 tools
+## The 20 tools
 
-The codebase is one node graph; the tools are 19 facets of access.
+The codebase is one node graph; the tools are 20 facets of access.
 
-Fourteen tools operate on a single loaded repo:
+Fifteen tools operate on a single loaded repo:
 
 | Tool | Purpose |
 |---|---|
@@ -142,6 +142,7 @@ Fourteen tools operate on a single loaded repo:
 | `find_symbol` | Locate by qualified name path with glob support (e.g. `internal/store/*/Load`). |
 | `get_symbols_overview` | Top-level outline of a single file. |
 | `find_code` | AST-aware (tree-sitter) or regex pattern search across files. |
+| `search_code` | `find_code` matches collapsed into their containing functions, deduped by symbol, ranked by structural importance (definitions first, popular next, tests last). |
 | `find_referencing_symbols` | All references to a given symbol. |
 | `edit_impact` | Analyse the blast radius of a proposed set of renames. **Does not apply them.** |
 | `get_graph_schema` | Canonical `nodeKinds`, `edgeKinds`, `layers`. Use to write graph queries without hardcoding. |
@@ -162,11 +163,11 @@ Four tools manage the multi-repo registry — they work whether or not the serve
 
 ## Federated code intelligence
 
-`yactt` ships a multi-repo registry at `$XDG_CACHE_HOME/yactt/projects.json` (or `$HOME/.cache/yactt/projects.json` when `XDG_CACHE_HOME` is unset). The four registry tools above operate against that file; the 14 code-intelligence tools stay bound to whatever repo `yactt mcp serve <path>` loaded at startup.
+`yactt` ships a multi-repo registry at `$XDG_CACHE_HOME/yactt/projects.json` (or `$HOME/.cache/yactt/projects.json` when `XDG_CACHE_HOME` is unset). The four registry tools above operate against that file; the 15 code-intelligence tools stay bound to whatever repo `yactt mcp serve <path>` loaded at startup.
 
 Two run modes:
 
-- `yactt mcp serve <path>` — single-repo mode. Loads `<path>`, exposes all 19 tools (14 code-intel + 4 registry + `persisted_query`).
+- `yactt mcp serve <path>` — single-repo mode. Loads `<path>`, exposes all 20 tools (15 code-intel + 4 registry + `persisted_query`).
 - `yactt mcp serve` (no path) — registry mode. Exposes the 4 registry tools + `persisted_query`. Use this to discover or manage which repos are indexed before drilling into one.
 
 Indexing is decoupled from serving: an agent in registry mode can call `index_repository` to prime a repo's cache, then a separate `yactt mcp serve <that-path>` can serve it with warm caches and zero re-parse.

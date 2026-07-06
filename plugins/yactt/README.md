@@ -132,11 +132,11 @@ Optional: clear the GitHub API cache with `rm "${XDG_CACHE_HOME:-$HOME/.cache}/y
 
 ---
 
-## The 10 tools
+## The 11 tools
 
-`tree_overview`, `node_get`, `node_source`, `node_edges`, `search`, `find_symbol`, `get_symbols_overview`, `find_code`, `find_referencing_symbols`, `edit_impact` — and one bonus: `persisted_query` for curated workflows.
+`tree_overview`, `node_get`, `node_source`, `node_edges`, `search`, `find_symbol`, `get_symbols_overview`, `find_code`, `search_code`, `find_referencing_symbols`, `edit_impact` — and one bonus: `persisted_query` for curated workflows.
 
-See the [project README](../../README.md#the-10-tools) for the full table with one-line descriptions and the framing ("10 facets of one node graph"). The plugin's tools are the same set; the prefix `mcp__plugin_yactt_yactt__` is the only difference.
+See the [project README](../../README.md#the-20-tools) for the full table with one-line descriptions and the framing ("20 facets of one node graph"). The plugin's tools are a subset of that set; the prefix `mcp__plugin_yactt_yactt__` is the only difference.
 
 > `edit_impact` does not apply renames — it only analyses the blast radius. Every tool is read-only or analysis-only.
 
