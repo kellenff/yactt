@@ -63,6 +63,7 @@ const DefaultMaxFiles = 50_000
 type Repo struct {
 	root          string
 	cache         *cache.Cache
+	diskCache     *cache.DiskCache // nil when no disk cache is configured
 	mu            sync.RWMutex
 	files         map[string]*source.File
 	symbolsByPath map[string][]parser.Symbol
@@ -83,7 +84,9 @@ type Repo struct {
 type LoadOption func(*loadOptions)
 
 type loadOptions struct {
-	maxFiles int
+	maxFiles          int
+	diskDir           string // empty = no disk cache
+	diskCacheMaxBytes int64  // 0 = unlimited
 }
 
 // WithMaxFiles overrides the per-load source-file cap. Useful in
@@ -91,6 +94,23 @@ type loadOptions struct {
 // 0 disables the cap.
 func WithMaxFiles(n int) LoadOption {
 	return func(o *loadOptions) { o.maxFiles = n }
+}
+
+// WithDiskCache enables a disk-backed parsed-file cache rooted at
+// `dir`. The walk checks the disk cache before source.LoadFile; on
+// miss, the freshly parsed file is written to disk. Empty `dir`
+// disables the disk cache (default).
+func WithDiskCache(dir string) LoadOption {
+	return func(o *loadOptions) { o.diskDir = dir }
+}
+
+// WithDiskCacheMaxBytes caps the disk cache's total size. After each
+// Put, the cache evicts oldest entries (by mtime) until total size is
+// under the cap. Only applies when WithDiskCache is also set. A value
+// of 0 disables the cap (unlimited growth). The CLI defaults to
+// 512 MiB; tests can override with smaller caps to exercise eviction.
+func WithDiskCacheMaxBytes(n int64) LoadOption {
+	return func(o *loadOptions) { o.diskCacheMaxBytes = n }
 }
 
 // Load scans root, parses each source file matching a known language, and
@@ -130,6 +150,15 @@ func Load(root string, opts ...LoadOption) (*Repo, []error, error) {
 		lspVersions:   make(map[parser.Name]string),
 	}
 
+	// Optional disk-backed cache. nil when no dir is configured.
+	if o.diskDir != "" {
+		dc, err := cache.NewDiskCache(o.diskDir, cache.WithMaxBytes(o.diskCacheMaxBytes))
+		if err != nil {
+			return nil, nil, fmt.Errorf("store: disk cache: %w", err)
+		}
+		r.diskCache = dc
+	}
+
 	var (
 		errsMu sync.Mutex
 		errs   []error
@@ -164,10 +193,29 @@ func Load(root string, opts ...LoadOption) (*Repo, []error, error) {
 				return ErrMaxFilesExceeded
 			}
 		}
-		f, ferr := source.LoadFile(path, lang)
-		if ferr != nil {
-			appendErr(ferr)
-			return nil
+		var f *source.File
+		// Disk-cache second-chance: avoid a tree-sitter parse when the
+		// bytes + mtime match a prior Load's record. Cache miss on any
+		// of (file missing, mtime changed, decode failed, re-parse
+		// failed) — caller path falls through to source.LoadFile.
+		if r.diskCache != nil {
+			if st, statErr := os.Stat(path); statErr == nil {
+				if cached, cacheErr := r.diskCache.Get(path, st.ModTime().UnixNano()); cacheErr == nil {
+					f = cached
+				}
+			}
+		}
+		if f == nil {
+			var ferr error
+			f, ferr = source.LoadFile(path, lang)
+			if ferr != nil {
+				appendErr(ferr)
+				return nil
+			}
+			if r.diskCache != nil {
+				// Best-effort: a disk-write failure must not abort Load.
+				_ = r.diskCache.Put(f)
+			}
 		}
 		syms, serr := parser.ExtractSymbols(lang, f.Root, f.Bytes)
 		if serr != nil {

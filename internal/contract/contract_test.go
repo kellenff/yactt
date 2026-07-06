@@ -42,6 +42,7 @@ func everySchema(t *testing.T) map[string]json.RawMessage {
 		"get_symbols_overview":     tool.GetSymbolsOverviewSchema,
 		"find_code":                tool.FindCodeSchema,
 		"find_referencing_symbols": tool.FindReferencingSymbolsSchema,
+		"persisted_query":          tool.PersistedQuerySchema,
 	}
 }
 
@@ -65,6 +66,7 @@ func everyOutputSchema(t *testing.T) map[string]json.RawMessage {
 		"get_symbols_overview":     tool.GetSymbolsOverviewOutputSchema,
 		"find_code":                tool.FindCodeOutputSchema,
 		"find_referencing_symbols": tool.FindReferencingSymbolsOutputSchema,
+		"persisted_query":          tool.PersistedQueryOutputSchema,
 	}
 }
 
