@@ -283,5 +283,8 @@ func TestDetectChangesBoundary(t *testing.T) {
 		{name: "missing_refs", args: `{}`, want: "required"},
 		{name: "both_base_and_since", args: `{"base":"HEAD~1","since":"HEAD~1"}`, want: "mutually exclusive"},
 		{name: "negative_limit", args: `{"base":"HEAD~1","limit":-1}`, want: "limit must be >= 0"},
+		{name: "base_starts_with_dash", args: `{"base":"--upload-pack=evil"}`, want: "must not start with '-'"},
+		{name: "since_starts_with_dash", args: `{"since":"-x"}`, want: "must not start with '-'"},
+		{name: "head_starts_with_dash", args: `{"base":"HEAD~1","head":"--exec=evil"}`, want: "must not start with '-'"},
 	})
 }
