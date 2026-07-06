@@ -140,6 +140,15 @@ var wireShapeDefs = map[string]func(*store.Repo) mcp.ToolDef{
 	"find_referencing_symbols": func(r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "find_referencing_symbols", InputSchema: FindReferencingSymbolsSchema, OutputSchema: FindReferencingSymbolsOutputSchema, Handler: FindReferencingSymbols(r)}
 	},
+	"get_graph_schema": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "get_graph_schema", InputSchema: GetGraphSchemaSchema, OutputSchema: GetGraphSchemaOutputSchema, Handler: GetGraphSchema(r)}
+	},
+	"get_code_snippet": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "get_code_snippet", InputSchema: GetCodeSnippetSchema, OutputSchema: GetCodeSnippetOutputSchema, Handler: GetCodeSnippet(r)}
+	},
+	"get_architecture": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "get_architecture", InputSchema: GetArchitectureSchema, OutputSchema: GetArchitectureOutputSchema, Handler: GetArchitecture(r)}
+	},
 }
 
 // TestWireShape_AllTools pins the wire-shape contract for every tool
@@ -166,6 +175,9 @@ func TestWireShape_AllTools(t *testing.T) {
 		{toolName: "get_symbols_overview", argsJSON: `{"file":"auth/login.go"}`, wantKey: "symbols"},
 		{toolName: "find_code", argsJSON: `{"pattern":"Login","pattern_kind":"regex","limit":10}`, wantKey: "matches"},
 		{toolName: "find_referencing_symbols", argsJSON: `{"symbol":"fn:auth.Login","kinds":["tests"]}`, wantKey: "references"},
+		{toolName: "get_graph_schema", argsJSON: `{}`},
+		{toolName: "get_code_snippet", argsJSON: `{"name_path":"auth.Login"}`},
+		{toolName: "get_architecture", argsJSON: `{}`},
 	}
 	runWireShapeCases(t, r, cases)
 }

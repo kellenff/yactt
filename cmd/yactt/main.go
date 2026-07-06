@@ -338,7 +338,7 @@ func diskCacheDir(repoRoot string) string {
 	return filepath.Join(base, "yactt", hex.EncodeToString(sum[:16]))
 }
 
-// registerAllTools wires the 10 tools from design §5.1 plus the
+// registerAllTools wires the 13 tools from design §5.1 plus the
 // persisted_query tool (Phase 1.5, persistent query registry) onto
 // the server.
 //
@@ -364,6 +364,9 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo) {
 	getSymbolsOverview := tool.GetSymbolsOverview(repo)
 	findCode := tool.FindCode(repo)
 	findReferencingSymbols := tool.FindReferencingSymbols(repo)
+	getGraphSchema := tool.GetGraphSchema(repo)
+	getCodeSnippet := tool.GetCodeSnippet(repo)
+	getArchitecture := tool.GetArchitecture(repo)
 
 	tools := []mcp.ToolDef{
 		{Name: "tree_overview", Description: "Get the top of the repo tree (depth-limited).", InputSchema: tool.TreeOverviewSchema, OutputSchema: tool.TreeOverviewOutputSchema, Handler: treeOverview},
@@ -376,6 +379,9 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo) {
 		{Name: "get_symbols_overview", Description: "Get the top-level structural outline of a file.", InputSchema: tool.GetSymbolsOverviewSchema, OutputSchema: tool.GetSymbolsOverviewOutputSchema, Handler: getSymbolsOverview},
 		{Name: "find_code", Description: "AST-aware or regex pattern search across files.", InputSchema: tool.FindCodeSchema, OutputSchema: tool.FindCodeOutputSchema, Handler: findCode},
 		{Name: "find_referencing_symbols", Description: "Find all symbols that reference a given symbol.", InputSchema: tool.FindReferencingSymbolsSchema, OutputSchema: tool.FindReferencingSymbolsOutputSchema, Handler: findReferencingSymbols},
+		{Name: "get_graph_schema", Description: "List the canonical node kinds, edge kinds, and layer names. Use to write graph queries without hardcoding.", InputSchema: tool.GetGraphSchemaSchema, OutputSchema: tool.GetGraphSchemaOutputSchema, Handler: getGraphSchema},
+		{Name: "get_code_snippet", Description: "Source slice for a symbol by stable id OR qualified name path. One call replaces find_symbol+node_source.", InputSchema: tool.GetCodeSnippetSchema, OutputSchema: tool.GetCodeSnippetOutputSchema, Handler: getCodeSnippet},
+		{Name: "get_architecture", Description: "Structural summary: languages, packages, hotspots, dead-code candidates, import cycles.", InputSchema: tool.GetArchitectureSchema, OutputSchema: tool.GetArchitectureOutputSchema, Handler: getArchitecture},
 	}
 	for _, t := range tools {
 		srv.RegisterTool(t)
@@ -397,6 +403,9 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo) {
 		"get_symbols_overview":     getSymbolsOverview,
 		"find_code":                findCode,
 		"find_referencing_symbols": findReferencingSymbols,
+		"get_graph_schema":         getGraphSchema,
+		"get_code_snippet":         getCodeSnippet,
+		"get_architecture":         getArchitecture,
 	}
 	runner := persisted.NewRunner(reg, toolFuncs)
 	srv.RegisterTool(mcp.ToolDef{

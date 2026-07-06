@@ -89,14 +89,14 @@ The CLI is intentionally thin — `help`, `version`, `overview`, `mcp serve`. An
                           ▼
 ┌──────────────────────────────────────────────────────────┐
 │  yactt CLI  (cmd/yactt/main.go)                          │
-│  ─ loads repo, wires 11 tools, runs server               │
+│  ─ loads repo, wires 14 tools, runs server               │
 └─────────────────────────┬────────────────────────────────┘
                           │
         ┌─────────────────┼─────────────────┐
         ▼                 ▼                 ▼
 ┌───────────────┐ ┌──────────────┐ ┌───────────────────┐
 │ internal/mcp  │ │ internal/tool│ │ internal/persisted│
-│ JSON-RPC      │ │ 10 handlers  │ │ curated-workflow  │
+│ JSON-RPC      │ │ 13 handlers  │ │ curated-workflow  │
 │ server        │ │ + schemas    │ │ registry (Phase 1.5)│
 └───────┬───────┘ └──────┬───────┘ └─────────┬─────────┘
         └─────────────────┼─────────────────┘
@@ -126,9 +126,9 @@ See [docs/design.md](docs/design.md) for the full architectural rationale.
 
 ---
 
-## The 10 tools
+## The 13 tools
 
-The codebase is one node graph; the tools are 10 facets of access.
+The codebase is one node graph; the tools are 13 facets of access.
 
 | Tool | Purpose |
 |---|---|
@@ -142,8 +142,11 @@ The codebase is one node graph; the tools are 10 facets of access.
 | `find_code` | AST-aware (tree-sitter) or regex pattern search across files. |
 | `find_referencing_symbols` | All references to a given symbol. |
 | `edit_impact` | Analyse the blast radius of a proposed set of renames. **Does not apply them.** |
+| `get_graph_schema` | Canonical `nodeKinds`, `edgeKinds`, `layers`. Use to write graph queries without hardcoding. |
+| `get_code_snippet` | Source slice for a symbol by stable `id` OR qualified `name_path`. One call replaces `find_symbol` + `node_source`. |
+| `get_architecture` | Structural summary: languages, packages, hotspots, dead-code candidates, import cycles. |
 
-A eleventh tool, `persisted_query`, runs registered curated workflows by id. Out of the box it ships one op: `onboarding` (a one-shot `tree_overview` at depth 2 — the smallest useful workflow).
+A fourteenth tool, `persisted_query`, runs registered curated workflows by id. Out of the box it ships one op: `onboarding` (a one-shot `tree_overview` at depth 2 — the smallest useful workflow).
 
 ---
 

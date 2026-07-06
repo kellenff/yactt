@@ -1104,7 +1104,7 @@ A persistent SQLite-backed knowledge graph; single static C binary; tree-sitter 
 | **Cross-service edges** | Static route extraction + call-site matching with confidence scores. `ROUTE_DEFINES` (HTTP/gRPC/GraphQL/tRPC), `EMITS`/`LISTENS_ON` (Socket.IO, EventEmitter, message buses) | New layer — extends `node_edges` edge kinds |
 | **`trace_path`** | Multi-hop BFS through call/caller edges, depth 1–5 | Distinct from single-hop `find_referencing_symbols` — most "how does X reach Y" questions need 2–3 hops, and a single-hop answer is misleading |
 | **`detect_changes`** | git diff → affected symbols + blast radius + risk classification (high/med/low) | Different shape than our `edit_impact` (real diff vs proposed); adds risk scoring layer we don't have |
-| **`get_architecture`** | Single bundled view: langs, packages, routes, hotspots, semantic clusters, ADRs | Augments `tree_overview` — useful "show me everything once" answer |
+| **`get_architecture`** | Single bundled view: langs, packages, routes, hotspots, semantic clusters, ADRs | **Shipped (Issue #7).** Languages + package roll-up + top-N hotspots + uncalled-symbol candidates + Tarjan SCC import cycles. See `internal/tool/architecture.go`. Augments `tree_overview` — useful "show me everything once" answer |
 | **ADR management** | Architecture Decision Records persisted alongside the graph, team-shared | First-class MCP tool, *separate* category from code navigation |
 | **IaC indexing** | Dockerfiles, K8s manifests, Kustomize overlays become first-class tree nodes | Worth treating IaC as another language family |
 | **Team-shared index** | `.codebase-memory/graph.db.zst` checked into git | "Pre-indexed graph" pattern — eliminates cold-start for teammates |
@@ -1152,7 +1152,7 @@ Concretely — features worth promoting from the prior-art inventory into MVP or
 4. **`detect_changes` with risk classification.** Like our `edit_impact` but applied to a real diff. Risk = `callers_count × test_coverage_gap × public_api` heuristic. Higher signal than our current boolean `safe_to_rename`.
 5. **Cross-service edge kinds.** Adds `EMITS`, `LISTENS_ON`, `ROUTE_DEFINES`, `CALLS_HTTP`. Required for multi-service monorepos and pub/sub systems — and *that's most production codebases*.
 6. **Team-shared index artifact.** `.federated-graph/graph.db.zst` (or SQLite blob) checked into git. Cold-start drops from minutes to milliseconds for teammates.
-7. **`get_architecture`.** Richer than `tree_overview(depth=2)` — pulls in routes, hotspots, IaC clusters, dead-code candidates, semantic clusters. The "show me the shape of this thing" answer.
+7. **`get_architecture`.** **Shipped (Issue #7).** Richer than `tree_overview(depth=2)` — pulls in hotspots, dead-code candidates, import cycles (Tarjan SCC). See `internal/tool/architecture.go`. The "show me the shape of this thing" answer. Routes / IaC clusters / ADRs deferred.
 8. **ADR management.** `manage_adr` as a standalone MCP tool. Decisions, not code — shares project scope but not the tree. Worth being explicit it's a separate category so consumers don't conflate.
 9. **IaC indexing.** Treat Dockerfiles, K8s manifests, Kustomize overlays as first-class trees. Large scope unlock for platform / infra engineers, but low implementation cost (each is a tree-sitter grammar + a thin schema).
 10. **`DATA_FLOWS` layer.** Lighter than CodeQL, ready sooner. Argument-to-parameter mapping with field-access chains. Sufficient for ~80% of "how does this value reach that sink" questions without a CodeQL build.

@@ -141,6 +141,14 @@ func LSPProvenance(tool, version string) Provenance {
 	return NewProvenance(tool, version)
 }
 
+// YacttProvenance stamps the tool itself as the data origin. Used by tools
+// whose answer is built from in-process constants (e.g. get_graph_schema
+// reporting the NodeKind / EdgeKind enums) rather than from a parse pass —
+// stamping "tree-sitter" would be misleading there.
+func YacttProvenance() Provenance {
+	return NewProvenance("yactt", "0.0.0-dev")
+}
+
 // Signature is the typed signature layer.
 type Signature struct {
 	Text       string         `json:"text"`
