@@ -37,7 +37,8 @@ func SymbolKind(s Symbol) domain.NodeKind {
 	case "method_declaration":
 		return domain.KindMethod
 	case "type_declaration", "class_declaration",
-		"interface_declaration", "type_alias_declaration", "enum_declaration":
+		"interface_declaration", "type_alias_declaration", "enum_declaration",
+		"struct_declaration", "trait_declaration":
 		return domain.KindClass
 	}
 	return domain.KindModule
@@ -60,7 +61,8 @@ func kindLabel(kind string) string {
 	case "method_declaration":
 		return "Method"
 	case "type_declaration", "class_declaration",
-		"interface_declaration", "type_alias_declaration", "enum_declaration":
+		"interface_declaration", "type_alias_declaration", "enum_declaration",
+		"struct_declaration", "trait_declaration":
 		return "Class"
 	}
 	return "Symbol"
@@ -78,6 +80,8 @@ func ExtractSymbols(lang Language, root *sitter.Node, source []byte) ([]Symbol, 
 		return extractJavaScriptSymbols(root, source), nil
 	case Python:
 		return extractPythonSymbols(root, source), nil
+	case Rust:
+		return extractRustSymbols(root, source), nil
 	}
 	return nil, ErrUnsupported
 }

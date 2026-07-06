@@ -1122,3 +1122,270 @@ func TestExtractSymbolsPyNilRoot(t *testing.T) {
 		t.Errorf("got %d symbols, want 0", len(syms))
 	}
 }
+
+// --- Rust --------------------------------------------------------------
+
+// parseRust runs the Rust grammar against an inline source snippet and
+// returns the root node. Used by collaboration tests that need a real
+// parse tree.
+func parseRust(t *testing.T, src string) *sitter.Node {
+	t.Helper()
+	lang := parser.Rust{}
+	root, err := sitter.ParseCtx(context.Background(), []byte(src), lang.Grammar())
+	if err != nil {
+		t.Fatalf("ParseCtx: %v", err)
+	}
+	if root == nil {
+		t.Fatal("ParseCtx returned nil root")
+	}
+	return root
+}
+
+func TestDetectRust(t *testing.T) {
+	cases := []string{
+		"/abs/path/foo.rs", "relative/bar.rs", "CamelCase.RS",
+		"src/lib.rs", "tests/integration_test.rs",
+	}
+	for _, p := range cases {
+		t.Run(p, func(t *testing.T) {
+			lang, err := parser.Detect(p)
+			if err != nil {
+				t.Fatalf("Detect(%q): %v", p, err)
+			}
+			if lang.Name() != parser.LangRust {
+				t.Errorf("Name = %q, want %q", lang.Name(), parser.LangRust)
+			}
+		})
+	}
+}
+
+func TestModulePathRust(t *testing.T) {
+	// Rust has no file-local module name — always "".
+	for _, src := range []string{
+		"",
+		"fn main() {}\n",
+		"struct Foo;\nimpl Foo { fn bar(&self) {} }\n",
+	} {
+		t.Run(src, func(t *testing.T) {
+			var lang parser.Language = parser.Rust{}
+			if got := lang.ModulePath(nil, []byte(src)); got != "" {
+				t.Errorf("ModulePath = %q, want empty", got)
+			}
+		})
+	}
+}
+
+func TestByNameRust(t *testing.T) {
+	lang, err := parser.ByName(parser.LangRust)
+	if err != nil {
+		t.Fatalf("ByName(rust): %v", err)
+	}
+	if lang.Name() != parser.LangRust {
+		t.Errorf("Name = %q, want %q", lang.Name(), parser.LangRust)
+	}
+	if got := lang.FileExtensions(); len(got) != 1 || got[0] != "rs" {
+		t.Errorf("FileExtensions = %v, want [\"rs\"]", got)
+	}
+}
+
+const rustFunctions = `pub fn login(user: &str, password: &str) -> bool {
+    true
+}
+
+pub async fn fetch(url: &str) -> Option<String> {
+    None
+}
+
+fn helper() -> u32 {
+    42
+}
+`
+
+func TestExtractSymbolsRustFunction(t *testing.T) {
+	root := parseRust(t, rustFunctions)
+	syms, err := parser.ExtractSymbols(parser.Rust{}, root, []byte(rustFunctions))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	if len(syms) != 3 {
+		t.Fatalf("got %d symbols, want 3: %+v", len(syms), syms)
+	}
+	names := map[string]string{}
+	for _, s := range syms {
+		if s.Kind != "function_declaration" {
+			t.Errorf("Kind = %q, want function_declaration", s.Kind)
+		}
+		names[s.Name] = s.Kind
+	}
+	if names["login"] != "function_declaration" || names["fetch"] != "function_declaration" || names["helper"] != "function_declaration" {
+		t.Errorf("names = %v, want all function_declaration", names)
+	}
+}
+
+const rustTypes = `pub struct User {
+    name: String,
+}
+
+pub enum Role {
+    Admin,
+    Guest,
+}
+
+pub trait Greeter {
+    fn greet(&self) -> String;
+}
+
+pub type UserId = u64;
+`
+
+func TestExtractSymbolsRustTypes(t *testing.T) {
+	root := parseRust(t, rustTypes)
+	syms, err := parser.ExtractSymbols(parser.Rust{}, root, []byte(rustTypes))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	counts := map[string]int{}
+	names := map[string]string{}
+	for _, s := range syms {
+		counts[s.Kind]++
+		names[s.Name] = s.Kind
+	}
+	if counts["struct_declaration"] != 1 {
+		t.Errorf("struct_declaration count = %d, want 1: %+v", counts["struct_declaration"], syms)
+	}
+	if counts["enum_declaration"] != 1 {
+		t.Errorf("enum_declaration count = %d, want 1: %+v", counts["enum_declaration"], syms)
+	}
+	if counts["trait_declaration"] != 1 {
+		t.Errorf("trait_declaration count = %d, want 1: %+v", counts["trait_declaration"], syms)
+	}
+	if counts["type_declaration"] != 1 {
+		t.Errorf("type_declaration count = %d, want 1: %+v", counts["type_declaration"], syms)
+	}
+	if names["User"] != "struct_declaration" {
+		t.Errorf("User kind = %q, want struct_declaration", names["User"])
+	}
+	if names["Role"] != "enum_declaration" {
+		t.Errorf("Role kind = %q, want enum_declaration", names["Role"])
+	}
+	if names["Greeter"] != "trait_declaration" {
+		t.Errorf("Greeter kind = %q, want trait_declaration", names["Greeter"])
+	}
+	if names["UserId"] != "type_declaration" {
+		t.Errorf("UserId kind = %q, want type_declaration", names["UserId"])
+	}
+}
+
+const rustImpl = `pub struct Server {
+    port: u16,
+}
+
+impl Server {
+    pub fn new(port: u16) -> Self {
+        Server { port }
+    }
+
+    pub fn handle(&self, req: String) -> String {
+        req
+    }
+}
+
+pub trait Greeter {
+    fn greet(&self) -> String;
+}
+
+impl Greeter for Server {
+    fn greet(&self) -> String {
+        format!("hello on port {}", self.port)
+    }
+}
+`
+
+func TestExtractSymbolsRustImpl(t *testing.T) {
+	root := parseRust(t, rustImpl)
+	syms, err := parser.ExtractSymbols(parser.Rust{}, root, []byte(rustImpl))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	counts := map[string]int{}
+	methods := map[string]string{} // name -> receiver
+	for _, s := range syms {
+		counts[s.Kind]++
+		if s.Kind == "method_declaration" {
+			methods[s.Name] = s.Receiver
+		}
+	}
+	// 1 struct, 1 trait, plus 3 methods (2 inherent impl + 1 trait impl
+	// on Server). impl_item itself is intentionally NOT a symbol.
+	if counts["struct_declaration"] != 1 {
+		t.Errorf("struct_declaration count = %d, want 1: %+v", counts["struct_declaration"], syms)
+	}
+	if counts["trait_declaration"] != 1 {
+		t.Errorf("trait_declaration count = %d, want 1: %+v", counts["trait_declaration"], syms)
+	}
+	if counts["method_declaration"] != 3 {
+		t.Errorf("method_declaration count = %d, want 3: %+v", counts["method_declaration"], syms)
+	}
+	// All three methods belong to Server, even the one inside
+	// `impl Greeter for Server` — receiver is the IMPLEMENTER, not the
+	// trait. This is the critical routing rule for symbol-graph lookups.
+	if methods["new"] != "Server" {
+		t.Errorf("new receiver = %q, want Server", methods["new"])
+	}
+	if methods["handle"] != "Server" {
+		t.Errorf("handle receiver = %q, want Server", methods["handle"])
+	}
+	if methods["greet"] != "Server" {
+		t.Errorf("greet receiver = %q, want Server (implementer, not trait Greeter)", methods["greet"])
+	}
+}
+
+const rustTraitImpl = `pub trait Drawable {
+    fn draw(&self);
+}
+
+pub struct Circle;
+
+impl Drawable for Circle {
+    fn draw(&self) {}
+}
+`
+
+// TestExtractSymbolsRustTraitImplReceiver verifies the rule that for
+// `impl Trait for Type`, the receiver stamped on the method is the
+// implementing type ("Circle"), not the trait ("Drawable"). The resolver
+// uses (Receiver, Name) as the method lookup key, and call sites
+// reference the type doing the calling — not the trait providing the
+// method.
+func TestExtractSymbolsRustTraitImplReceiver(t *testing.T) {
+	root := parseRust(t, rustTraitImpl)
+	syms, err := parser.ExtractSymbols(parser.Rust{}, root, []byte(rustTraitImpl))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	var draws []parser.Symbol
+	for _, s := range syms {
+		if s.Name == "draw" {
+			draws = append(draws, s)
+		}
+	}
+	if len(draws) != 1 {
+		t.Fatalf("got %d `draw` symbols, want 1: %+v", len(draws), syms)
+	}
+	if draws[0].Kind != "method_declaration" {
+		t.Errorf("Kind = %q, want method_declaration", draws[0].Kind)
+	}
+	if draws[0].Receiver != "Circle" {
+		t.Errorf("Receiver = %q, want Circle (implementer, not trait Drawable)", draws[0].Receiver)
+	}
+}
+
+func TestExtractSymbolsRustNilRoot(t *testing.T) {
+	syms, err := parser.ExtractSymbols(parser.Rust{}, nil, nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(syms) != 0 {
+		t.Errorf("got %d symbols, want 0", len(syms))
+	}
+}
