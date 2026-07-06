@@ -117,7 +117,7 @@ func runOverview(args []string) error {
 // runMCPServe starts the MCP server on stdio. Two modes:
 //
 //   - Single-repo mode (one positional path): the server loads that
-//     repo into memory and exposes the 13 code-intelligence tools
+//     repo into memory and exposes the 14 code-intelligence tools
 //     against it, plus the registry tools.
 //   - Registry mode (no positional path): the server skips the repo
 //     load and exposes only the four registry tools — useful for
@@ -331,13 +331,13 @@ func loadOptsWithDiskCache(repoRoot string) []store.LoadOption {
 // registerAllTools wires the tools onto the server. Behaviour
 // depends on whether `repo` is nil:
 //
-//   - repo != nil (single-repo mode): the 13 code-intelligence
+//   - repo != nil (single-repo mode): the 14 code-intelligence
 //     tools + persisted_query + the 4 registry tools. Useful for
 //     agents that need to query a repo AND manage its
 //     neighbours.
 //   - repo == nil (registry mode): only the 4 registry tools +
 //     persisted_query (which still works because it can fall
-//     back to the registry-only toolFunc map). The 13 repo-bound
+//     back to the registry-only toolFunc map). The 14 repo-bound
 //     tools can't exist without a repo, so they aren't
 //     registered — agents in registry mode call
 //     `index_repository` first if they want to drill in.
@@ -402,6 +402,7 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo, reg *registry.Registry)
 	getGraphSchema := tool.GetGraphSchema(repo)
 	getCodeSnippet := tool.GetCodeSnippet(repo)
 	getArchitecture := tool.GetArchitecture(repo)
+	queryGraph := tool.QueryGraph(repo)
 
 	tools := []mcp.ToolDef{
 		{Name: "tree_overview", Description: "Get the top of the repo tree (depth-limited).", InputSchema: tool.TreeOverviewSchema, OutputSchema: tool.TreeOverviewOutputSchema, Handler: treeOverview},
@@ -417,6 +418,7 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo, reg *registry.Registry)
 		{Name: "get_graph_schema", Description: "List the canonical node kinds, edge kinds, and layer names. Use to write graph queries without hardcoding.", InputSchema: tool.GetGraphSchemaSchema, OutputSchema: tool.GetGraphSchemaOutputSchema, Handler: getGraphSchema},
 		{Name: "get_code_snippet", Description: "Source slice for a symbol by stable id OR qualified name path. One call replaces find_symbol+node_source.", InputSchema: tool.GetCodeSnippetSchema, OutputSchema: tool.GetCodeSnippetOutputSchema, Handler: getCodeSnippet},
 		{Name: "get_architecture", Description: "Structural summary: languages, packages, hotspots, dead-code candidates, import cycles.", InputSchema: tool.GetArchitectureSchema, OutputSchema: tool.GetArchitectureOutputSchema, Handler: getArchitecture},
+		{Name: "query_graph", Description: "Multi-hop graph traversal with edge-kind chains, depth cap, and kind/exclude filters. Composes node_edges across hops.", InputSchema: tool.QueryGraphSchema, OutputSchema: tool.QueryGraphOutputSchema, Handler: queryGraph},
 	}
 	for _, t := range tools {
 		srv.RegisterTool(t)
@@ -439,6 +441,7 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo, reg *registry.Registry)
 		"get_graph_schema":         getGraphSchema,
 		"get_code_snippet":         getCodeSnippet,
 		"get_architecture":         getArchitecture,
+		"query_graph":              queryGraph,
 	}
 	registerPersistedQuery(srv, toolFuncs)
 }
