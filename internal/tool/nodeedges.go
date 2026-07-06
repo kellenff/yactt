@@ -258,7 +258,9 @@ func scanCallers(repo *store.Repo, file string, sym parser.Symbol, limit int, p 
 	// tree-sitter scan on the same set of files would only add noise.
 	if client, _, _ := repo.LSPForFile(file); client != nil {
 		if col, ok := nameColumnFor(repo, file, sym); ok {
-			refs, rerr := client.References(referencesCtx(), file, sym.StartRow, col, true)
+			ctx, cancel := referencesCtx()
+			defer cancel()
+			refs, rerr := client.References(ctx, file, sym.StartRow, col, true)
 			if rerr == nil && len(refs) > 0 {
 				out := make([]NodeEdgesResult, 0, len(refs))
 				lprov := lspProvenance(repo, file)
@@ -345,13 +347,11 @@ func scanCallers(repo *store.Repo, file string, sym parser.Symbol, limit int, p 
 
 // referencesCtx returns a context bounded by ~750ms — enough for a warm
 // gopls round trip, below the per-tool-call budget (1.5s for node_edges
-// per design §5.1). Tests inject shorter contexts via the same options.
-func referencesCtx() context.Context {
-	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
-	// cancelCtx prevents a goroutine leak on the success path; we
-	// explicitly hold a CancelFunc captured into the closure.
-	_ = cancel
-	return ctx
+// per design §5.1). The returned CancelFunc MUST be deferred at the
+// call site; discarding it leaks the underlying timer until the deadline
+// fires. Tests inject shorter contexts via the same options.
+func referencesCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 750*time.Millisecond)
 }
 
 // nameColumnFor returns the byte-column where `sym.Name` lives on its
