@@ -76,6 +76,8 @@ func ExtractSymbols(lang Language, root *sitter.Node, source []byte) ([]Symbol, 
 		return extractTypeScriptSymbols(root, source), nil
 	case JavaScript:
 		return extractJavaScriptSymbols(root, source), nil
+	case Python:
+		return extractPythonSymbols(root, source), nil
 	}
 	return nil, ErrUnsupported
 }

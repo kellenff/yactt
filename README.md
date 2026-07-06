@@ -12,7 +12,7 @@
 > gh attestation verify yactt_darwin_arm64.tar.gz -R kellenff/yactt
 > ```
 
-yactt is a Model Context Protocol server that gives an AI agent both the raw bytes of a source file **and** the resolved symbol/call/reference graph — the empty quadrant of the code-intelligence tradeoff for polyglot Go, TypeScript, and JavaScript repositories. *Yet Another Code Tree Tool*, in the GNU / YACC / WINE tradition; the name is tongue-in-cheek, the tool is serious.
+yactt is a Model Context Protocol server that gives an AI agent both the raw bytes of a source file **and** the resolved symbol/call/reference graph — the empty quadrant of the code-intelligence tradeoff for polyglot Go, TypeScript, JavaScript, and Python repositories. *Yet Another Code Tree Tool*, in the GNU / YACC / WINE tradition; the name is tongue-in-cheek, the tool is serious.
 
 ---
 
@@ -47,7 +47,7 @@ quadrantChart
   grep: [0.10, 0.05]
 ```
 
-yactt occupies the empty corner. It uses [tree-sitter](https://tree-sitter.github.io/) as the unconditional syntactic floor and opportunistically attaches [`gopls`](https://pkg.go.dev/golang.org/x/tools/gopls) and [`typescript-language-server`](https://github.com/typescript-language-server/typescript-language-server) for resolved type/call/reference data when those servers are on `PATH`. Without them, yactt still works — every answer is then stamped `provenance.tool = "tree-sitter"` so the agent can branch on what it trusts.
+yactt occupies the empty corner. It uses [tree-sitter](https://tree-sitter.github.io/) as the unconditional syntactic floor and opportunistically attaches [`gopls`](https://pkg.go.dev/golang.org/x/tools/gopls), [`typescript-language-server`](https://github.com/typescript-language-server/typescript-language-server), and [`pyright-langserver`](https://github.com/microsoft/pyright) for resolved type/call/reference data when those servers are on `PATH`. Without them, yactt still works — every answer is then stamped `provenance.tool = "tree-sitter"` so the agent can branch on what it trusts.
 
 The wire surface is [MCP](https://modelcontextprotocol.org/), not a custom protocol. Every tool declares both an `InputSchema` and an `OutputSchema` (the `OutputSchema` must declare `type:"object"` — enforced at registration time), so an agent gets structured results it can branch on without parsing prose.
 
@@ -313,9 +313,9 @@ The trust strip above (`SLSA L3 · 21 tools · 1 dep · read-only`) is four clai
   go 1.26.4
   require github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
   ```
-  The pseudo-version is a literal commit hash of upstream `smacker/go-tree-sitter`. All three grammar bindings yactt actually loads (`.../golang`, `.../javascript`, `.../typescript/typescript`) are subpackages of the same module and share the commit pin.
+  The pseudo-version is a literal commit hash of upstream `smacker/go-tree-sitter`. All four grammar bindings yactt actually loads (`.../golang`, `.../javascript`, `.../typescript/typescript`, `.../python`) are subpackages of the same module and share the commit pin.
 
-- **`read-only`** — the MCP surface exposes no write tools. `edit_impact` analyses renames; it does not apply them. The only paths yactt ever writes to are inside the disk cache directory (`$XDG_CACHE_HOME/yactt/<root-hash>/`) and the registry (`$XDG_CACHE_HOME/yactt/projects.json`). Both are user-scoped and never overlap a target repo. `yactt mcp serve` makes no outbound network calls except to spawn `gopls` / `typescript-language-server` as child processes.
+- **`read-only`** — the MCP surface exposes no write tools. `edit_impact` analyses renames; it does not apply them. The only paths yactt ever writes to are inside the disk cache directory (`$XDG_CACHE_HOME/yactt/<root-hash>/`) and the registry (`$XDG_CACHE_HOME/yactt/projects.json`). Both are user-scoped and never overlap a target repo. `yactt mcp serve` makes no outbound network calls except to spawn `gopls` / `typescript-language-server` / `pyright-langserver` as child processes.
 
 ---
 
@@ -325,7 +325,6 @@ Honest beats, so you don't have to find them by running into them:
 
 - **You need dataflow / taint analysis across function calls.** yactt's edges are syntactic and resolved-type-level, not value-level. Reach for CodeQL or Semgrep.
 - **You need SCIP-style cross-repo queries across N repos.** The registry indexes and serves each repo separately; today there's no shared workspace index that stitches symbols across repo boundaries. Multi-repo query is on the roadmap, not shipped.
-- **You need Python language servers.** Tree-sitter wiring for Python is on the roadmap; the parser today supports Go, TypeScript, JavaScript. Without a grammar, `python-lsp-server` is never spawned.
 - **You need to edit, not just navigate.** yactt is read-only by design. `edit_impact` is the closest tool — it tells you the blast radius of a rename; it does not apply it.
 
 If one of the above is your actual job, yactt is the wrong tool today.
@@ -343,11 +342,11 @@ Shipped:
 - Multi-hop `query_graph` (Issue #9)
 - `detect_changes` git-ref diff impact (Issue #11)
 - `search_code` dedup + rank by enclosing symbol
+- **Python language support** — tree-sitter `.py` / `.pyi` symbol extraction + `pyright-langserver` LSP bridge
 - SLSA Build Provenance Level 3 attestations on every release
 
 Next:
 
-- Python grammar (tree-sitter wiring, then `python-lsp-server` if available)
 - Multi-repo / federated query (the "federated" in the tagline awaits)
 - Persisted-query step chaining and parameter forwarding
 - Consumer-side provenance verification inside the SessionStart bootstrap (today: SHA256 + TOFU; tomorrow: `gh attestation verify`)
@@ -365,7 +364,7 @@ yactt reads untrusted source code on every MCP call. Full threat model, install-
 
 The structured layers (`signature`, `body`, `summary`) carry no attacker-authored prose and can be trusted as descriptions of structure. If you point yactt at a repo you do not fully trust, treat the `source`, `tokens`, and `docs` layers as untrusted data.
 
-**Tree-sitter as the unconditional floor.** `yactt mcp serve` works without `gopls` or `typescript-language-server` installed; every answer is then stamped `provenance.tool = "tree-sitter"` so an agent can branch on the provenance it trusts.
+**Tree-sitter as the unconditional floor.** `yactt mcp serve` works without `gopls`, `typescript-language-server`, or `pyright-langserver` installed; every answer is then stamped `provenance.tool = "tree-sitter"` so an agent can branch on the provenance it trusts.
 
 **Bounded resources.** `MaxFiles` defaults to 50,000; disk cache defaults to 512 MiB (`YACTT_DISK_CACHE_MAX_BYTES`); LSP startup is bounded at 15 s; per-file LSP warm-up at 5 s.
 

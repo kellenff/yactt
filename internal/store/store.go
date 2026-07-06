@@ -51,9 +51,10 @@ const DefaultMaxFiles = 50_000
 // use — symbol/file accessors take the internal mutex.
 //
 // When the load can locate one or more language servers (gopls for Go,
-// typescript-language-server for TS/JS) on PATH, the repo carries live
-// *lsp.Client entries in `lsp`, keyed by parser.Name. Materializers consult
-// the right client per file; tree-sitter is the unconditional floor.
+// typescript-language-server for TS/JS, pyright-langserver for Python) on
+// PATH, the repo carries live *lsp.Client entries in `lsp`, keyed by
+// parser.Name. Materializers consult the right client per file; tree-sitter
+// is the unconditional floor.
 //
 // A nil entry (or absent key) for a language means "no server for this
 // language at Load time" — materializers fall through to tree-sitter with
@@ -303,6 +304,9 @@ func Load(root string, opts ...LoadOption) (*Repo, []error, error) {
 		r.lspVersions[parser.LangTypeScript] = tsClient.Version()
 		r.lspVersions[parser.LangJavaScript] = tsClient.Version()
 	}
+	// pyright-langserver handles Python sources and stubs from a single
+	// workspace — `.py` and `.pyi` both route to the same client.
+	tryStart(parser.LangPython, "pyright-langserver", lsp.StartPython)
 
 	// Eagerly open every parsed file in the server that knows about its
 	// language. Without this warm-up, both gopls and typescript-language-
@@ -353,6 +357,13 @@ func Load(root string, opts ...LoadOption) (*Repo, []error, error) {
 			return "", false
 		})
 	}
+	warmFilesFor(r.lsp[parser.LangPython], func(p string) (string, bool) {
+		switch strings.ToLower(filepath.Ext(p)) {
+		case ".py", ".pyi":
+			return "python", true
+		}
+		return "", false
+	})
 
 	return r, errs, nil
 }
