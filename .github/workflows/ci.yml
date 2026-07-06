@@ -74,11 +74,11 @@ jobs:
     # binary.
     #
     # Secret-scanning (Issue #4, mitigation #4b) is handled at the platform
-    # layer via GitHub Secret Scanning + Dependabot rather than an in-CI
-    # gitleaks step — the gitleaks upstream has had recent availability
-    # issues and the action-wrapped binary download added a non-trivial
-    # failure surface. Secret Scanning is enabled at the repo level (see
-    # repo settings → Code security and analysis).
+    # layer via GitHub Secret Scanning (repo settings → Code security and
+    # analysis) rather than an in-CI gitleaks step — the gitleaks upstream
+    # had availability issues and the action-wrapped binary download added
+    # a non-trivial failure surface. Dependabot covers dependency CVEs
+    # separately and does not perform secret scanning.
     name: govulncheck
     runs-on: ubuntu-latest
     steps:
