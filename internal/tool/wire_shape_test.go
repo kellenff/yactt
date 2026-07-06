@@ -151,6 +151,9 @@ var wireShapeDefs = map[string]func(*store.Repo) mcp.ToolDef{
 	"get_architecture": func(r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "get_architecture", InputSchema: GetArchitectureSchema, OutputSchema: GetArchitectureOutputSchema, Handler: GetArchitecture(r)}
 	},
+	"query_graph": func(r *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "query_graph", InputSchema: QueryGraphSchema, OutputSchema: QueryGraphOutputSchema, Handler: QueryGraph(r)}
+	},
 }
 
 // TestWireShape_AllTools pins the wire-shape contract for every tool
@@ -180,6 +183,7 @@ func TestWireShape_AllTools(t *testing.T) {
 		{toolName: "get_graph_schema", argsJSON: `{}`},
 		{toolName: "get_code_snippet", argsJSON: `{"name_path":"auth.Login"}`},
 		{toolName: "get_architecture", argsJSON: `{}`},
+		{toolName: "query_graph", argsJSON: `{"from":"meth:auth.Alpha.Ping","follow":["callees","callers"],"depth":2,"limit":10}`, wantKey: "rows"},
 	}
 	runWireShapeCases(t, r, cases)
 }

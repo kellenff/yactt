@@ -89,14 +89,14 @@ The CLI is intentionally thin — `help`, `version`, `overview`, `mcp serve`. An
                           ▼
 ┌──────────────────────────────────────────────────────────┐
 │  yactt CLI  (cmd/yactt/main.go)                          │
-│  ─ loads repo, wires 14 tools, runs server               │
+│  ─ loads repo, wires 19 tools, runs server               │
 └─────────────────────────┬────────────────────────────────┘
                           │
         ┌─────────────────┼─────────────────┐
         ▼                 ▼                 ▼
 ┌───────────────┐ ┌──────────────┐ ┌───────────────────┐
 │ internal/mcp  │ │ internal/tool│ │ internal/persisted│
-│ JSON-RPC      │ │ 17 handlers  │ │ curated-workflow  │
+│ JSON-RPC      │ │ 19 handlers  │ │ curated-workflow  │
 │ server        │ │ + schemas    │ │ registry (Phase 1.5)│
 └───────┬───────┘ └──────┬───────┘ └─────────┬─────────┘
         └─────────────────┼─────────────────┘
@@ -126,11 +126,11 @@ See [docs/design.md](docs/design.md) for the full architectural rationale.
 
 ---
 
-## The 17 tools
+## The 19 tools
 
-The codebase is one node graph; the tools are 17 facets of access.
+The codebase is one node graph; the tools are 19 facets of access.
 
-Thirteen tools operate on a single loaded repo:
+Fourteen tools operate on a single loaded repo:
 
 | Tool | Purpose |
 |---|---|
@@ -147,8 +147,9 @@ Thirteen tools operate on a single loaded repo:
 | `get_graph_schema` | Canonical `nodeKinds`, `edgeKinds`, `layers`. Use to write graph queries without hardcoding. |
 | `get_code_snippet` | Source slice for a symbol by stable `id` OR qualified `name_path`. One call replaces `find_symbol` + `node_source`. |
 | `get_architecture` | Structural summary: languages, packages, hotspots, dead-code candidates, import cycles. |
+| `query_graph` | Multi-hop traversal — chain edge kinds across hops with `follow`, cap with `depth`/`limit`, filter by `kind`. |
 
-A fourteenth tool, `persisted_query`, runs registered curated workflows by id. Out of the box it ships one op: `onboarding` (a one-shot `tree_overview` at depth 2 — the smallest useful workflow).
+A fifteenth tool, `persisted_query`, runs registered curated workflows by id. Out of the box it ships one op: `onboarding` (a one-shot `tree_overview` at depth 2 — the smallest useful workflow).
 
 Four tools manage the multi-repo registry — they work whether or not the server has a repo loaded:
 
@@ -161,11 +162,11 @@ Four tools manage the multi-repo registry — they work whether or not the serve
 
 ## Federated code intelligence
 
-`yactt` ships a multi-repo registry at `$XDG_CACHE_HOME/yactt/projects.json` (or `$HOME/.cache/yactt/projects.json` when `XDG_CACHE_HOME` is unset). The four registry tools above operate against that file; the 13 code-intelligence tools stay bound to whatever repo `yactt mcp serve <path>` loaded at startup.
+`yactt` ships a multi-repo registry at `$XDG_CACHE_HOME/yactt/projects.json` (or `$HOME/.cache/yactt/projects.json` when `XDG_CACHE_HOME` is unset). The four registry tools above operate against that file; the 14 code-intelligence tools stay bound to whatever repo `yactt mcp serve <path>` loaded at startup.
 
 Two run modes:
 
-- `yactt mcp serve <path>` — single-repo mode. Loads `<path>`, exposes all 17 tools (13 code-intel + 4 registry + `persisted_query`).
+- `yactt mcp serve <path>` — single-repo mode. Loads `<path>`, exposes all 19 tools (14 code-intel + 4 registry + `persisted_query`).
 - `yactt mcp serve` (no path) — registry mode. Exposes the 4 registry tools + `persisted_query`. Use this to discover or manage which repos are indexed before drilling into one.
 
 Indexing is decoupled from serving: an agent in registry mode can call `index_repository` to prime a repo's cache, then a separate `yactt mcp serve <that-path>` can serve it with warm caches and zero re-parse.
