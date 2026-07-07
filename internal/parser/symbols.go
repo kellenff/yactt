@@ -82,6 +82,8 @@ func ExtractSymbols(lang Language, root *sitter.Node, source []byte) ([]Symbol, 
 		return extractPythonSymbols(root, source), nil
 	case Rust:
 		return extractRustSymbols(root, source), nil
+	case PHP:
+		return extractPHPSymbols(root, source), nil
 	}
 	return nil, ErrUnsupported
 }

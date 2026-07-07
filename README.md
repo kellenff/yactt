@@ -353,6 +353,7 @@ Shipped:
 - `detect_changes` git-ref diff impact (Issue #11)
 - `search_code` dedup + rank by enclosing symbol
 - **Python language support** — tree-sitter `.py` / `.pyi` symbol extraction + `pyright-langserver` LSP bridge
+- **PHP language support** — tree-sitter `.php` / `.phtml` / `.phps` symbol extraction (functions, classes, interfaces, traits, enums, methods); LSP bridge is opportunistic and ships when a server is wired up
 - SLSA Build Provenance Level 3 attestations on every release
 
 Next:

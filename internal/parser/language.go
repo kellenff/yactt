@@ -22,6 +22,7 @@ const (
 	LangJavaScript Name = "javascript"
 	LangPython     Name = "python"
 	LangRust       Name = "rust"
+	LangPHP        Name = "php"
 )
 
 // ErrUnsupported is returned when a file's language has no parser wired up.
@@ -58,6 +59,8 @@ func ByName(name Name) (Language, error) {
 		return Python{}, nil
 	case LangRust:
 		return Rust{}, nil
+	case LangPHP:
+		return PHP{}, nil
 	}
 	return nil, ErrUnsupported
 }
@@ -84,7 +87,7 @@ func Detect(path string) (Language, error) {
 
 // All returns every supported language in priority order. Used by Detect.
 func All() []Language {
-	return []Language{Go{}, TypeScript{}, JavaScript{}, Python{}, Rust{}}
+	return []Language{Go{}, TypeScript{}, JavaScript{}, Python{}, Rust{}, PHP{}}
 }
 
 // Go is the tree-sitter driver for the Go programming language.
