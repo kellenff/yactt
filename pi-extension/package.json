@@ -1,0 +1,10 @@
+{
+	"name": "yactt-pi-extension",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Bootstraps yactt on first pi session and registers it as an MCP server.",
+	"pi": {
+		"extensions": ["./index.js"]
+	}
+}
