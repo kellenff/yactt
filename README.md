@@ -70,6 +70,16 @@ The bundled plugin installs on first use. The `SessionStart` hook downloads the 
 
 Requires `jq` (standard on macOS/Linux developer machines; `brew install jq` / `apt install jq` otherwise). See [plugins/yactt/README.md](plugins/yactt/README.md) for the full install story, including the **SLSA Build Provenance Level 3** attestations verifiable with `gh attestation verify`.
 
+### For Pi agent users
+
+The Pi extension bootstraps yactt on first session and registers it with [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter). One-liner:
+
+```bash
+pi install git:github.com/kellenff/yactt
+```
+
+Same trust chain as the Claude plugin — the extension calls the shared `plugins/yactt/scripts/install.sh` to fetch and verify the binary. Restarts pick up any registered MCP server changes; the very first session after install writes the config, the second session onwards the yactt tools are live.
+
 ### For AI agent authors
 
 Any MCP-capable client. Wire the server into your `.mcp.json`:

@@ -8,12 +8,22 @@ The yactt plugin installs the [`yactt`](../..) MCP server on first use, wires it
 
 ## Quickstart
 
+### Claude Code
+
 ```bash
 /plugin marketplace add kellenff/yactt
 /plugin install yactt@yactt
 ```
 
 That's it. The `SessionStart` hook downloads the matched binary from the latest GitHub release on first use; later sessions are a no-op when the installed version is current. Requires `jq` (`brew install jq` / `apt install jq` otherwise).
+
+### Pi agent
+
+```bash
+pi install git:github.com/kellenff/yactt
+```
+
+The Pi extension (`pi-extension/index.js`) reuses this plugin's installer — same TOFU + SHA256 chain. On first session it bootstraps `yactt` if missing, ensures [`pi-mcp-adapter`](https://github.com/nicobailon/pi-mcp-adapter) is installed, and registers the MCP server. Subsequent sessions are no-ops.
 
 ---
 
