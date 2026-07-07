@@ -1,81 +1,128 @@
-# yactt skill-triggering benchmark
+# yactt skill-triggering matrix
 
-Measures whether Claude Code reaches for yactt's MCP tools (and loads the
-plugin's skills) when given naive prompts that should trigger them. Adapted
-from snowball's [`tests/skill-triggering/`](https://github.com/snowball-dev/snowball)
-pattern.
+Measures whether AI agents reach for yactt's MCP tools (and load the
+plugin's skills) across **multiple agent harnesses** — claude (Anthropic
+Claude Code) and pi (`MiniMax-M3[1m]` via the yactt pi-extension) —
+so harness-specific regressions are caught.
+
+Adapted from snowball's [`tests/skill-triggering/`](https://github.com/snowball-dev/snowball)
+pattern; restructures the matrix to compare two harnesses side-by-side
+on SWE-rebench-style metrics (objective score + cost per task).
 
 ## What it measures
 
-For each (skill, prompt) pair, the harness runs `claude -p` against the
-`tests/fixtures/sample-go/` workspace with the yactt plugin loaded, then
-inspects the stream-json transcript for:
+For each (harness, skill, prompt) triple, the harness runs the prompt
+through that harness, then scores the transcript on three axes:
 
-- **Skill body loaded** — the `Skill` tool was invoked with the matching
-  skill name. Strongest signal: the agent chose to read the skill's body
-  for guidance.
-- **Tools reached** — at least one `mcp__plugin_yactt_yactt__*` tool was
-  invoked. Weaker but more common signal: the agent acted on the MCP tool
-  description alone.
+- **`score_pct`** — SWE-rebench-style: matches the agent's final text
+  against a ground-truth `.kw` file (one keyword per line, case-
+  insensitive substring). Empty `.kw` = 0% baseline.
+- **`cost_usd`** — USD charged per run (parsed from the harness's
+  transcript format).
+- **`tokens_total`** — `input + output + cache_read + cache_write` —
+  the right number to compare against subscription-plan caps.
+- **`pass`** — bonus reachability check: skill body loaded OR ≥1
+  yactt MCP tool invoked.
 
-A run counts as **PASS** if either signal fires. The harness reports both
-individually so the two signals are distinguishable in the summary.
+A run **passes** if it reaches yactt (skill body or MCP tools); the
+`score_pct` measures correctness independently.
 
-## Why this matters
+## Why a matrix
 
-The yactt plugin's `description` frontmatter in each `SKILL.md` is the
-trigger surface — Claude Code matches the user's prompt against it to
-decide which skill to load. The denser the description's trigger phrases,
-the better the routing. The benchmark verifies that:
+The first version of this benchmark only ran against claude. It
+missed several harness-specific issues that the matrix caught:
 
-1. Broad-intent prompts ("show me the architecture") load `using-yactt`.
-2. Symbol-shaped prompts ("who calls Login") drive the agent to yactt's
-   MCP tools instead of falling back to Read/Grep.
+1. **MCP adapter isolation** — pi inherits `~/.claude.json` and was
+   blocked from yactt because Claude Code has yactt in its
+   `disabledMcpServers` list. Fix: `drivers/pi.sh` passes
+   `--mcp-config drivers/pi-mcp.json` (yactt only).
+2. **Tool-name namespace** — Claude prefixes with
+   `mcp__plugin_yactt_yactt__`; pi prefixes with `yactt_` AND routes
+   via `args.server/args.tool`. Detection regex is per-driver.
+3. **Token vs cost reporting** — Claude reports totals on the
+   `result` event; pi reports per-message. The scorer reads the
+   right shape per harness.
 
 ## Usage
 
 ```sh
-# Single run with the new skills in place
-./run-all.sh                          # default 3 turns
-./run-all.sh 5                        # 5 turns
-YACTT_WORKSPACE=/path/to/repo ./run-all.sh
+# Run the matrix (all 8 prompts × both harnesses = 16 runs)
+HARNESS=both ./run-all.sh 3
 
-# Single prompt test
-./run-test.sh code-explore prompts/code-explore/01-caller.txt
+# Single harness
+HARNESS=claude ./run-all.sh 3 code-explore
+HARNESS=pi ./run-all.sh 3 using-yactt
 
-# Before/after comparison (moves skills in/out of the plugin dir)
+# Single (skill, prompt) test
+HARNESS=pi ./run-test.sh code-explore prompts/code-explore/01-caller.txt 3
+
+# Override pi's provider/model
+PI_PROVIDER=anthropic PI_MODEL=claude-sonnet-4-5 HARNESS=pi ./run-all.sh 3
+
+# Before/after (moves skills in/out of the plugin dir)
 ./compare.sh 3
 ```
 
 Outputs land in `/tmp/yactt-skill-tests/<timestamp>/` with one
-`claude-output.json` and `summary.txt` per run, plus a top-level
-`SCORES.md` aggregating the suite.
+`transcript.json` and `summary.txt` per (harness, skill, prompt), plus
+a top-level `SCORES.md` aggregating the run.
+
+## File layout
+
+```
+tests/skill-triggering/
+├── README.md                    # this file
+├── RESULTS.md                   # latest matrix results + interpretation
+├── run-test.sh                  # dispatch to driver + score
+├── run-all.sh                   # matrix iterator (HARNESS=claude|pi|both)
+├── compare.sh                   # before/after by moving skills in/out
+├── lib/
+│   └── scorer.sh                # shared: transcript text, cost, tokens, kw score
+├── drivers/
+│   ├── claude.sh                # claude -p invocation
+│   ├── pi.sh                    # pi -p invocation
+│   └── pi-mcp.json              # isolated MCP config for the pi driver
+└── prompts/
+    ├── using-yactt/             # broad-intent prompts
+    │   ├── 01-orient.{txt,kw}
+    │   ├── 02-architecture.{txt,kw}
+    │   ├── 03-pr-impact.{txt,kw}
+    │   └── 04-quality.{txt,kw}
+    └── code-explore/            # symbol-shaped prompts
+        ├── 01-caller.{txt,kw}
+        ├── 02-callees.{txt,kw}
+        ├── 03-references.{txt,kw}
+        └── 04-rename-impact.{txt,kw}
+```
 
 ## Prompts
 
-8 naive prompts, 4 per skill:
+8 naive prompts total: 4 broad-intent (using-yactt skill) + 4
+symbol-shaped (code-explore skill). Each prompt has a sibling `.kw`
+file with 2-4 expected keywords that should appear in the agent's
+final answer.
 
-- **`using-yactt/`** — broad intent (orientation, architecture, PR impact,
-  quality audit). Should fire the meta-skill.
-- **`code-explore/`** — symbol-shaped (locate, callers, references,
-  rename impact). Should drive the agent to the MCP tools.
-
-Each prompt intentionally avoids naming the skill or specific tools — it
-phrases the task the way a real user would.
+Prompts intentionally avoid naming the skill or specific tools — they
+phrase the task the way a real user would.
 
 ## Caveats
 
-- **Single-tenant**: runs against the local `tests/fixtures/sample-go/`
-  fixture. Extend `prompts/<skill>/` for new repos.
-- **Non-deterministic**: tool selection varies turn-to-turn. Treat a
-  single run as a sample, not a measurement; aggregate across runs.
-- **MCP availability**: requires `claude` on PATH and an active auth
-  session. The harness fails fast if `claude` is unavailable.
-- **Headless**: uses `--dangerously-skip-permissions` so every Bash call
-  doesn't gate on an approval prompt. Run only in trusted workspaces.
+- **Single-tenant** — runs against `tests/fixtures/sample-go/`.
+- **Non-deterministic** — tool selection varies turn-to-turn. Run
+  N≥3 before claiming any per-prompt delta is real.
+- **Harness availability** — requires `claude` and/or `pi` on PATH
+  with an active auth session. The harness fails fast if either is
+  unavailable.
+- **Headless** — uses `--dangerously-skip-permissions` for claude so
+  every Bash call doesn't gate on an approval prompt. Pi doesn't need
+  it. Run only in trusted workspaces.
+- **Cost fidelity** — Claude's USD is real Anthropic billing; pi's
+  USD is whatever the configured provider charges (the default
+  `MiniMax-M3[1m]` provider is much cheaper than Anthropic). The
+  comparison is meaningful but not apples-to-apples on model cost.
 
 ## CI
 
 Not gated — this is an offline eval harness, similar to
-`tests/fidelity/live.sh`. Wire into CI when the variance is acceptable
-and a stable measurement target is identified.
+`tests/fidelity/live.sh`. Wire into CI when the variance is
+acceptable and a stable measurement target is identified.

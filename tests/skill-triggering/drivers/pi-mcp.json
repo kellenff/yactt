@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "yactt": {
+      "command": "yactt",
+      "args": ["mcp", "serve"],
+      "lifecycle": "keep-alive"
+    }
+  }
+}

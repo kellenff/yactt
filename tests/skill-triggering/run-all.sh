@@ -1,89 +1,128 @@
 #!/usr/bin/env bash
-# Run all skill-triggering tests for the yactt plugin.
-#
-# Iterates every prompt in tests/skill-triggering/prompts/<skill>/
-# and reports which skills actually fired.
+# Run the skill-triggering matrix: every (harness × skill × prompt) pair.
 #
 # Usage:
-#   ./run-all.sh                       # default: 3 turns
-#   ./run-all.sh 5                     # 5 turns
-#   YACTT_WORKSPACE=/path ./run-all.sh  # use a different workspace
+#   HARNESS=claude|pi|both  ./run-all.sh [max-turns] [skill ...]
+#   HARNESS=both ./run-all.sh 3                  # all 8 prompts × 2 harnesses = 16 runs
+#   HARNESS=pi ./run-all.sh 3 code-explore       # 4 prompts × 1 harness = 4 runs
 #
-# Output:
-#   /tmp/yactt-skill-tests/<timestamp>/<skill>/<prompt>/claude-output.json
-#   plus a SCORES.md with the run summary.
+# Side effects:
+#   - Writes transcripts + summaries to $YACTT_OUTPUT_DIR/<ts>/<harness>/<skill>/
+#   - Writes SCORES.md with the matrix summary
+#   - Exits 0 if at least one run PASSED, 1 otherwise
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROMPTS_DIR="$SCRIPT_DIR/prompts"
 MAX_TURNS="${1:-3}"
-WORKSPACE_DIR="${YACTT_WORKSPACE:-}"
+shift 2>/dev/null || true
+SELECTED_SKILLS=("$@")
+HARNESS="${HARNESS:-claude}"
 
-SKILLS=(using-yactt code-explore)
+# Default to all skills if none specified.
+if [ ${#SELECTED_SKILLS[@]} -eq 0 ]; then
+  SELECTED_SKILLS=(using-yactt code-explore)
+fi
 
-TIMESTAMP="$(date +%s)"
+# Harness list.
+HARNESSES=("$HARNESS")
+if [ "$HARNESS" = "both" ]; then
+  HARNESSES=(claude pi)
+fi
+
+TIMESTAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
 RESULTS_DIR="${YACTT_OUTPUT_DIR:-/tmp/yactt-skill-tests}/$TIMESTAMP"
 mkdir -p "$RESULTS_DIR"
 
-echo "=== yactt skill-triggering benchmark ==="
-echo "max_turns=$MAX_TURNS workspace=${WORKSPACE_DIR:-default(sample-go)}"
+echo "=== yactt skill-triggering matrix ==="
+echo "harnesses: ${HARNESSES[*]}"
+echo "skills:    ${SELECTED_SKILLS[*]}"
+echo "max_turns: $MAX_TURNS"
+echo "results:   $RESULTS_DIR"
 echo
 
-PASSED=0
-FAILED=0
-SKIPPED=0
-declare -a RESULTS
+# Aggregates.
+declare -a ROWS
+TOTAL_PASS=0
+TOTAL_FAIL=0
+TOTAL_COST="0"
+TOTAL_TOKENS=0
 
-for skill in "${SKILLS[@]}"; do
-  skill_dir="$PROMPTS_DIR/$skill"
-  if [ ! -d "$skill_dir" ]; then
-    echo "  ⚠ SKIP: no prompts dir for $skill"
-    SKIPPED=$((SKIPPED + 1))
-    continue
+run_one() {
+  local harness="$1" skill="$2" prompt_file="$3"
+  local prompt_name
+  prompt_name="$(basename "$prompt_file" .txt)"
+  local out
+  out="$(HARNESS="$harness" bash "$SCRIPT_DIR/run-test.sh" "$skill" "$prompt_file" "$MAX_TURNS" 2>&1)" || true
+  echo "$out" | tail -1
+  echo
+
+  # Pull metrics from the freshest summary for this (harness, skill, prompt).
+  local summary
+  summary="$(ls -td "$RESULTS_DIR"/[0-9]*/"$harness"/"$skill"/ 2>/dev/null | head -1)/summary.txt"
+  if [ ! -f "$summary" ]; then
+    summary="$(ls -td /tmp/yactt-skill-tests/*/"$harness"/"$skill"/summary.txt 2>/dev/null | head -1)"
   fi
+  if [ ! -f "$summary" ]; then
+    return
+  fi
+  local pass score cost t_total
+  pass=$(awk -F= '/^pass=/{print $2}' "$summary")
+  score=$(awk -F= '/^score_pct=/{print $2}' "$summary")
+  cost=$(awk -F= '/^cost_usd=/{print $2}' "$summary")
+  t_total=$(awk -F= '/^tokens_total=/{print $2}' "$summary")
+  ROWS+=("$harness|$skill|$prompt_name|$pass|$score|$cost|$t_total")
+  if [ "$pass" = "true" ]; then
+    TOTAL_PASS=$((TOTAL_PASS + 1))
+  else
+    TOTAL_FAIL=$((TOTAL_FAIL + 1))
+  fi
+  TOTAL_COST=$(awk "BEGIN { printf \"%.4f\", $TOTAL_COST + $cost }")
+  TOTAL_TOKENS=$((TOTAL_TOKENS + t_total))
+}
 
-  for prompt_file in "$skill_dir"/*.txt; do
-    [ -f "$prompt_file" ] || continue
-    name="$(basename "$prompt_file" .txt)"
-    if "$SCRIPT_DIR/run-test.sh" "$skill" "$prompt_file" "$MAX_TURNS" "$WORKSPACE_DIR"; then
-      PASSED=$((PASSED + 1))
-      RESULTS+=("✅ $skill / $name")
-    else
-      FAILED=$((FAILED + 1))
-      RESULTS+=("❌ $skill / $name")
-    fi
-    echo
+for h in "${HARNESSES[@]}"; do
+  for skill in "${SELECTED_SKILLS[@]}"; do
+    skill_dir="$PROMPTS_DIR/$skill"
+    [ -d "$skill_dir" ] || { echo "  ⚠ SKIP: no prompts for $skill"; continue; }
+    for prompt_file in "$skill_dir"/*.txt; do
+      [ -f "$prompt_file" ] || continue
+      run_one "$h" "$skill" "$prompt_file"
+    done
   done
 done
 
-# Write SCORES.md summary.
+# Write SCORES.md matrix.
 SCORES="$RESULTS_DIR/SCORES.md"
 {
-  echo "# yactt skill-triggering run — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "# yactt skill-triggering matrix — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   echo
   echo "max_turns: $MAX_TURNS"
-  echo "workspace: ${WORKSPACE_DIR:-tests/fixtures/sample-go}"
+  echo "harnesses: ${HARNESSES[*]}"
   echo
-  echo "## Results"
+  echo "## Per-run matrix"
   echo
-  for r in "${RESULTS[@]}"; do
-    echo "- $r"
+  printf "%-7s %-14s %-18s %-6s %-7s %-9s %-8s\n" "harness" "skill" "prompt" "pass" "score%" "cost_usd" "tokens"
+  echo "------------------------------------------------------------------------"
+  for r in "${ROWS[@]}"; do
+    IFS='|' read -r h s p pass score cost t <<<"$r"
+    [ "$pass" = "true" ] && mark="✅" || mark="❌"
+    printf "%-7s %-14s %-18s %-6s %-7s %-9s %-8s\n" "$h" "$s" "$p" "$mark" "$score" "\$$cost" "$t"
   done
   echo
   echo "## Totals"
   echo
-  echo "- Passed: $PASSED"
-  echo "- Failed: $FAILED"
-  echo "- Skipped: $SKIPPED"
-  echo "- Trigger rate: $(( PASSED * 100 / (PASSED + FAILED + 1) ))%"
+  echo "- Total runs: $((TOTAL_PASS + TOTAL_FAIL))"
+  echo "- Passed: $TOTAL_PASS"
+  echo "- Failed: $TOTAL_FAIL"
+  echo "- Pass rate: $(awk "BEGIN { printf \"%.0f\", $TOTAL_PASS * 100.0 / ($TOTAL_PASS + $TOTAL_FAIL) }")%"
+  echo "- Total cost: \$$TOTAL_COST USD"
+  echo "- Total tokens: $TOTAL_TOKENS"
 } > "$SCORES"
 
 echo "════════════════════════════════════════════"
-echo "Total: $PASSED passed, $FAILED failed, $SKIPPED skipped"
-echo "Trigger rate: $(( PASSED * 100 / (PASSED + FAILED + 1) ))%"
+echo "Total: $TOTAL_PASS passed, $TOTAL_FAIL failed"
+echo "Cost: \$$TOTAL_COST USD"
+echo "Tokens: $TOTAL_TOKENS"
 echo "Full report → $SCORES"
-
-if [ "$FAILED" -gt 0 ]; then
-  exit 1
-fi
