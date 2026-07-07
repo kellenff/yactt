@@ -1,0 +1,1 @@
+I'm new to this Go repo. Give me a tour — what's the structure and what are the main pieces?

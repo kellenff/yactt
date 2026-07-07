@@ -1,0 +1,1 @@
+Walk me through the architecture of this codebase. Where are the hotspots and is there any dead code?
