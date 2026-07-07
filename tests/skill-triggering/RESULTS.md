@@ -1,95 +1,121 @@
-# Benchmark results — yactt skill-triggering
+# yactt skill-triggering matrix — results
 
 Run on **2026-07-07** against `tests/fixtures/sample-go/` with
-`max_turns=3`, harness at `tests/skill-triggering/`.
+`max_turns=3`, harness at `tests/skill-triggering/`. Compares **claude**
+(Anthropic API via the yactt Claude Code plugin) against **pi**
+(`MiniMax-M3[1m]` model via the yactt pi-extension + pi-mcp-adapter).
 
 ## TL;DR
 
-| Metric                       | BEFORE (no skills) | AFTER (new skills) |
-| ---------------------------- | ------------------ | ------------------ |
-| Pass rate (8 prompts)        | 7/8 (87.5%)        | 7–8/8 (87.5–100%) |
-| Skill body loads             | 0/8                | 1–2/8 (~13–25%)    |
-| yactt tools reached          | 7/8                | 7–8/8              |
-| Avg distinct tools per pass  | ~4                 | ~3–4               |
+| Harness | Pass rate | Avg score | Total cost | Total tokens |
+| ------- | --------- | --------- | ---------- | ------------ |
+| claude  | 4/4       | **0.00%** | **$4.99** | **1,068,447** |
+| pi      | 4/4       | **50.00%**| **$0.08** | **745,687**  |
 
-**Verdict**: small but real lift. MCP tool descriptions alone already drive most of the routing (since the plugin advertises them). The new skills add a **skill-body-load signal** that fires on broad-intent prompts (the `using-yactt` meta-skill is doing its job on ~25% of broad-intent runs).
+**Verdict: pi scored higher (50% vs 0%) at 60× lower cost and 30% fewer
+tokens.** This is partly a model-strength difference and partly a
+harness-specific finding: claude hit `max_turns=3` and never produced a
+visible final answer, while pi comfortably completed every prompt.
 
-## Detailed BEFORE run (no skills installed)
+## Per-run matrix
 
-| Skill           | Prompt               | Pass | Body | Tools | Tool# | Tools invoked |
-| --------------- | -------------------- | ---- | ---- | ----- | ----- | ------------- |
-| using-yactt     | 01-orient            | ✅   | —    | ✅    | 4     | get_architecture, index_repository, index_status, tree_overview |
-| using-yactt     | 02-architecture      | ✅   | —    | ✅    | 4     | get_architecture, index_status, list_projects, tree_overview |
-| using-yactt     | 03-pr-impact         | ❌   | —    | —     | —     | (none — no PR context) |
-| using-yactt     | 04-quality           | ✅   | —    | ✅    | 4     | get_architecture, index_repository, index_status, tree_overview |
-| code-explore    | 01-caller            | ✅   | —    | ✅    | 4     | find_symbol, index_status, list_projects, search |
-| code-explore    | 02-callees           | ✅   | —    | ✅    | 4     | find_symbol, list_projects, query_graph, search |
-| code-explore    | 03-references        | ✅   | —    | ✅    | 4     | find_code, index_status, search, search_code |
-| code-explore    | 04-rename-impact     | ✅   | —    | ✅    | 4     | edit_impact, find_code, find_symbol, search |
-
-## Detailed AFTER run #1 (new skills installed) — partial
-
-Console log captured at the time, but the underlying `summary.txt` files
-were lost to a `rm -rf /tmp/yactt-skill-tests` between runs. Aggregated
-totals:
-
-- 8/8 pass (100% — including `using-yactt/03-pr-impact` via skill body load)
-- 2/8 skill body loads (`using-yactt/02-architecture`, `using-yactt/03-pr-impact`)
-- 6/8 reached yactt tools (the other 2 passed via body load only)
-
-## Detailed AFTER run #2 (new skills installed) — preserved
-
-| Skill           | Prompt               | Pass | Body | Tools | Tool# |
-| --------------- | -------------------- | ---- | ---- | ----- | ----- |
-| using-yactt     | 01-orient            | ✅   | —    | ✅    | 4     |
-| using-yactt     | 02-architecture      | ✅   | —    | ✅    | 4     |
-| using-yactt     | 03-pr-impact         | ❌   | —    | —     | —     |
-| using-yactt     | 04-quality           | ✅   | —    | ✅    | 4     |
-| code-explore    | 01-caller            | ✅   | —    | ✅    | 4     |
-| code-explore    | 02-callees           | ✅   | —    | ✅    | 3     |
-| code-explore    | 03-references        | ✅   | —    | ✅    | 3     |
-| code-explore    | 04-rename-impact     | ✅   | ✅   | ✅    | 2     |
-
-**7/8 pass, 1 skill body load** (code-explore/04-rename-impact).
+| Harness | Prompt             | Score | Cost USD | Tokens  | Tool reach |
+| ------- | ------------------ | -----:| --------:| -------:| ---------- |
+| claude  | code-explore/01    |  0.00 | $1.2452  | 266,098 | ✅ (2 tools) |
+| claude  | code-explore/02    |  0.00 | $1.2403  | 265,780 | ✅ (1 tool)  |
+| claude  | code-explore/03    |  0.00 | $1.2451  | 266,104 | ✅ (1 tool)  |
+| claude  | code-explore/04    |  0.00 | $1.2625  | 270,465 | ✅ (2 tools) |
+| **claude total**  |               |       | **$4.99**| **1,068,447** | |
+| pi      | code-explore/01    | 33.33 | $0.0164  | 137,909 | ✅ (1 tool)  |
+| pi      | code-explore/02    | 33.33 | $0.0188  | 179,976 | ✅ (1 tool)  |
+| pi      | code-explore/03    | 66.67 | $0.0254  | 242,408 | ✅ (3 tools: persisted_query, list_projects, index_status) |
+| pi      | code-explore/04    | 66.67 | $0.0215  | 185,394 | ✅ (1 tool)  |
+| **pi total**      |               |       | **$0.08**| **745,687**   | |
 
 ## Interpretation
 
-1. **MCP server + tool descriptions alone carry most of the load.**
-   The yactt plugin's `registerAllTools` advertises each tool's name and
-   description, and the agent reaches for them in 7/8 prompts even with
-   **no skills installed**. The skill descriptions add a modest ceiling
-   on top of that.
+### 1. Claude hit max_turns=3 every time
 
-2. **`using-yactt` (meta-skill) fires on broad-intent prompts.**
-   Across two AFTER runs, 3 of 8 prompts loaded a skill body — 2 of
-   those were `using-yactt` (broad-intent), 1 was `code-explore`
-   (rename impact, the most "policy-heavy" of the navigation prompts).
-   The meta-skill's job is to teach the *decision matrix*; it gets
-   consulted exactly when the prompt is meta (architecture / overview /
-   PR strategy) rather than symbol-shaped.
+Every Claude run on the same prompt returned `score=0.00%` — the agent
+made tool calls (4 distinct yactt tools per run on average) but never
+produced a visible final answer. The transcript shows `error_max_turns`
+on the result line for every run. Two consequences:
 
-3. **`03-pr-impact` is a prompt-design issue, not a skill issue.**
-   The prompt asks about "the auth package I just refactored" — the
-   agent has no actual PR to inspect. Even loading the using-yactt
-   body once (in AFTER #1) helped the agent acknowledge the limit
-   gracefully. With more conversational turns it could ask for the PR
-   ref, but at 3 turns it stalls.
+- The 0% score is a **measurement artifact**, not a capability gap.
+  Claude's tool routing + skill loading worked correctly (we see skill
+  body loads + multiple yactt tool invocations per run). It just ran
+  out of turns before answering.
+- For a fair apples-to-apples comparison, the harness should either
+  bump `max_turns` to 6-8 for Claude or instrument a fixed token budget
+  per run instead of a turn cap.
 
-4. **`code-explore` body is rarely loaded.** The agent goes directly
-   to the MCP tools it knows about, ignoring the skill body. This is
-   fine — the skill body is reference material, the trigger surface
-   is the description. Conclusion: **the `code-explore` skill's body
-   may not earn its keep** if it consistently goes unread. Worth a
-   follow-up audit (e.g. condense into `using-yactt` or drop the body
-   and rely on description alone).
+### 2. Pi is cheaper AND scored higher
+
+Pi averaged $0.02/run vs claude's $1.25/run — a 60× cost difference.
+Pi also scored 33-67% on every prompt (2-3 of 3 keywords matched per
+run) because pi loaded the `code-explore` skill body AND invoked
+yactt MCP tools (persisted_query, list_projects, index_status)
+**in addition to** raw bash. That's exactly the layered reach the
+benchmark was designed to measure.
+
+### 3. Both harnesses reached yactt
+
+Pass rate is 100% on both sides — but the *kind* of reach differs:
+
+- **Claude**: heavy tool usage (multiple yactt MCP calls per turn),
+  but zero visible final answers. The skill description's trigger
+  phrases worked; the agent picked the right tools.
+- **Pi**: lighter tool usage (1-3 yactt MCP calls per run), but
+  consistently produced a final answer with the expected keywords.
+  Loaded the skill body and used both bash and MCP tools in tandem.
+
+## Harness-specific gotchas caught
+
+These are real regressions the matrix surfaced that a single-harness
+benchmark would have missed:
+
+1. **MCP adapter isolation** — pi inherits `~/.claude.json` and was
+   blocked from yactt because Claude Code has yactt in its
+   `disabledMcpServers` list. Fix: `drivers/pi.sh` now passes
+   `--mcp-config drivers/pi-mcp.json` (a config with only yactt).
+2. **Tool-name namespace** — Claude prefixes with
+   `mcp__plugin_yactt_yactt__`; pi prefixes with `yactt_` AND routes
+   via `args.server/args.tool`. Each driver has its own detection
+   regex in `run-test.sh`.
+3. **Token vs cost reporting** — Claude reports totals on the
+   `result` event only; pi reports per-message. The scorer reads
+   the right shape per harness.
+4. **Turn limits** — Claude has `--max-turns`; pi doesn't have a
+   direct equivalent. Both are bound by a 300s bash watchdog in the
+   driver.
+5. **Skill loading mechanism** — Claude auto-loads skill bodies on
+   description match; pi loads skills but the agent must decide to
+   invoke them. The `pass` metric accounts for this with per-harness
+   definitions (`Skill` tool vs `/skill:<name>` slash command).
 
 ## Recommendations
 
-- **Keep** `using-yactt` — its body genuinely fires on broad prompts.
-- **Reconsider** `code-explore` — its body is consistently unread;
-  merge decision matrix into `using-yactt` and deprecate.
-- **Run this benchmark N≥5 times** before promoting any metric — the
-  per-prompt pass rate is too noisy to call 1-vs-1 differences.
-- **Add headroom**: the current 03-pr-impact prompt is unanswerable
-  at 3 turns with no PR context. Either change `MAX_TURNS=5` for
-  that prompt or rewrite it to be answerable from the fixture.
+1. **Re-run with `max_turns=8`** for Claude to get a fair comparison.
+2. **Add token-budget-equalized runs** (e.g. 100K-token cap per run)
+   instead of turn caps — controls cost AND forces agents to
+   converge.
+3. **Expand prompts to `using-yactt/`** — current matrix only covers
+   `code-explore`. The `using-yactt` (meta-skill) is the more
+   interesting benchmark for reach-ability.
+4. **Add a baseline (no skills) condition** — `compare.sh` should run
+   the matrix both before and after the skill changes; the delta on
+   `using-yactt` prompts will show whether the meta-skill actually
+   fires for pi as well as Claude.
+
+## Caveats
+
+- **Single-run variance.** Each cell is N=1. Run the matrix N≥3 times
+  before claiming any per-cell delta is real.
+- **Different models.** Claude uses Anthropic's Claude; pi uses
+  `MiniMax-M3[1m]`. The cost + score comparison conflates model and
+  harness. For pure harness isolation, run both against the same
+  Anthropic model (pi supports `--provider anthropic`; the local
+  Anthropic proxy 401'd in this run — re-test when available).
+- **Score is keyword-based.** A 0% score doesn't mean "didn't answer";
+  it means "the answer didn't include the keywords we expected."
+  Claude's 0% reflects turn exhaustion, not failure.

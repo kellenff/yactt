@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Test skill triggering with a naive prompt.
+# Run a single (skill, prompt) test against one harness, score the
+# result, write a summary. The driver is selected by HARNESS env var
+# (default: claude).
 #
-# Usage: ./run-test.sh <skill-name> <prompt-file> [max-turns] [workspace-dir]
+# Usage:
+#   HARNESS=claude|pi   ./run-test.sh <skill> <prompt-txt-path> <max-turns> [workspace-dir]
 #
-# Runs `claude -p` against the prompt (which must NOT name the skill
-# explicitly) inside the workspace, with the yactt plugin loaded via
-# --plugin-dir. Captures the stream-json transcript and inspects it
-# for an invocation of the Skill tool targeting <skill-name>.
-#
-# Exit 0 if triggered, 1 if not. Always writes a transcript + summary.
+# Side effects:
+#   - Writes a transcript under $YACTT_OUTPUT_DIR/<ts>-<pid>/<harness>/<skill>/
+#   - Writes summary.txt with the per-run metrics
+#   - Exits 0 if the agent reached for yactt (pass criterion: tool reach OR
+#     skill body load — both at parity across harnesses), 1 otherwise
 
 set -uo pipefail
 
@@ -16,122 +18,133 @@ SKILL_NAME="${1:-}"
 PROMPT_FILE="${2:-}"
 MAX_TURNS="${3:-3}"
 WORKSPACE_DIR="${4:-${YACTT_WORKSPACE:-}}"
+HARNESS="${HARNESS:-claude}"
 
 if [ -z "$SKILL_NAME" ] || [ -z "$PROMPT_FILE" ]; then
-  echo "Usage: $0 <skill-name> <prompt-file> [max-turns] [workspace-dir]" >&2
+  echo "Usage: HARNESS=claude|pi $0 <skill-name> <prompt-txt-path> [max-turns] [workspace-dir]" >&2
   exit 2
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/lib/scorer.sh"
+
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PLUGIN_DIR="$REPO_ROOT/plugins/yactt"
-
-if [ ! -d "$PLUGIN_DIR" ]; then
-  echo "Plugin not found at $PLUGIN_DIR" >&2
-  exit 2
-fi
-
 if [ -z "$WORKSPACE_DIR" ]; then
-  # Default: the sample-go fixture.
   WORKSPACE_DIR="$REPO_ROOT/tests/fixtures/sample-go"
 fi
 
-if [ ! -d "$WORKSPACE_DIR" ]; then
-  echo "Workspace not found at $WORKSPACE_DIR" >&2
+DRIVER="$SCRIPT_DIR/drivers/$HARNESS.sh"
+if [ ! -x "$DRIVER" ]; then
+  echo "Driver not found / not executable: $DRIVER" >&2
   exit 2
 fi
 
+PROMPT_NAME="$(basename "$PROMPT_FILE" .txt)"
+KW_FILE="${PROMPT_FILE%.txt}.kw"
+
 TIMESTAMP="$(date +%s)"
 RUN_ID="${TIMESTAMP}-$$"
-OUTPUT_DIR="${YACTT_OUTPUT_DIR:-/tmp/yactt-skill-tests}/$RUN_ID/$SKILL_NAME"
+OUTPUT_DIR="${YACTT_OUTPUT_DIR:-/tmp/yactt-skill-tests}/$RUN_ID/$HARNESS/$SKILL_NAME"
 mkdir -p "$OUTPUT_DIR"
 cp "$PROMPT_FILE" "$OUTPUT_DIR/prompt.txt"
+[ -f "$KW_FILE" ] && cp "$KW_FILE" "$OUTPUT_DIR/prompt.kw"
 
-PROMPT="$(cat "$PROMPT_FILE")"
-LOG_FILE="$OUTPUT_DIR/claude-output.json"
+LOG_FILE="$OUTPUT_DIR/transcript.json"
+echo "  run     → $HARNESS / $SKILL_NAME  prompt=$PROMPT_NAME  turns=$MAX_TURNS"
 
-cd "$WORKSPACE_DIR"
-echo "  run     → $SKILL_NAME  prompt=$(basename "$PROMPT_FILE")  turns=$MAX_TURNS  ws=$(basename "$WORKSPACE_DIR")"
+# Invoke the driver. It writes the transcript and prints the path.
+LOG_OUT="$("$DRIVER" "$(cat "$PROMPT_FILE")" "$MAX_TURNS" "$WORKSPACE_DIR" "$LOG_FILE" 2>&1)"
+DRIVER_EXIT=$?
+[ -n "$LOG_OUT" ] && LOG_FILE="$LOG_OUT"
 
-# Run Claude in pipe mode. A bash watchdog prevents runaway sessions
-# without depending on coreutils `timeout` (not on PATH by default on
-# macOS). --dangerously-skip-permissions avoids approval prompts that
-# would gate the harness in headless runs.
-WALL_TIMEOUT=300
-claude -p "$PROMPT" \
-  --plugin-dir "$PLUGIN_DIR" \
-  --dangerously-skip-permissions \
-  --max-turns "$MAX_TURNS" \
-  --verbose \
-  --output-format stream-json \
-  >"$LOG_FILE" 2>&1 &
-CLAUDE_PID=$!
-( sleep "$WALL_TIMEOUT"; kill -9 "$CLAUDE_PID" 2>/dev/null ) &
-TIMER_PID=$!
-wait "$CLAUDE_PID"
-CLAUDE_EXIT=$?
-kill "$TIMER_PID" 2>/dev/null || true
+# Compute metrics.
+METRICS="$(run_metrics "$LOG_FILE" "$HARNESS" "$KW_FILE")"
+read -r SCORE_PCT COST_USD T_IN T_OUT T_CR T_CW T_TOTAL <<<"$METRICS"
 
-# Inspect transcript for both metrics:
-#   1. Skill loaded  — Skill tool invoked with this skill's name
-#   2. Tools reached — at least one mcp__plugin_yactt_yactt__* tool invoked
-#
-# "Tools reached" is the primary metric — the skill description's
-# job is to wire the agent's attention to yactt's MCP tools, not
-# necessarily to require the Skill tool to load the body first.
-# A run counts as PASS if EITHER (a) the skill body was explicitly
-# loaded, OR (b) at least one yactt tool was invoked. This keeps
-# the benchmark honest: the goal is reachability, not ceremony.
+# Tool reach: did the agent invoke any yactt MCP tool? For claude, look
+# for mcp__plugin_yactt_yactt__* names; for pi, look for tools whose
+# name is a yactt tool (after MCP adapter renames). Both are surfaced
+# as JSON tool-call entries with "name":"...".
+case "$HARNESS" in
+  claude)
+    TOOLS_REACHED=false
+    TOOL_NAMES=$(grep -oE '"name":"mcp__plugin_yactt_yactt__[A-Za-z_]+"' "$LOG_FILE" 2>/dev/null \
+      | sed -E 's/.*"name":"mcp__plugin_yactt_yactt__([A-Za-z_]+)"/\1/' | sort -u | tr '\n' ' ')
+    ;;
+  pi)
+    # Pi routes MCP calls through the pi-mcp-adapter. The adapter emits
+    # `toolName:"mcp"` and the yactt routing is in args:
+    #   { server: "yactt", tool: "tree_overview", args: "{...}" }
+    # (the bare tool name, not yactt_<name>). Any "server":"yactt"
+    # occurrence is a yactt tool reach; the tool name is args.tool.
+    TOOLS_REACHED=false
+    TMP_NAMES="$(mktemp -t yactt-names.XXXXXX)"
+    grep -oE '"name":"yactt_[a-z_]+"' "$LOG_FILE" 2>/dev/null \
+      | sed -E 's/.*"name":"yactt_([a-z_]+)"/\1/' >> "$TMP_NAMES" || true
+    grep -oE '"server":"yactt","tool":"[a-z_]+"' "$LOG_FILE" 2>/dev/null \
+      | sed -E 's/.*"tool":"([a-z_]+)".*/\1/' >> "$TMP_NAMES" || true
+    # Mark reachability on the server-tag alone (some adapter versions
+    # don't surface args.tool cleanly).
+    if grep -q '"server":"yactt"' "$LOG_FILE" 2>/dev/null; then
+      TOOLS_REACHED=true
+      [ ! -s "$TMP_NAMES" ] && echo "yactt_mcp" >> "$TMP_NAMES"
+    fi
+    TOOL_NAMES=$(sort -u "$TMP_NAMES" | tr '\n' ' ' | sed 's/ $//')
+    rm -f "$TMP_NAMES"
+    ;;
+esac
+if [ -n "${TOOL_NAMES// /}" ]; then TOOLS_REACHED=true; fi
+TOOL_COUNT=$(echo "$TOOL_NAMES" | tr ' ' '\n' | grep -c '.' || echo 0)
 
+# Skill body load: per-harness definition.
 SKILL_LOADED=false
-TOOLS_REACHED=false
-TOOL_COUNT=0
+case "$HARNESS" in
+  claude)
+    if grep -q '"name":"Skill"' "$LOG_FILE" 2>/dev/null \
+       && grep -qE "\"skill\":\"${SKILL_NAME}\"|\"skill\":\"[^\"]*:${SKILL_NAME}\"" "$LOG_FILE" 2>/dev/null; then
+      SKILL_LOADED=true
+    fi
+    ;;
+  pi)
+    # Pi uses slash commands. The agent doesn't auto-load skills, so this
+    # is usually false; we record it for completeness.
+    if grep -q "/skill:${SKILL_NAME}\b" "$LOG_FILE" 2>/dev/null; then
+      SKILL_LOADED=true
+    fi
+    ;;
+esac
 
-if grep -q '"name":"Skill"' "$LOG_FILE" 2>/dev/null \
-   && grep -qE "\"skill\":\"${SKILL_NAME}\"|\"skill\":\"[^\"]*:${SKILL_NAME}\"" "$LOG_FILE" 2>/dev/null; then
-  SKILL_LOADED=true
+# Pass = tool reach OR skill body load (parity with prior harness).
+if [ "$TOOLS_REACHED" = "true" ] || [ "$SKILL_LOADED" = "true" ]; then
+  PASS=true
+else
+  PASS=false
 fi
 
-# Capture which yactt MCP tools were called.
-INVOKED_TOOLS=$(grep -oE '"name":"mcp__plugin_yactt_yactt__[A-Za-z_]+"' "$LOG_FILE" 2>/dev/null \
-  | sed -E 's/.*"name":"mcp__plugin_yactt_yactt__([A-Za-z_]+)"/\1/' | sort -u | tr '\n' ' ' || true)
-
-if [ -n "${INVOKED_TOOLS// /}" ]; then
-  TOOLS_REACHED=true
-  TOOL_COUNT=$(echo "$INVOKED_TOOLS" | tr ' ' '\n' | grep -c '.' || echo 0)
-fi
-
-# Capture which skills WERE invoked (any name) for diagnosis.
-INVOKED_SKILLS=$(grep -oE '"skill":"[^"]*"' "$LOG_FILE" 2>/dev/null | sort -u | tr '\n' ' ' || true)
-
-PASS=$SKILL_LOADED  # a skill body load is a clear pass
-if [ "$TOOLS_REACHED" = "true" ] && [ "$SKILL_LOADED" = "false" ]; then
-  PASS=true        # reaching for tools is also a pass
-fi
-
-# Persist summary for the run-all harness.
-SUMMARY_FILE="$OUTPUT_DIR/summary.txt"
+# Persist summary.
+SUMMARY="$OUTPUT_DIR/summary.txt"
 {
+  echo "harness=$HARNESS"
   echo "skill=$SKILL_NAME"
-  echo "prompt_file=$(basename "$PROMPT_FILE")"
-  echo "workspace=$(basename "$WORKSPACE_DIR")"
+  echo "prompt_file=$PROMPT_NAME.txt"
   echo "pass=$PASS"
+  echo "score_pct=$SCORE_PCT"
+  echo "cost_usd=$COST_USD"
+  echo "tokens_in=$T_IN"
+  echo "tokens_out=$T_OUT"
+  echo "tokens_cache_read=$T_CR"
+  echo "tokens_cache_write=$T_CW"
+  echo "tokens_total=$T_TOTAL"
   echo "skill_loaded=$SKILL_LOADED"
   echo "tools_reached=$TOOLS_REACHED"
   echo "tool_count=$TOOL_COUNT"
-  echo "invoked_skills=${INVOKED_SKILLS:-<none>}"
-  echo "invoked_tools=${INVOKED_TOOLS:-<none>}"
-  echo "log_file=$LOG_FILE"
-} > "$SUMMARY_FILE"
+  printf "tool_names=%s\n" "${TOOL_NAMES:-<none>}"
+  echo "transcript=$LOG_FILE"
+} > "$SUMMARY"
 
-if [ "$PASS" = "true" ]; then
-  if [ "$SKILL_LOADED" = "true" ]; then
-    echo "  result  → ✅ PASS (skill body loaded)"
-  else
-    echo "  result  → ✅ PASS ($TOOL_COUNT yactt tools reached)"
-  fi
-  exit 0
-else
-  echo "  result  → ❌ FAIL (no skill load, no yactt tools)"
-  exit 1
-fi
+# Pretty per-run line.
+RESULT="✅ PASS"
+if [ "$PASS" = "false" ]; then RESULT="❌ FAIL"; fi
+echo "  result  → $RESULT  score=${SCORE_PCT}%  cost=\$${COST_USD}  tokens=${T_TOTAL}  tools=${TOOL_COUNT}"
+
+[ "$PASS" = "true" ]
