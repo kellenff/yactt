@@ -398,6 +398,7 @@ The startup line is always written to stderr (even without `--audit-log`), so a 
 
 - Architecture deep dive — [docs/design.md](docs/design.md)
 - Security & threat model — [docs/security.md](docs/security.md)
+- Performance + fidelity benchmarks — [docs/benchmarks.md](docs/benchmarks.md)
 - Claude Code plugin story — [plugins/yactt/README.md](plugins/yactt/README.md)
 - Latest release — [github.com/kellenff/yactt/releases/latest](https://github.com/kellenff/yactt/releases/latest)
 - `code-explore` skill — [plugins/yactt/skills/code-explore/SKILL.md](plugins/yactt/skills/code-explore/SKILL.md)
