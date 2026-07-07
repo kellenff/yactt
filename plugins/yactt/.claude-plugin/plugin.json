@@ -1,11 +1,24 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "yactt",
-  "description": "Federated code intelligence: walk the tree, choose your layer.",
+  "description": "Federated code intelligence for Go/TypeScript/JavaScript/Python. 21 MCP tools for symbol search, call-graph traversal, AST-aware code search, rename-impact (blast radius), architecture / hotspots / dead-code detection, and git-diff impact.",
   "version": "0.1.0",
   "author": {
     "name": "Kellen Frodelius-Fujimoto"
   },
   "license": "Apache-2.0",
-  "keywords": ["code-intelligence", "tree-sitter", "mcp"]
+  "keywords": [
+    "code-intelligence",
+    "tree-sitter",
+    "mcp",
+    "code-search",
+    "code-navigation",
+    "call-graph",
+    "rename-impact",
+    "symbol-search",
+    "ast-aware",
+    "dead-code",
+    "blast-radius",
+    "repo-map"
+  ]
 }
