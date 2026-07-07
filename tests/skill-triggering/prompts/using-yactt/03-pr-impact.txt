@@ -1,0 +1,1 @@
+I just opened a PR that touches the auth package. What symbols are affected and which callers might break?
