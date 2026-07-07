@@ -10,13 +10,27 @@
   "plugins": [
     {
       "name": "yactt",
-      "description": "Walk the tree, choose your layer. 10 MCP tools for lossless source, typed structure, cross-references, and rename impact analysis.",
+      "description": "Federated code intelligence for Go/TypeScript/JavaScript/Python. 21 MCP tools: explore, navigate, trace (call graph), impact (rename blast radius), quality (hotspots, dead code, cycles), and PR diff mapping.",
       "version": "0.1.0",
       "author": {
         "name": "Kellen Frodelius-Fujimoto"
       },
       "license": "Apache-2.0",
-      "keywords": ["code-intelligence", "tree-sitter", "mcp", "go"],
+      "keywords": [
+        "code-intelligence",
+        "tree-sitter",
+        "mcp",
+        "go",
+        "code-search",
+        "code-navigation",
+        "call-graph",
+        "rename-impact",
+        "symbol-search",
+        "ast-aware",
+        "dead-code",
+        "blast-radius",
+        "repo-map"
+      ],
       "tags": ["development"],
       "category": "development",
       "source": "./plugins/yactt",
