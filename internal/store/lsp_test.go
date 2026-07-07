@@ -446,3 +446,42 @@ func loadFixture(t *testing.T) (*Repo, error) {
 	}
 	return r, nil
 }
+
+// TestLoad_OnlyStartsLSPsForPresentLanguages is the regression test for the
+// "skip LSP startup when no files of that language exist" rule. The shared
+// fixture contains only .go and .ts files — no .py, no .rs. After Load,
+// r.lsp must only have entries for the languages actually present
+// (LangGo may be nil if gopls isn't installed; LangTypeScript is set when
+// typescript-language-server is on PATH; LangPython and LangRust must
+// always be nil because the fixture has no .py/.pyi/.rs files).
+//
+// ponytail: this gate matters because every Load pays the per-LSP
+// initialize cost (~500ms when the binary is on PATH, ~0ms when it isn't).
+// A repo without .rs files should not pay the rust-analyzer cold-start
+// cost — and on CI runners where rust-analyzer happens to be pre-installed,
+// that cold start accumulates across hundreds of internal/tool tests and
+// blows past the 10-minute CI job timeout (this is exactly what tripped
+// PR #23's `vet / test / smoke build` job).
+func TestLoad_OnlyStartsLSPsForPresentLanguages(t *testing.T) {
+	r, err := loadFixture(t)
+	defer func() { _ = r.Close() }()
+	if err != nil {
+		t.Fatalf("loadFixture: %v", err)
+	}
+
+	// Languages whose files are absent MUST have a nil LSP slot.
+	for _, lang := range []parser.Name{parser.LangPython, parser.LangRust} {
+		if c, _, _ := r.LSPForLang(lang); c != nil {
+			t.Errorf("LSPForLang(%s) returned a non-nil client; the fixture has no files of that language, so startup should have been skipped", lang)
+		}
+	}
+
+	// Negative control: the rust route must return nil even by file
+	// extension, not just by direct language lookup.
+	if c, _, _ := r.LSPForFile("/abs/path/foo.rs"); c != nil {
+		t.Error("LSPForFile(foo.rs) returned a client; the fixture has no .rs files, so rust-analyzer should never have been started")
+	}
+	if c, _, _ := r.LSPForFile("/abs/path/foo.py"); c != nil {
+		t.Error("LSPForFile(foo.py) returned a client; the fixture has no .py files, so pyright-langserver should never have been started")
+	}
+}

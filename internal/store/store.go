@@ -262,11 +262,29 @@ func Load(root string, opts ...LoadOption) (*Repo, []error, error) {
 	// tree-sitter with the existing `no-lsp-installed` marker. We use
 	// a short overall timeout because a hung server (slow indexing,
 	// etc.) shouldn't stall Load.
+	//
+	// ponytail: gate each tryStart on whether the repo actually contains
+	// files of that language. The startup attempt costs ~500ms even when
+	// the binary is on PATH (initialize handshake), and ~0ms when absent
+	// (LookPath miss). Skipping the attempt for absent languages is the
+	// difference between a 35s `vet/test` job and a 10-minute one when
+	// the CI runner happens to have a server installed but the test
+	// fixture doesn't (rust-analyzer tripped this for PR #23).
 	startCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	logf := func(format string, args ...any) {
 		fmt.Fprintf(os.Stderr, "lsp: "+format+"\n", args...)
+	}
+
+	// loadedLangs is the set of languages actually present in the repo
+	// (per parser.Detect on every parsed file). Single O(n) scan over
+	// r.files — cheap, and avoids a per-language Detect inside the gate.
+	loadedLangs := map[parser.Name]bool{}
+	for path := range r.files {
+		if lang, err := parser.Detect(path); err == nil {
+			loadedLangs[lang.Name()] = true
+		}
 	}
 
 	tryStart := func(lang parser.Name, toolName string, start func(context.Context, string, lsp.Options) (*lsp.Client, error)) {
@@ -285,32 +303,41 @@ func Load(root string, opts ...LoadOption) (*Repo, []error, error) {
 		r.lspVersions[lang] = client.Version()
 	}
 
-	tryStart(parser.LangGo, "gopls", lsp.Start)
+	if loadedLangs[parser.LangGo] {
+		tryStart(parser.LangGo, "gopls", lsp.Start)
+	}
 	// typescript-language-server speaks both TypeScript and JavaScript
 	// from a single workspace — register both keys against the same
-	// client so a `.ts` file and a `.js` file both route to it.
-	if tsClient, err := lsp.StartTypeScript(startCtx, abs, lsp.Options{
-		Timeout:      500 * time.Millisecond,
-		Concurrency:  8,
-		CloseTimeout: 5 * time.Second,
-		Logf:         logf,
-	}); err != nil {
-		logf("startup declined for typescript-language-server: %v", err)
-	} else {
-		r.lsp[parser.LangTypeScript] = tsClient
-		r.lsp[parser.LangJavaScript] = tsClient
-		r.lspTools[parser.LangTypeScript] = "typescript-language-server"
-		r.lspTools[parser.LangJavaScript] = "typescript-language-server"
-		r.lspVersions[parser.LangTypeScript] = tsClient.Version()
-		r.lspVersions[parser.LangJavaScript] = tsClient.Version()
+	// client so a `.ts` file and a `.js` file both route to it. Start
+	// when EITHER language is present.
+	if loadedLangs[parser.LangTypeScript] || loadedLangs[parser.LangJavaScript] {
+		if tsClient, err := lsp.StartTypeScript(startCtx, abs, lsp.Options{
+			Timeout:      500 * time.Millisecond,
+			Concurrency:  8,
+			CloseTimeout: 5 * time.Second,
+			Logf:         logf,
+		}); err != nil {
+			logf("startup declined for typescript-language-server: %v", err)
+		} else {
+			r.lsp[parser.LangTypeScript] = tsClient
+			r.lsp[parser.LangJavaScript] = tsClient
+			r.lspTools[parser.LangTypeScript] = "typescript-language-server"
+			r.lspTools[parser.LangJavaScript] = "typescript-language-server"
+			r.lspVersions[parser.LangTypeScript] = tsClient.Version()
+			r.lspVersions[parser.LangJavaScript] = tsClient.Version()
+		}
 	}
 	// pyright-langserver handles Python sources and stubs from a single
 	// workspace — `.py` and `.pyi` both route to the same client.
-	tryStart(parser.LangPython, "pyright-langserver", lsp.StartPython)
+	if loadedLangs[parser.LangPython] {
+		tryStart(parser.LangPython, "pyright-langserver", lsp.StartPython)
+	}
 	// rust-analyzer handles Rust sources from a single workspace — `.rs`
 	// routes to the same client. The language id advertised to the server
 	// is "rust", not the file extension (rust-analyzer rejects "rs").
-	tryStart(parser.LangRust, "rust-analyzer", lsp.StartRust)
+	if loadedLangs[parser.LangRust] {
+		tryStart(parser.LangRust, "rust-analyzer", lsp.StartRust)
+	}
 
 	// Eagerly open every parsed file in the server that knows about its
 	// language. Without this warm-up, both gopls and typescript-language-
