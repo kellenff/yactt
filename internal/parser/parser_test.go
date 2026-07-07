@@ -87,6 +87,8 @@ func TestByName(t *testing.T) {
 		parser.LangTypeScript,
 		parser.LangJavaScript,
 		parser.LangPython,
+		parser.LangRust,
+		parser.LangPHP,
 	} {
 		t.Run(string(name), func(t *testing.T) {
 			lang, err := parser.ByName(name)
@@ -112,7 +114,7 @@ func TestAllContainsKnown(t *testing.T) {
 	for _, l := range all {
 		names[l.Name()] = true
 	}
-	for _, want := range []parser.Name{parser.LangGo, parser.LangTypeScript, parser.LangJavaScript, parser.LangPython} {
+	for _, want := range []parser.Name{parser.LangGo, parser.LangTypeScript, parser.LangJavaScript, parser.LangPython, parser.LangRust, parser.LangPHP} {
 		if !names[want] {
 			t.Errorf("All() missing %q: %v", want, all)
 		}
@@ -1382,6 +1384,189 @@ func TestExtractSymbolsRustTraitImplReceiver(t *testing.T) {
 
 func TestExtractSymbolsRustNilRoot(t *testing.T) {
 	syms, err := parser.ExtractSymbols(parser.Rust{}, nil, nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(syms) != 0 {
+		t.Errorf("got %d symbols, want 0", len(syms))
+	}
+}
+
+// parsePHP runs the PHP grammar against an inline source snippet and
+// returns the root node. Mirrors parseGo / parseTS / parseJS / parseRust.
+func parsePHP(t *testing.T, src string) *sitter.Node {
+	t.Helper()
+	root, err := sitter.ParseCtx(context.Background(), []byte(src), parser.PHP{}.Grammar())
+	if err != nil {
+		t.Fatalf("ParseCtx: %v", err)
+	}
+	if root == nil {
+		t.Fatal("ParseCtx returned nil root")
+	}
+	return root
+}
+
+func TestDetectPHP(t *testing.T) {
+	cases := []string{
+		"/abs/path/foo.php", "relative/bar.PHP", "src/User.phtml",
+		"legacy/old.php5", "stubs/View.phps",
+	}
+	for _, p := range cases {
+		t.Run(p, func(t *testing.T) {
+			lang, err := parser.Detect(p)
+			if err != nil {
+				t.Fatalf("Detect(%q): %v", p, err)
+			}
+			if lang.Name() != parser.LangPHP {
+				t.Errorf("Name = %q, want %q", lang.Name(), parser.LangPHP)
+			}
+		})
+	}
+}
+
+func TestModulePathPHP(t *testing.T) {
+	// PHP has no file-local module name we surface today — always "".
+	for _, src := range []string{
+		"",
+		"<?php function foo() {}\n",
+		"<?php namespace App; class User {}\n",
+	} {
+		t.Run(src, func(t *testing.T) {
+			var lang parser.Language = parser.PHP{}
+			if got := lang.ModulePath(nil, []byte(src)); got != "" {
+				t.Errorf("ModulePath = %q, want empty", got)
+			}
+		})
+	}
+}
+
+func TestByNamePHP(t *testing.T) {
+	lang, err := parser.ByName(parser.LangPHP)
+	if err != nil {
+		t.Fatalf("ByName(php): %v", err)
+	}
+	if lang.Name() != parser.LangPHP {
+		t.Errorf("Name = %q, want %q", lang.Name(), parser.LangPHP)
+	}
+	got := lang.FileExtensions()
+	wantHas := map[string]bool{"php": false, "phtml": false, "php5": false, "phps": false}
+	for _, e := range got {
+		if _, ok := wantHas[e]; ok {
+			wantHas[e] = true
+		}
+	}
+	for ext, present := range wantHas {
+		if !present {
+			t.Errorf("FileExtensions = %v, missing %q", got, ext)
+		}
+	}
+}
+
+const phpFunctionOnly = `<?php
+
+function login($user, $password) {
+    return true;
+}
+
+function helper(): int {
+    return 42;
+}
+`
+
+func TestExtractSymbolsPHPFunction(t *testing.T) {
+	root := parsePHP(t, phpFunctionOnly)
+	syms, err := parser.ExtractSymbols(parser.PHP{}, root, []byte(phpFunctionOnly))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+	if len(syms) != 2 {
+		t.Fatalf("got %d symbols, want 2: %+v", len(syms), syms)
+	}
+	names := map[string]string{}
+	for _, s := range syms {
+		if s.Kind != "function_declaration" {
+			t.Errorf("Kind = %q, want function_declaration", s.Kind)
+		}
+		names[s.Name] = s.Kind
+	}
+	if names["login"] != "function_declaration" || names["helper"] != "function_declaration" {
+		t.Errorf("names = %v, want both function_declaration", names)
+	}
+}
+
+const phpTypesAndMembers = `<?php
+
+interface Greeter {
+    public function greet(): string;
+}
+
+trait T {
+    public function hello() { return 'hi'; }
+}
+
+class User {
+    private $name;
+
+    public function __construct($name) { $this->name = $name; }
+
+    public function name(): string { return $this->name; }
+}
+
+enum Status {
+    case Active;
+    case Inactive;
+}
+`
+
+func TestExtractSymbolsPHPAllKinds(t *testing.T) {
+	root := parsePHP(t, phpTypesAndMembers)
+	syms, err := parser.ExtractSymbols(parser.PHP{}, root, []byte(phpTypesAndMembers))
+	if err != nil {
+		t.Fatalf("ExtractSymbols: %v", err)
+	}
+
+	counts := map[string]int{}
+	methodReceiver := map[string]string{}
+	for _, s := range syms {
+		counts[s.Kind]++
+		if s.Kind == "method_declaration" {
+			methodReceiver[s.Name] = s.Receiver
+		}
+	}
+
+	want := map[string]int{
+		"interface_declaration": 1,
+		"trait_declaration":     1,
+		"class_declaration":     1,
+		"enum_declaration":      1,
+		"method_declaration":    4, // Greeter::greet, T::hello, User::__construct, User::name
+	}
+	for k, v := range want {
+		if counts[k] != v {
+			t.Errorf("%s count = %d, want %d (all=%+v)", k, counts[k], v, counts)
+		}
+	}
+
+	// Method receivers must point at the enclosing type, mirroring the
+	// JS / Python / Rust precedent.
+	cases := []struct {
+		name string
+		want string
+	}{
+		{"greet", "Greeter"},
+		{"hello", "T"},
+		{"__construct", "User"},
+		{"name", "User"},
+	}
+	for _, tc := range cases {
+		if got := methodReceiver[tc.name]; got != tc.want {
+			t.Errorf("method %q Receiver = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestExtractSymbolsPHPNilRoot(t *testing.T) {
+	syms, err := parser.ExtractSymbols(parser.PHP{}, nil, nil)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
