@@ -77,7 +77,8 @@ var SearchCodeSchema = json.RawMessage(`{
 
 // SearchCodeOutputSchema declares the envelope. Top-level type is `object`
 // per the MCP structuredContent contract (validated at server boot via
-// validateOutputSchema).
+// validateOutputSchema). Truncation fields mirror the query_graph /
+// detect_changes pattern (issue #33).
 var SearchCodeOutputSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -115,6 +116,8 @@ var SearchCodeOutputSchema = json.RawMessage(`{
         "required": ["nodeId", "kind", "file", "matchCount", "matches", "bucket"]
       }
     },
+    "truncated":  { "type": "boolean", "description": "True when more groups existed than the requested limit." },
+    "totalCount": { "type": "integer", "description": "Total groups before capping. Compare to len(groups) to know how many were dropped." },
     "provenance": {
       "type": "object",
       "properties": {
@@ -162,17 +165,19 @@ func SearchCode(repo *store.Repo) func(ctx context.Context, args json.RawMessage
 			if err != nil {
 				return nil, fmt.Errorf("search_code: invalid regex: %w", err)
 			}
-			matches = findCodeRegex(repo, a.Scope, a.FileFilter, rx, true, a.Limit*4)
+			matches, _ = findCodeRegex(repo, a.Scope, a.FileFilter, rx, true, a.Limit*4)
 			// ^ Overscan: a single function may produce several raw matches;
 			// we don't know the dedup ratio up front. Cap at 4× the limit
 			// for raw hits; the post-group limit below re-imposes the
 			// caller's constraint on PER-GROUP output, which is the
-			// shape the caller actually wants bounded.
+			// shape the caller actually wants bounded. The second return
+			// value (truncated) is ignored here — search_code reports its
+			// own truncation through the groups envelope.
 		case "tree_sitter":
 			if err := validateTreeSitterPattern(a.Pattern); err != nil {
 				return nil, err
 			}
-			ts, err := findCodeTreeSitter(repo, a.Scope, a.FileFilter, a.Pattern, true, a.Limit*4)
+			ts, _, _, err := findCodeTreeSitter(repo, a.Scope, a.FileFilter, a.Pattern, true, a.Limit*4)
 			if err != nil {
 				return nil, err
 			}
@@ -181,9 +186,22 @@ func SearchCode(repo *store.Repo) func(ctx context.Context, args json.RawMessage
 			return nil, fmt.Errorf("search_code: unknown pattern_kind %q", a.PatternKind)
 		}
 
-		groups := groupByEnclosingSymbol(matches, repo, a.Limit)
+		allGroups := groupByEnclosingSymbol(matches, repo, a.Limit*4)
+		// ^ Overscan at the group layer too: a single function may
+		// produce many raw matches; we don't know the dedup ratio
+		// up front, so the post-group cap is the one that
+		// matters for the agent. Cap at 4× the limit here; the
+		// trim below re-imposes the caller's constraint and
+		// reports the cap honestly.
+		truncated := len(allGroups) > a.Limit
+		groups := allGroups
+		if truncated {
+			groups = groups[:a.Limit]
+		}
 		return map[string]any{
 			"groups":     groups,
+			"truncated":  truncated,
+			"totalCount": len(allGroups),
 			"provenance": domain.YacttProvenance(),
 		}, nil
 	}

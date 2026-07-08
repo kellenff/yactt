@@ -30,8 +30,9 @@ var FindReferencingSymbolsSchema = json.RawMessage(`{
     "symbol": { "type": "string", "description": "Node ID or name_path." },
     "kinds": {
       "type": "array",
-      "items": { "enum": ["calls","mentions","tests","overrides","all"] },
-      "default": ["calls"]
+      "items": { "enum": ["callers","callees","tests","overrides","imports"] },
+      "default": ["callers","callees","tests"],
+      "description": "Edge kinds to follow. Same vocabulary as node_edges.kinds. For transitive (>1 hop) chains use query_graph instead."
     },
     "limit": { "type": "integer", "default": 100 }
   },
@@ -42,7 +43,8 @@ var FindReferencingSymbolsSchema = json.RawMessage(`{
 // FindReferencingSymbolsOutputSchema declares the structuredContent shape
 // of find_referencing_symbols. The list of references is wrapped in an
 // envelope object so the wire frame satisfies the MCP spec's "object"
-// requirement on structuredContent.
+// requirement on structuredContent. Truncation fields mirror the
+// query_graph / detect_changes pattern (issue #33).
 var FindReferencingSymbolsOutputSchema = json.RawMessage(`{
   "type": "object",
   "required": ["references"],
@@ -62,7 +64,9 @@ var FindReferencingSymbolsOutputSchema = json.RawMessage(`{
           "provenance":    { "type": "object" }
         }
       }
-    }
+    },
+    "truncated":   { "type": "boolean", "description": "True when one or more requested kinds hit the per-kind limit and more references existed." },
+    "totalCount":  { "type": "integer", "description": "Total references found across all requested kinds before any capping. Compare to len(references) to know how many were dropped." }
   },
   "additionalProperties": false
 }`)
@@ -96,21 +100,44 @@ func FindReferencingSymbols(repo *store.Repo) func(ctx context.Context, args jso
 		}
 		p := prov()
 		out := []FindReferencingSymbolsResult{}
+		totalFound := 0
+		hitLimit := false
 		for _, k := range ekinds {
+			// Larger per-kind limit (4x the user cap) so the
+			// truncation flag is well-defined: if a kind produced
+			// more than a.Limit references, we report truncated=true
+			// AND totalCount reflects the pre-cap count.
+			scanLimit := a.Limit * 4
+			var raw []NodeEdgesResult
 			switch k {
 			case "callees":
-				out = append(out, cast(scanCallees(repo, file, sym, a.Limit, p))...)
+				raw = scanCallees(repo, file, sym, scanLimit, p)
 			case "callers":
-				out = append(out, cast(scanCallers(repo, file, sym, a.Limit, p))...)
+				raw = scanCallers(repo, file, sym, scanLimit, p)
 			case "tests":
-				out = append(out, cast(scanTests(repo, file, sym, a.Limit, p))...)
+				raw = scanTests(repo, file, sym, scanLimit, p)
+			case "imports":
+				raw = scanImports(repo, file, sym, scanLimit, p)
+			case "overrides":
+				raw = scanOverrides(repo, file, sym, scanLimit, p)
 			}
+			totalFound += len(raw)
+			if len(raw) > a.Limit {
+				hitLimit = true
+				raw = raw[:a.Limit]
+			}
+			out = append(out, cast(raw)...)
 		}
 		// Wrap the slice in an envelope object so structuredContent on the
 		// wire is a JSON object (the MCP contract). References are
 		// surfaced under the `references` key, declared in
-		// FindReferencingSymbolsOutputSchema.
-		return map[string]any{"references": out}, nil
+		// FindReferencingSymbolsOutputSchema. Truncation fields
+		// mirror the query_graph / detect_changes pattern.
+		return map[string]any{
+			"references": out,
+			"truncated":  hitLimit,
+			"totalCount": totalFound,
+		}, nil
 	}
 }
 
@@ -130,7 +157,10 @@ func resolveSymbolToID(repo *store.Repo, symbol string) (id.ID, error) {
 	return id.Parse(nid)
 }
 
-// mapNodeEdgesKinds translates the symbol-friendly kinds to node_edges ones.
+// mapNodeEdgesKinds is a thin pass-through — find_referencing_symbols now
+// shares the same vocabulary as node_edges.kinds (callers, callees, tests,
+// overrides, imports). Kept as a function so any future translation lives
+// in one place.
 func mapNodeEdgesKinds(kinds []string) []string {
 	if len(kinds) == 0 {
 		return []string{"callers", "callees", "tests"}
@@ -138,16 +168,8 @@ func mapNodeEdgesKinds(kinds []string) []string {
 	out := []string{}
 	for _, k := range kinds {
 		switch k {
-		case "calls":
-			out = append(out, "callers")
-		case "mentions":
-			out = append(out, "callers")
-		case "tests":
-			out = append(out, "tests")
-		case "overrides":
-			// No MVP equivalent.
-		case "all":
-			return []string{"callers", "callees", "tests"}
+		case "callers", "callees", "tests", "overrides", "imports":
+			out = append(out, k)
 		}
 	}
 	return out

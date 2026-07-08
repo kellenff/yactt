@@ -546,7 +546,7 @@ func TestFindCode_RegexPattern_Charge(t *testing.T) {
 // machines without gopls).
 func TestFindReferencingSymbols_CrossPackage_Charge(t *testing.T) {
 	repo := loadRepo(t)
-	out := callAsMap(t, tool.FindReferencingSymbols(repo), `{"symbol":"fn:payments.Charge","kinds":["calls"]}`)
+	out := callAsMap(t, tool.FindReferencingSymbols(repo), `{"symbol":"fn:payments.Charge","kinds":["callers"]}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("find_referencing_symbols envelope type: got %T", out)

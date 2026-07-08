@@ -96,3 +96,77 @@ func TestFindSymbol_SlashKindPrefix_ClassUserMethod(t *testing.T) {
 		t.Fatal("expected at least one match for fn/Login (kind-prefix stripped)")
 	}
 }
+
+// findSymbolEnvelope drives FindSymbol and returns the full envelope
+// map. Used by tests that need to assert on `suggestions` / `truncated`
+// / `totalCount` (issue #33).
+func findSymbolEnvelope(t *testing.T, repo *store.Repo, args string) map[string]any {
+	t.Helper()
+	out, err := FindSymbol(repo)(context.Background(), json.RawMessage(args))
+	if err != nil {
+		t.Fatalf("find_symbol: %v (args=%s)", err, args)
+	}
+	env, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("envelope type: got %T", out)
+	}
+	return env
+}
+
+// TestFindSymbol_DidYouMeanOnMiss verifies the edit-distance suggestion
+// hint surfaces on a misspelled name. Regression guard for issue #33.
+func TestFindSymbol_DidYouMeanOnMiss(t *testing.T) {
+	r := loadTestRepo(t)
+	// "Loginn" is one transposition away from "Login" in the fixture.
+	env := findSymbolEnvelope(t, r, `{"name_path":"auth.Loginn"}`)
+
+	if s, _ := env["symbols"].([]FindSymbolResult); len(s) != 0 {
+		t.Fatalf("expected empty symbols for misspelling; got %d", len(s))
+	}
+	sugg, ok := env["suggestions"].([]string)
+	if !ok {
+		t.Fatalf("suggestions: got %T, want []string", env["suggestions"])
+	}
+	if len(sugg) == 0 {
+		t.Fatal("expected at least one suggestion for 'auth.Loginn'; got none")
+	}
+	// "Login" should appear in the suggestions since it's the closest
+	// index match (edit-distance 1 from "Loginn").
+	var foundLogin bool
+	for _, s := range sugg {
+		if s == "Login" {
+			foundLogin = true
+			break
+		}
+	}
+	if !foundLogin {
+		t.Errorf("expected 'Login' in suggestions; got %v", sugg)
+	}
+}
+
+// TestFindSymbol_NoSuggestionOnHit verifies the suggestions field is
+// omitted (not just empty) when the result set is non-empty. Keeps the
+// wire shape honest: an empty array would still pay the schema cost.
+func TestFindSymbol_NoSuggestionOnHit(t *testing.T) {
+	r := loadTestRepo(t)
+	env := findSymbolEnvelope(t, r, `{"name_path":"auth.Login"}`)
+	if _, hasSugg := env["suggestions"]; hasSugg {
+		t.Errorf("did not expect `suggestions` on a hit; envelope=%+v", env)
+	}
+}
+
+// TestFindSymbol_TruncatedAndTotalCount verifies the truncation envelope
+// fields surface on a cap. The fixture has 1 Login match; with limit=0
+// we still get ≥1 result. The point: truncated=false, totalCount≥1.
+func TestFindSymbol_TruncatedAndTotalCount(t *testing.T) {
+	r := loadTestRepo(t)
+	env := findSymbolEnvelope(t, r, `{"name_path":"auth.Login"}`)
+
+	if tr, _ := env["truncated"].(bool); tr {
+		t.Errorf("truncated = true; want false (1 hit, limit not hit)")
+	}
+	tc, ok := env["totalCount"].(int)
+	if !ok || tc < 1 {
+		t.Errorf("totalCount: got %v, want ≥1", env["totalCount"])
+	}
+}

@@ -45,6 +45,8 @@ var FindSymbolSchema = json.RawMessage(`{
 // find_symbol. The list of matches is wrapped in an envelope object so the
 // wire frame satisfies the MCP spec's "object" requirement on
 // structuredContent. Field name `symbols` matches get_symbols_overview.
+// `suggestions` and `truncated` surface recovery hints and result-cap
+// status (issue #33).
 var FindSymbolOutputSchema = json.RawMessage(`{
   "type": "object",
   "required": ["symbols"],
@@ -59,7 +61,14 @@ var FindSymbolOutputSchema = json.RawMessage(`{
           "body": { "type": ["object", "null"] }
         }
       }
-    }
+    },
+    "suggestions": {
+      "type": "array",
+      "description": "When 'symbols' is empty, edit-distance matches against the index so the agent can self-correct. Omitted when the result set is non-empty.",
+      "items": { "type": "string" }
+    },
+    "truncated":  { "type": "boolean", "description": "True when more matches existed than the requested limit." },
+    "totalCount": { "type": "integer", "description": "Total matches before capping. Compare to len(symbols) to know how many were dropped." }
   },
   "additionalProperties": false
 }`)
@@ -108,6 +117,8 @@ func FindSymbol(repo *store.Repo) func(ctx context.Context, args json.RawMessage
 		}
 		// Glob → match.
 		matches := matchByNamePattern(repo, pkgPrefix, namePattern)
+		totalFound := len(matches)
+		hitLimit := totalFound > a.Limit
 		out := make([]FindSymbolResult, 0, len(matches))
 		for _, m := range matches {
 			ent := entityFromSymbol(m.Sym, m.File, repo)
@@ -132,7 +143,19 @@ func FindSymbol(repo *store.Repo) func(ctx context.Context, args json.RawMessage
 		// Wrap the slice in an envelope object so structuredContent on the
 		// wire is a JSON object (the MCP contract). Matches are surfaced
 		// under the `symbols` key, declared in FindSymbolOutputSchema.
-		return map[string]any{"symbols": out}, nil
+		// On empty result, surface a "did you mean" suggestion list so
+		// the agent can recover from a misspelling (issue #33).
+		resp := map[string]any{
+			"symbols":    out,
+			"truncated":  hitLimit,
+			"totalCount": totalFound,
+		}
+		if len(out) == 0 {
+			if sugg := suggestNames(repo, a.NamePath, 3); len(sugg) > 0 {
+				resp["suggestions"] = sugg
+			}
+		}
+		return resp, nil
 	}
 }
 

@@ -111,6 +111,12 @@ func GetCodeSnippet(repo *store.Repo) func(ctx context.Context, args json.RawMes
 
 		nodeID, ambiguous, err := resolveNamePath(repo, a.NamePath)
 		if err != nil {
+			// On miss, embed an edit-distance suggestion in the
+			// error text so the agent can recover without another
+			// tool call (issue #33).
+			if sugg := suggestNames(repo, a.NamePath, 3); len(sugg) > 0 {
+				return nil, fmt.Errorf("%w; did you mean: %s", err, strings.Join(sugg, ", "))
+			}
 			return nil, err
 		}
 		res, err := readSource(repo, nodeID, a.Range, a.IncludeTrivia)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"time"
 )
@@ -177,6 +178,7 @@ func (s *Server) Tools() []ToolDef {
 	for _, t := range s.tools {
 		out = append(out, t)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
@@ -248,6 +250,10 @@ func (s *Server) dispatch(ctx context.Context, req Request) Response {
 			})
 		}
 		s.mu.RUnlock()
+		// Deterministic ordering so agents see a stable tool surface
+		// across restarts. Doc on Server.Tools() makes the same
+		// promise; this is the wire equivalent.
+		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 		return Response{JSONRPC: "2.0", ID: req.ID, Result: ListToolsResult{Tools: out}}
 	case "tools/call":
 		var params CallToolParams

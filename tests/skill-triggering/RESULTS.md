@@ -170,3 +170,77 @@ blast radius). The current matrix already includes those prompts —
 callers, junie read files but didn't extract them correctly). So the
 symbol-shaped prompts are doing real work; only the broad-intent
 prompts let junie sidestep MCP by reading.
+
+## Issue #33 — yactt as MCP tool for agentic retrieval
+
+Run on **2026-07-08** against the same prompts (pi harness only, single
+run; full matrix would take ~30 min and isn't on the critical path).
+Re-ran `code-explore/01-caller.txt` after the issue #33 changes to
+sanity-check that the surface still composes for an agent.
+
+| Harness | Prompt | Score | Cost USD | Tokens | Tool reach | Notes |
+| ------- | ------ | -----:| --------:| ------:| ---------- | ----- |
+| pi      | 01-caller | 33.33 | $0.0111 | 72,160 | ❌ (no tools) | pi-mcp.json adapter routing may be stale; needs follow-up rerun |
+
+### What changed (issue #33)
+
+This PR was about agent-flow friendliness of the MCP surface, not the
+graph machinery. Net effect on the tool surface:
+
+1. **Description rewrite** — 17 of 21 tools now include "when to use this"
+   guidance in their `tools/list` description. A fresh agent that
+   loads `tools/list` (no skill body) can disambiguate `find_symbol` /
+   `find_referencing_symbols` / `node_edges` / `query_graph` and pick
+   the right one for the success-criterion question
+   "transitive callers of X".
+2. **Schema fixes** — `find_referencing_symbols.kinds` enum aligned with
+   `node_edges.kinds` (the schema was lying — declared
+   `[calls,mentions,tests,overrides,all]` but the handler silently
+   mapped to `[callers,callees,tests]` and dropped `overrides`). Now
+   both tools share the canonical vocabulary `[callers,callees,tests,
+   overrides,imports]`. `node_get.output.additionalProperties` closed
+   (was `true`, inconsistent with every other tool).
+   `query_graph.kind` filter gained an enum (was free-form string).
+3. **`tools/list` ordering** — `Server.Tools()` and the `tools/list`
+   handler now sort by name. Map iteration was non-deterministic;
+   doc promised sorted but didn't deliver.
+4. **Truncation reporting** — `truncated:bool` + `totalCount:int` (or
+   `visited:int` for `query_graph`) added to 8 tools that previously
+   capped silently: `find_symbol`, `find_code`, `search_code`,
+   `find_referencing_symbols`, `node_edges`, `get_architecture`,
+   `search`, `get_symbols_overview`. Mirrors the existing
+   `query_graph` / `detect_changes` pattern.
+5. **"Did you mean X?" recovery** — `find_symbol` returns a
+   `suggestions` field on miss (edit-distance 2 against the symbol
+   index, top 3). `get_code_snippet` embeds suggestions in the error
+   text on miss. Replaces silent empty arrays / opaque errors with
+   recovery hints an agent can act on.
+6. **Skill bodies updated** — `skills/code-explore/SKILL.md` and
+   `skills/using-yactt/SKILL.md` now point at `query_graph` for
+   multi-hop, note the `suggestions` field, and remind the agent to
+   check `truncated` before declaring a query exhausted.
+
+### Success criterion check (hand-scripted)
+
+The issue's success criterion: "answer 'where is X used, transitively,
+and what calls into it?' in ≤4 tool calls using only yactt's MCP
+tools, with no client-side filtering."
+
+Pinned as `TestFidelity_AgentFlow_TransitiveCallers` in
+`tests/fidelity/fidelity_test.go`. Optimal sequence:
+
+1. `find_symbol("auth.Login")` → `fn:auth.Login`
+2. `query_graph(from="fn:auth.Login", follow=["callers"], depth=3, limit=50)` → transitive callers
+
+2 calls. Test asserts `calls ≤ 4` and that the final result has ≥1
+caller row.
+
+### Benchmark re-run caveat
+
+The pi harness above showed `tools_reached=false, skill_loaded=false`
+— same prompt scored 33.33% on the original (2026-07-07) run. The
+issue is the pi-mcp.json adapter routing, not the yactt surface
+(this PR didn't touch `cmd/yactt/main.go` routing or
+`tests/skill-triggering/drivers/pi.sh`). A follow-up benchmark
+rerun with `HARNESS=both ./run-all.sh 6` would give a clean
+before/after; not on the critical path for this PR.

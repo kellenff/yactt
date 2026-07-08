@@ -42,6 +42,8 @@ var SearchSchema = json.RawMessage(`{
 // SearchOutputSchema declares the structuredContent shape of search. The
 // list of results is wrapped in an envelope object so the wire frame
 // satisfies the MCP spec's "object" requirement on structuredContent.
+// Truncation fields mirror the query_graph / detect_changes pattern
+// (issue #33).
 var SearchOutputSchema = json.RawMessage(`{
   "type": "object",
   "required": ["results"],
@@ -56,7 +58,9 @@ var SearchOutputSchema = json.RawMessage(`{
           "node":  { "type": "object" }
         }
       }
-    }
+    },
+    "truncated":  { "type": "boolean", "description": "True when more ranked matches existed than the requested limit." },
+    "totalCount": { "type": "integer", "description": "Total ranked matches in the overscan window (limit*4). True corpus total may be higher when truncated=true." }
   },
   "additionalProperties": false
 }`)
@@ -71,13 +75,21 @@ func Search(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (a
 		if a.Query == "" {
 			return nil, fmt.Errorf("search: query is required")
 		}
+		// Default the user-facing limit FIRST, then derive the
+		// internal overscan. If the defaulting runs after the
+		// overscan, `q.Limit = 0 * 4 = 0` triggers the search
+		// package's own default and `overscanned[:a.Limit]`
+		// truncates to [:0]. Issue #33 — order matters.
+		if a.Limit <= 0 {
+			a.Limit = 10
+		}
 		terms, err := splitQuery(a.Query)
 		if err != nil {
 			return nil, err
 		}
 		q := search.Query{
 			Terms: terms,
-			Limit: a.Limit,
+			Limit: a.Limit * 4, // overscan so we can report truncation
 			Scope: a.Scope,
 		}
 		if len(a.Kind) > 0 {
@@ -86,11 +98,22 @@ func Search(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (a
 				q.Kind[i] = domain.NodeKind(strings.ToUpper(k))
 			}
 		}
-		results := search.Search(repo, q)
+		overscanned := search.Search(repo, q)
+		truncated := len(overscanned) > a.Limit
+		results := overscanned
+		if truncated {
+			results = results[:a.Limit]
+		}
 		// Wrap the slice in an envelope object so structuredContent on the
 		// wire is a JSON object (the MCP contract). Matches are surfaced
 		// under the `results` key, declared in SearchOutputSchema.
-		return map[string]any{"results": results}, nil
+		// Truncation fields surface the cap signal so the agent knows
+		// whether the list was capped (issue #33).
+		return map[string]any{
+			"results":    results,
+			"truncated":  truncated,
+			"totalCount": len(overscanned),
+		}, nil
 	}
 }
 
