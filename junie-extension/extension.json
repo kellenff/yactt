@@ -1,0 +1,4 @@
+{
+  "name": "yactt",
+  "description": "Federated code intelligence for Go/TypeScript/JavaScript/Python. 21 MCP tools for symbol search, call-graph traversal, AST-aware search, rename-impact (blast radius), and architecture / hotspots / dead-code detection."
+}

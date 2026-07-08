@@ -21,7 +21,7 @@ WORKSPACE_DIR="${4:-${YACTT_WORKSPACE:-}}"
 HARNESS="${HARNESS:-claude}"
 
 if [ -z "$SKILL_NAME" ] || [ -z "$PROMPT_FILE" ]; then
-  echo "Usage: HARNESS=claude|pi $0 <skill-name> <prompt-txt-path> [max-turns] [workspace-dir]" >&2
+  echo "Usage: HARNESS=claude|pi|junie $0 <skill-name> <prompt-txt-path> [max-turns] [workspace-dir]" >&2
   exit 2
 fi
 
@@ -92,6 +92,24 @@ case "$HARNESS" in
     TOOL_NAMES=$(sort -u "$TMP_NAMES" | tr '\n' ' ' | sed 's/ $//')
     rm -f "$TMP_NAMES"
     ;;
+  junie)
+    # Junie's MCP server events carry the yactt server tag and the bare
+    # tool name. Tool names we recognize live in $YACTT_TOOLS_RE below —
+    # an explicit list is more robust than parsing every event shape.
+    TOOLS_REACHED=false
+    YACTT_TOOLS_RE='tree_overview|node_get|node_source|node_edges|find_symbol|find_code|search|search_code|find_referencing_symbols|edit_impact|get_graph_schema|get_code_snippet|get_architecture|get_symbols_overview|query_graph|detect_changes|list_projects|index_repository|index_status|delete_project|persisted_query'
+    TMP_NAMES="$(mktemp -t yactt-names.XXXXXX)"
+    grep -oE "\"name\":\"mcp__yactt__(${YACTT_TOOLS_RE})\"" "$LOG_FILE" 2>/dev/null \
+      | sed -E "s/.*\"name\":\"mcp__yactt__(${YACTT_TOOLS_RE})\"/\1/" >> "$TMP_NAMES" || true
+    grep -oE "\"server\":\"yactt\",\"tool\":\"(${YACTT_TOOLS_RE})\"" "$LOG_FILE" 2>/dev/null \
+      | sed -E "s/.*\"tool\":\"(${YACTT_TOOLS_RE})\".*/\1/" >> "$TMP_NAMES" || true
+    if grep -q '"server":"yactt"' "$LOG_FILE" 2>/dev/null; then
+      TOOLS_REACHED=true
+      [ ! -s "$TMP_NAMES" ] && echo "yactt_mcp" >> "$TMP_NAMES"
+    fi
+    TOOL_NAMES=$(sort -u "$TMP_NAMES" | tr '\n' ' ' | sed 's/ $//')
+    rm -f "$TMP_NAMES"
+    ;;
 esac
 if [ -n "${TOOL_NAMES// /}" ]; then TOOLS_REACHED=true; fi
 TOOL_COUNT=$(echo "$TOOL_NAMES" | tr ' ' '\n' | grep -c '.' || echo 0)
@@ -109,6 +127,13 @@ case "$HARNESS" in
     # Pi uses slash commands. The agent doesn't auto-load skills, so this
     # is usually false; we record it for completeness.
     if grep -q "/skill:${SKILL_NAME}\b" "$LOG_FILE" 2>/dev/null; then
+      SKILL_LOADED=true
+    fi
+    ;;
+  junie)
+    # Junie emits a skill_load / skill_use event when the agent pulls
+    # the skill body into context. Either name field is sufficient.
+    if grep -qE "\"name\":\"${SKILL_NAME}\"|\"skill\":\"${SKILL_NAME}\"" "$LOG_FILE" 2>/dev/null; then
       SKILL_LOADED=true
     fi
     ;;

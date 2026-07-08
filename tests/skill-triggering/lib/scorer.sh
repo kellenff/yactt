@@ -25,6 +25,7 @@ transcript_final_text() {
   case "$harness" in
     claude) _claude_final_text "$log" ;;
     pi)     _pi_final_text "$log" ;;
+    junie)  _junie_final_text "$log" ;;
     *) echo "scorer: unknown harness '$harness'" >&2; return 1 ;;
   esac
 }
@@ -35,6 +36,7 @@ cost_usd() {
   case "$harness" in
     claude) _claude_cost_usd "$log" ;;
     pi)     _pi_cost_usd "$log" ;;
+    junie)  _junie_cost_usd "$log" ;;
     *) echo "0.0000"; return 0 ;;
   esac
 }
@@ -46,6 +48,7 @@ tokens() {
   case "$harness" in
     claude) _claude_tokens "$log" ;;
     pi)     _pi_tokens "$log" ;;
+    junie)  _junie_tokens "$log" ;;
     *) echo "0 0 0 0"; return 0 ;;
   esac
 }
@@ -200,6 +203,75 @@ with open(sys.argv[1]) as f:
         t_out += int(u.get("output") or 0)
         t_cr  += int(u.get("cacheRead") or 0)
         t_cw  += int(u.get("cacheWrite") or 0)
+print(t_in, t_out, t_cr, t_cw)
+PY
+}
+
+# _junie_final_text: the `result` field of the {"type":"result"} event.
+# That field carries the agent's final assistant text in stream-json.
+_junie_final_text() {
+  python3 - "$1" <<'PY' 2>/dev/null || echo ""
+import json, sys
+last = ""
+with open(sys.argv[1]) as f:
+    for line in f:
+        line = line.strip()
+        if not line: continue
+        try: ev = json.loads(line)
+        except Exception: continue
+        if ev.get("type") != "result": continue
+        last = ev.get("result", "")
+print(last, end="")
+PY
+}
+
+# _junie_cost_usd: sum of `cost` over the `errorCode[]` array on the
+# result event. Each entry is per-model (junie routes across multiple
+# models for one task — e.g. a planner + a worker). Returns 0.0000 if
+# the harness reports no cost (the default for junie, which bills at
+# the IDE level rather than per-token).
+_junie_cost_usd() {
+  python3 - "$1" <<'PY' 2>/dev/null || echo "0.0000"
+import json, sys
+total = 0.0
+with open(sys.argv[1]) as f:
+    for line in f:
+        line = line.strip()
+        if not line: continue
+        try: ev = json.loads(line)
+        except Exception: continue
+        if ev.get("type") != "result": continue
+        for entry in (ev.get("errorCode") or []):
+            if not isinstance(entry, dict): continue
+            v = entry.get("cost")
+            if isinstance(v, (int, float)): total += float(v)
+        break
+print(f"{total:.4f}")
+PY
+}
+
+# _junie_tokens: same array, summing inputTokens / outputTokens /
+# cacheInputTokens / cacheCreateTokens across all model entries.
+_junie_tokens() {
+  python3 - "$1" <<'PY' 2>/dev/null || echo "0 0 0 0"
+import json, sys
+t_in=t_out=t_cr=t_cw = 0
+with open(sys.argv[1]) as f:
+    for line in f:
+        line = line.strip()
+        if not line: continue
+        try: ev = json.loads(line)
+        except Exception: continue
+        if ev.get("type") != "result": continue
+        for entry in (ev.get("errorCode") or []):
+            if not isinstance(entry, dict): continue
+            # ponytail: junie uses cacheInputTokens/cacheCreateTokens
+            # for read/write — different field names than claude/pi.
+            t_in  += int(entry.get("inputTokens") or 0)
+            t_out += int(entry.get("outputTokens") or 0)
+            t_cr  += int(entry.get("cacheInputTokens") or 0)
+            t_cw  += int(entry.get("cacheCreateTokens") or 0)
+        break
 print(t_in, t_out, t_cr, t_cw)
 PY
 }
