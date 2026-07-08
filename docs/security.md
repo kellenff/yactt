@@ -312,12 +312,30 @@ contract at the MCP dispatch layer: one line per `tools/call`,
 `is_error` set on handler error, and a clean no-op when no
 auditor is attached.
 
+## 7. In-CI secret-scanning gate
+
+`ci.yml` installs gitleaks via `go install github.com/zricethezav/
+gitleaks/v8@v8.18.4` and runs `gitleaks detect --source . --no-banner`
+on every PR against `ubuntu-latest`. The Go module proxy's
+content-addressable download is the audit anchor — same trust model
+as `govulncheck` directly above, no SHA256SUMS or cosign needed in
+the pipeline, no third-party action wrapper to maintain.
+
+The umbrella originally used `gitleaks/gitleaks-action@v2.3.2`; that
+wrapper had a URL-construction bug that 404'd on the binary tarball,
+and switching to `go install` sidesteps the wrapper entirely.
+
+What it does NOT defend against: provider-side partner-pattern
+tokens (AWS, GitHub PATs); GitHub Secret Scanning (repo settings →
+Code security and analysis) remains enabled as a second layer.
+
 ## Summary table
 
 | Path                         | Integrity gate                          | Where it lives                |
 |------------------------------|-----------------------------------------|-------------------------------|
 | Tree-sitter grammar bindings | `go mod verify` + no-`replace` grep     | `ci.yml` → `go mod verify`    |
-| Go-module CVEs               | `govulncheck ./...`                     | `ci.yml` → `vuln` job         |
+| Go-module CVEs               | `govulncheck ./...`                     | `ci.yml` → `security` job     |
+| Committed secrets (PR-time)  | `gitleaks detect --source . --no-banner` (`go install gitleaks/v8@v8.18.4`) | `ci.yml` → `security` job (Issue #4) |
 | Release tarball (build)      | SHA256SUMS + SLSA L3 attestation        | `release.yml` → `build` job   |
 | Release tarball (publish)    | `gh attestation verify` re-check       | `release.yml` → `release` job |
 | Install (consumer)           | SHA256SUMS + TOFU + semver allowlist    | `plugins/yactt/scripts/install.sh` |

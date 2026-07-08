@@ -67,19 +67,25 @@ jobs:
         run: go build -trimpath -o /tmp/yactt ./cmd/yactt
 
   security:
-    # Supply-chain CVE gate (Issue #1, mitigation #2). govulncheck queries
-    # the Go vulnerability database for any symbols imported by this module
-    # and fails on known CVEs. Runs in parallel with `test` — it's an
-    # offline query against the v1.24+ vuln DB embedded in the govulncheck
-    # binary.
+    # Two gates on every PR:
+    #   - govulncheck (Issue #1, mitigation #2): CVE detection on imported
+    #     symbols. Offline query against the v1.24+ vuln DB embedded in the
+    #     govulncheck binary.
+    #   - gitleaks (Issue #4, mitigation #4b): committed-secret detection in
+    #     the working tree. We install gitleaks via `go install
+    #     github.com/zricethezav/gitleaks/v8@v8.18.4` — the Go module
+    #     proxy's content-addressable download is the audit anchor, same
+    #     trust model as govulncheck directly above. No SHA256SUMS, no
+    #     cosign, no third-party action wrapper to maintain. The umbrella
+    #     originally used gitleaks/gitleaks-action@v2.3.2; that wrapper had
+    #     a URL-construction bug that 404'd on the binary tarball. The
+    #     rollback attributed it to "gitleaks upstream availability
+    #     issues" — that was wrong. Switching to `go install` sidesteps
+    #     the wrapper entirely.
     #
-    # Secret-scanning (Issue #4, mitigation #4b) is handled at the platform
-    # layer via GitHub Secret Scanning + Dependabot rather than an in-CI
-    # gitleaks step — the gitleaks upstream has had recent availability
-    # issues and the action-wrapped binary download added a non-trivial
-    # failure surface. Secret Scanning is enabled at the repo level (see
-    # repo settings → Code security and analysis).
-    name: govulncheck
+    # GitHub Secret Scanning (repo settings → Code security and analysis)
+    # remains enabled as a second layer for partner-pattern tokens.
+    name: govulncheck + gitleaks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -98,6 +104,19 @@ jobs:
           set -euo pipefail
           go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           govulncheck ./...
+
+      - name: gitleaks
+        # ponytail: install gitleaks via the Go module proxy (same
+        # pattern as govulncheck directly above). The proxy's content-
+        # addressable download is the audit anchor — no SHA256SUMS
+        # file, no cosign, no third-party action wrapper to maintain.
+        # The umbrella originally used gitleaks/gitleaks-action@v2.3.2;
+        # that wrapper had a URL-construction bug, and switching to
+        # `go install` sidesteps the wrapper entirely.
+        run: |
+          set -euo pipefail
+          go install github.com/zricethezav/gitleaks/v8@v8.18.4
+          gitleaks detect --source . --no-banner
 
       - name: upload smoke binary
         if: always()
