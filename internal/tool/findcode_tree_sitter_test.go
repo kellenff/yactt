@@ -106,12 +106,28 @@ func TestFindCode_TreeSitter_IncludeContext(t *testing.T) {
 }
 
 // TestFindCode_TreeSitter_Limit pins the limit gate: a query that
-// matches many sites must cap at limit.
+// matches many sites must cap at limit. The handler overscans
+// internally so the response can surface `truncated` + `totalCount`
+// honestly; the wire `matches` slice is trimmed to the user-requested
+// limit (issue #33).
 func TestFindCode_TreeSitter_Limit(t *testing.T) {
 	repo := loadRepoFromFixture(t)
-	matches := callFindCode(t, repo, `{"pattern":"(call_expression) @c","pattern_kind":"tree_sitter","limit":2}`)
+	out, err := FindCode(repo)(context.Background(), json.RawMessage(`{"pattern":"(call_expression) @c","pattern_kind":"tree_sitter","limit":2}`))
+	if err != nil {
+		t.Fatalf("find_code: %v", err)
+	}
+	env, _ := out.(map[string]any)
+	matches, _ := env["matches"].([]FindCodeMatch)
 	if len(matches) != 2 {
-		t.Fatalf("expected exactly 2 matches; got %d (%+v)", len(matches), fileNames(matches))
+		t.Fatalf("expected exactly 2 matches on the wire; got %d (%+v)", len(matches), fileNames(matches))
+	}
+	truncated, _ := env["truncated"].(bool)
+	if !truncated {
+		t.Errorf("expected truncated=true when overscanned beyond limit; got false (envelope=%+v)", env)
+	}
+	total, _ := env["totalCount"].(int)
+	if total <= 2 {
+		t.Errorf("expected totalCount > 2 (overscan window); got %d", total)
 	}
 }
 

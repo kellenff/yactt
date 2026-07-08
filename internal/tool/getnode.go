@@ -45,7 +45,10 @@ var GetNodeSchema = json.RawMessage(`{
 }`)
 
 // GetNodeOutputSchema declares the structuredContent shape of node_get.
-// The handler returns a *domain.Node (a single object).
+// The handler returns a *domain.Node (a single object). additionalProperties
+// is closed (false) so the host-side schema validator doesn't accept
+// arbitrary extra fields — consistent with every other yactt tool
+// (issue #33).
 var GetNodeOutputSchema = json.RawMessage(`{
   "type": "object",
   "required": ["id", "kind"],
@@ -55,7 +58,7 @@ var GetNodeOutputSchema = json.RawMessage(`{
     "name":    { "type": "string" },
     "summary": { "type": "string" }
   },
-  "additionalProperties": true
+  "additionalProperties": false
 }`)
 
 // GetNode returns a Handler that materializes a node's layers.

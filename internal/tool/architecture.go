@@ -30,6 +30,10 @@ type GetArchitectureArgs struct {
 // ArchitectureResult is the structuredContent envelope for get_architecture.
 // Ponytail: every field is built from one pass over `repo.Files()` + the
 // existing resolver indices. No new index, no async work, no LLM calls.
+//
+// `Truncated` (issue #33) is true when one or more capped sections
+// (deadCode, importCycles) hit their hard cap — the agent can decide
+// whether to filter further.
 type ArchitectureResult struct {
 	RootPackage       string                  `json:"rootPackage"`
 	Summary           ArchSummary             `json:"summary"`
@@ -38,6 +42,7 @@ type ArchitectureResult struct {
 	Hotspots          []ArchHotspot           `json:"hotspots"`
 	DeadCode          []ArchDeadCode          `json:"deadCode"`
 	ImportCycles      []ArchCycle             `json:"importCycles"`
+	Truncated         bool                    `json:"truncated"`
 	Provenance        domain.Provenance       `json:"provenance"`
 }
 
@@ -106,7 +111,8 @@ var GetArchitectureSchema = json.RawMessage(`{
 
 // GetArchitectureOutputSchema declares the structuredContent shape. All
 // sections are always present (possibly empty) so clients can render the
-// answer without nil checks.
+// answer without nil checks. Truncation fields surface the per-section
+// cap signal so the agent knows when more existed (issue #33).
 var GetArchitectureOutputSchema = json.RawMessage(`{
   "type": "object",
   "required": ["summary", "languages", "topPackages", "hotspots", "deadCode", "importCycles", "provenance"],
@@ -118,6 +124,7 @@ var GetArchitectureOutputSchema = json.RawMessage(`{
     "hotspots":     { "type": "array" },
     "deadCode":     { "type": "array" },
     "importCycles": { "type": "array" },
+    "truncated":    { "type": "boolean", "description": "True when one or more sections (deadCode, importCycles, topPackages, hotspots) hit its cap and more existed." },
     "provenance":   { "type": "object" }
   },
   "additionalProperties": false
@@ -162,11 +169,28 @@ func GetArchitecture(repo *store.Repo) func(ctx context.Context, args json.RawMe
 			ImportCycles: []ArchCycle{},
 		}
 		result.Summary, result.Languages, result.TopPackages = countsAndPackages(repo)
-		result.Hotspots, result.DeadCode = hotspotsAndDeadCode(repo, a.Top)
+		var deadTruncated, cyclesTruncated bool
+		result.Hotspots, result.DeadCode, deadTruncated = hotspotsAndDeadCode(repo, a.Top)
 		if includeCycles {
-			result.ImportCycles = importCycles(repo)
+			result.ImportCycles, cyclesTruncated = importCycles(repo)
 		}
-		return result, nil
+		// Truncation: dead-code is capped at 50, cycles at 10.
+		// The cap can be a false positive when the corpus happens
+		// to have exactly that many entries — acceptable given
+		// the agent can re-call or trust the cap is at the
+		// limit. Issue #33 — wire the cap signal so the agent
+		// knows to call with a filter.
+		return &ArchitectureResult{
+			RootPackage:   result.RootPackage,
+			Summary:       result.Summary,
+			Languages:     result.Languages,
+			TopPackages:   result.TopPackages,
+			Hotspots:      result.Hotspots,
+			DeadCode:      result.DeadCode,
+			ImportCycles:  result.ImportCycles,
+			Truncated:     deadTruncated || cyclesTruncated,
+			Provenance:    result.Provenance,
+		}, nil
 	}
 }
 
@@ -260,7 +284,7 @@ func sortedPackages(counts map[string]int, top int) []ArchPackage {
 // Single pass per file: the persisted call-edge index keys by callee name,
 // so we count `EdgesByCaller(file, sym)` for the candidate and use the
 // length as the score.
-func hotspotsAndDeadCode(repo *store.Repo, top int) ([]ArchHotspot, []ArchDeadCode) {
+func hotspotsAndDeadCode(repo *store.Repo, top int) ([]ArchHotspot, []ArchDeadCode, bool) {
 	type cand struct {
 		id     string
 		kind   domain.NodeKind
@@ -311,6 +335,7 @@ func hotspotsAndDeadCode(repo *store.Repo, top int) ([]ArchHotspot, []ArchDeadCo
 	}
 
 	// Dead-code: callers == 0, filtered for Go exported.
+	deadTruncated := false
 	var dead []ArchDeadCode
 	for _, c := range all {
 		if c.caller != 0 {
@@ -325,6 +350,7 @@ func hotspotsAndDeadCode(repo *store.Repo, top int) ([]ArchHotspot, []ArchDeadCo
 			ID: c.id, Kind: c.kind, Name: c.name, File: c.file, Exported: exported,
 		})
 		if len(dead) >= maxDeadCodeEntries {
+			deadTruncated = true
 			break
 		}
 	}
@@ -333,20 +359,21 @@ func hotspotsAndDeadCode(repo *store.Repo, top int) ([]ArchHotspot, []ArchDeadCo
 	// Convert hotspots to []ArchHotspot preserving ordered result.
 	hs := make([]ArchHotspot, len(hotspots))
 	copy(hs, hotspots)
-	return hs, dead
+	return hs, dead, deadTruncated
 }
 
 // importCycles builds a file-level import graph and runs Tarjan SCC.
 // Returns strongly-connected components of size > 1 (true multi-node
 // cycles), plus size-1 SCCs that have a self-loop (file imports its own
-// package — also a cycle per Go semantics).
+// package — also a cycle per Go semantics), plus a `truncated` flag set
+// when the result hit maxCyclesReturned (issue #33).
 //
 // The graph uses file paths as nodes; the import resolution is package-
 // level (each file imports a package; we map that package back to a
 // representative file via `PackagePath`). This is deliberately simple —
 // only local (intra-repo) imports get edges. External imports land in
 // no node and contribute nothing.
-func importCycles(repo *store.Repo) []ArchCycle {
+func importCycles(repo *store.Repo) ([]ArchCycle, bool) {
 	files := repo.Files()
 	// Map package path -> any one file in that package (representative).
 	pkgRep := map[string]string{}
@@ -400,10 +427,10 @@ func importCycles(repo *store.Repo) []ArchCycle {
 		}
 		cycles = append(cycles, ArchCycle{Files: sorted})
 		if len(cycles) >= maxCyclesReturned {
-			break
+			return cycles, true
 		}
 	}
-	return cycles
+	return cycles, false
 }
 
 // resolveImport maps an ImportEntry path string back to a file in

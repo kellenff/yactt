@@ -138,6 +138,22 @@ func TestGetCodeSnippet_UnknownNamePath(t *testing.T) {
 	}
 }
 
+// TestGetCodeSnippet_DidYouMeanInError verifies the error text on a
+// misspelled name_path embeds an edit-distance suggestion. Regression
+// guard for issue #33.
+func TestGetCodeSnippet_DidYouMeanInError(t *testing.T) {
+	r := loadTestRepo(t)
+	// "Loginn" is edit-distance 1 from "Login" — the suggestion hint
+	// should be present in the error text.
+	_, err := GetCodeSnippet(r)(context.Background(), json.RawMessage(`{"name_path":"auth.Loginn"}`))
+	if err == nil {
+		t.Fatal("expected error on misspelled name_path")
+	}
+	if !strings.Contains(err.Error(), "did you mean") || !strings.Contains(err.Error(), "Login") {
+		t.Errorf("expected error to embed 'did you mean: Login'; got %q", err.Error())
+	}
+}
+
 // --- helpers --------------------------------------------------------------
 
 func callSnippet(t *testing.T, repo *store.Repo, args string) *GetCodeSnippetResult {

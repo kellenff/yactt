@@ -96,7 +96,11 @@ var QueryGraphSchema = json.RawMessage(`{
       "items": { "enum": ["callers", "callees", "tests", "imports", "overrides"] }
     },
     "depth":    { "type": "integer", "minimum": 1, "maximum": 5, "default": 2 },
-    "kind":     { "type": "string" },
+    "kind":     {
+      "type": "string",
+      "enum": ["FUNCTION", "METHOD", "CLASS", "MODULE", "FILE", "PACKAGE", "REPO"],
+      "description": "Filter rows by target NodeKind. Omit to return all kinds. Case-insensitive — the canonical names are FUNCTION/METHOD/CLASS/MODULE/FILE/PACKAGE/REPO."
+    },
     "exclude":  { "enum": ["tests"] },
     "limit":    { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 }
   },

@@ -55,7 +55,9 @@ var NodeEdgesSchema = json.RawMessage(`{
 // NodeEdgesOutputSchema declares the structuredContent shape of
 // node_edges. The list of edges is wrapped in an envelope object so the
 // wire frame satisfies the MCP spec's "object" requirement on
-// structuredContent.
+// structuredContent. Truncation fields mirror the query_graph /
+// detect_changes pattern (issue #33): per-kind scan overscans so the
+// caller can report the cap honestly.
 var NodeEdgesOutputSchema = json.RawMessage(`{
   "type": "object",
   "required": ["edges"],
@@ -75,7 +77,9 @@ var NodeEdgesOutputSchema = json.RawMessage(`{
           "provenance":    { "type": "object" }
         }
       }
-    }
+    },
+    "truncated":  { "type": "boolean", "description": "True when any requested kind hit the per-kind limit and more edges existed." },
+    "totalCount": { "type": "integer", "description": "Total edges found across all requested kinds before capping. Compare to len(edges) to know how many were dropped." }
   },
   "additionalProperties": false
 }`)
@@ -110,25 +114,45 @@ func NodeEdges(repo *store.Repo) func(ctx context.Context, args json.RawMessage)
 			kinds = []string{"callers", "callees", "tests"}
 		}
 		out := []NodeEdgesResult{}
+		totalFound := 0
+		hitLimit := false
 		p := prov()
 		for _, k := range kinds {
+			// Overscan by 4× so the per-kind scan returns the
+			// honest pre-cap count. The handler trims back to
+			// a.Limit when the scan was capped, so callers see
+			// at most `limit` edges per kind.
+			scanLimit := a.Limit * 4
+			var raw []NodeEdgesResult
 			switch k {
 			case "callees":
-				out = append(out, scanCallees(repo, file, sym, a.Limit, p)...)
+				raw = scanCallees(repo, file, sym, scanLimit, p)
 			case "callers":
-				out = append(out, scanCallers(repo, file, sym, a.Limit, p)...)
+				raw = scanCallers(repo, file, sym, scanLimit, p)
 			case "tests":
-				out = append(out, scanTests(repo, file, sym, a.Limit, p)...)
+				raw = scanTests(repo, file, sym, scanLimit, p)
 			case "imports":
-				out = append(out, scanImports(repo, file, sym, a.Limit, p)...)
+				raw = scanImports(repo, file, sym, scanLimit, p)
 			case "overrides":
-				out = append(out, scanOverrides(repo, file, sym, a.Limit, p)...)
+				raw = scanOverrides(repo, file, sym, scanLimit, p)
 			}
+			totalFound += len(raw)
+			if len(raw) > a.Limit {
+				hitLimit = true
+				raw = raw[:a.Limit]
+			}
+			out = append(out, raw...)
 		}
 		// Wrap the slice in an envelope object so structuredContent on the
 		// wire is a JSON object (the MCP contract). Edges are surfaced
 		// under the `edges` key, declared in NodeEdgesOutputSchema.
-		return map[string]any{"edges": out}, nil
+		// Truncation fields surface the per-kind cap signal so the
+		// agent knows whether the result was capped (issue #33).
+		return map[string]any{
+			"edges":      out,
+			"truncated":  hitLimit,
+			"totalCount": totalFound,
+		}, nil
 	}
 }
 

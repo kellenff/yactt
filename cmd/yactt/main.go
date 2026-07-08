@@ -359,22 +359,22 @@ func loadOptsWithDiskCache(repoRoot string) []store.LoadOption {
 func registerAllTools(srv *mcp.Server, repo *store.Repo, reg *registry.Registry) {
 	// Four registry tools — available in BOTH modes.
 	srv.RegisterTool(mcp.ToolDef{
-		Name: "list_projects", Description: "Enumerate every project in the registry. Sorted by path.",
+		Name: "list_projects", Description: "Enumerate every project in the registry, sorted by path. Call first when an agent joins an MCP session and doesn't yet know which repos are available.",
 		InputSchema: tool.ListProjectsSchema, OutputSchema: tool.ListProjectsOutputSchema,
 		Handler: tool.ListProjects(reg),
 	})
 	srv.RegisterTool(mcp.ToolDef{
-		Name: "index_repository", Description: "Walk a repo at `path`, write an entry to the registry, return the row. Mode knob is accepted (only `full` is wired today).",
+		Name: "index_repository", Description: "Required first call in registry mode: walk a repo at `path`, write an entry to the registry, return the row. After this returns, the 16 repo-bound tools appear in `tools/list`. Mode knob is accepted (only `full` is wired today).",
 		InputSchema: tool.IndexRepositorySchema, OutputSchema: tool.IndexRepositoryOutputSchema,
 		Handler: tool.IndexRepository(reg),
 	})
 	srv.RegisterTool(mcp.ToolDef{
-		Name: "index_status", Description: "Registry row + per-repo cache freshness for `path`. cacheFresh=false means re-running index_repository would write new bytes.",
+		Name: "index_status", Description: "Registry row + per-repo cache freshness for `path`. Use this to check whether a repo is already indexed (`cacheFresh=true`) or whether `index_repository` needs to run first (`cacheFresh=false`).",
 		InputSchema: tool.IndexStatusSchema, OutputSchema: tool.IndexStatusOutputSchema,
 		Handler: tool.IndexStatus(reg),
 	})
 	srv.RegisterTool(mcp.ToolDef{
-		Name: "delete_project", Description: "Evict `path` from the registry and remove its per-repo cache directory. Idempotent on missing rows.",
+		Name: "delete_project", Description: "Evict `path` from the registry and remove its per-repo cache directory. Idempotent on missing rows — safe to retry on a stale or half-deleted entry.",
 		InputSchema: tool.DeleteProjectSchema, OutputSchema: tool.DeleteProjectOutputSchema,
 		Handler: tool.DeleteProject(reg),
 	})
@@ -407,21 +407,21 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo, reg *registry.Registry)
 	detectChanges := tool.DetectChanges(repo)
 
 	tools := []mcp.ToolDef{
-		{Name: "tree_overview", Description: "Get the top of the repo tree (depth-limited).", InputSchema: tool.TreeOverviewSchema, OutputSchema: tool.TreeOverviewOutputSchema, Handler: treeOverview},
-		{Name: "node_get", Description: "Get one or more layers of a node by its stable ID.", InputSchema: tool.GetNodeSchema, OutputSchema: tool.GetNodeOutputSchema, Handler: nodeGet},
-		{Name: "node_source", Description: "Get the lossless source for a node, optionally bounded by a line range.", InputSchema: tool.NodeSourceSchema, OutputSchema: tool.NodeSourceOutputSchema, Handler: nodeSource},
-		{Name: "node_edges", Description: "Get cross-references for a node.", InputSchema: tool.NodeEdgesSchema, OutputSchema: tool.NodeEdgesOutputSchema, Handler: nodeEdges},
-		{Name: "search", Description: "Find symbols by name or doc-comment matching.", InputSchema: tool.SearchSchema, OutputSchema: tool.SearchOutputSchema, Handler: search},
-		{Name: "edit_impact", Description: "Analyze the impact of a proposed set of renames. Does NOT apply them.", InputSchema: tool.EditImpactSchema, OutputSchema: tool.EditImpactOutputSchema, Handler: editImpact},
-		{Name: "find_symbol", Description: "Locate symbols by qualified name path with glob support.", InputSchema: tool.FindSymbolSchema, OutputSchema: tool.FindSymbolOutputSchema, Handler: findSymbol},
-		{Name: "get_symbols_overview", Description: "Get the top-level structural outline of a file.", InputSchema: tool.GetSymbolsOverviewSchema, OutputSchema: tool.GetSymbolsOverviewOutputSchema, Handler: getSymbolsOverview},
-		{Name: "find_code", Description: "AST-aware or regex pattern search across files.", InputSchema: tool.FindCodeSchema, OutputSchema: tool.FindCodeOutputSchema, Handler: findCode},
-		{Name: "search_code", Description: "Wrap find_code matches into their containing functions, dedupe by symbol, rank by structural importance (definitions first, popular next, tests last).", InputSchema: tool.SearchCodeSchema, OutputSchema: tool.SearchCodeOutputSchema, Handler: searchCode},
-		{Name: "find_referencing_symbols", Description: "Find all symbols that reference a given symbol.", InputSchema: tool.FindReferencingSymbolsSchema, OutputSchema: tool.FindReferencingSymbolsOutputSchema, Handler: findReferencingSymbols},
-		{Name: "get_graph_schema", Description: "List the canonical node kinds, edge kinds, and layer names. Use to write graph queries without hardcoding.", InputSchema: tool.GetGraphSchemaSchema, OutputSchema: tool.GetGraphSchemaOutputSchema, Handler: getGraphSchema},
-		{Name: "get_code_snippet", Description: "Source slice for a symbol by stable id OR qualified name path. One call replaces find_symbol+node_source.", InputSchema: tool.GetCodeSnippetSchema, OutputSchema: tool.GetCodeSnippetOutputSchema, Handler: getCodeSnippet},
-		{Name: "get_architecture", Description: "Structural summary: languages, packages, hotspots, dead-code candidates, import cycles.", InputSchema: tool.GetArchitectureSchema, OutputSchema: tool.GetArchitectureOutputSchema, Handler: getArchitecture},
-		{Name: "query_graph", Description: "Multi-hop graph traversal with edge-kind chains, depth cap, and kind/exclude filters. Composes node_edges across hops.", InputSchema: tool.QueryGraphSchema, OutputSchema: tool.QueryGraphOutputSchema, Handler: queryGraph},
+		{Name: "tree_overview", Description: "First call when orienting: map the repo structure (packages, files, top-level symbols). Tune `depth` (1–6, default 2); narrow with `scope` (absolute path under repo root) to drill into a package or subdir. Truncates at 16 KiB — start shallow, drill with `get_symbols_overview` once you know the path.", InputSchema: tool.TreeOverviewSchema, OutputSchema: tool.TreeOverviewOutputSchema, Handler: treeOverview},
+		{Name: "node_get", Description: "After `tree_overview` / `find_symbol` / `search` returns a stable `id`, pull specific layers (`summary`, `signature`, `body`, `source`, `tokens`). Cheap → expensive: start with `summary`, escalate only when you need more. Don't call without an `id`.", InputSchema: tool.GetNodeSchema, OutputSchema: tool.GetNodeOutputSchema, Handler: nodeGet},
+		{Name: "node_source", Description: "Lossless source text for a node (or a whole file via `id=file:<path>`). Use when you need the verbatim text, not a parsed layer. Pass `range=[start,end]` to bound.", InputSchema: tool.NodeSourceSchema, OutputSchema: tool.NodeSourceOutputSchema, Handler: nodeSource},
+		{Name: "node_edges", Description: "Single-hop callers / callees / tests / overrides / imports for a node. For transitive (>1 hop) caller/callee chains, use `query_graph` instead — one `query_graph` call replaces a loop of `node_edges` calls.", InputSchema: tool.NodeEdgesSchema, OutputSchema: tool.NodeEdgesOutputSchema, Handler: nodeEdges},
+		{Name: "search", Description: "BM25 over symbol name + doc-comment — best for fuzzy 'is there anything called *Foo*?' discovery. Not regex; use `find_code(pattern_kind=regex)` for line-shaped patterns. Lower limit than `find_symbol` (default 10) so prefer it for free-form search, `find_symbol` for exact lookup.", InputSchema: tool.SearchSchema, OutputSchema: tool.SearchOutputSchema, Handler: search},
+		{Name: "edit_impact", Description: "Required before any rename: returns the blast radius (callers, tests, overrides) without applying. Pair with the Edit tool afterward. Pass renames as [{id:..., new_name:...}].", InputSchema: tool.EditImpactSchema, OutputSchema: tool.EditImpactOutputSchema, Handler: editImpact},
+		{Name: "find_symbol", Description: "Glob over the name-path (`pkg.Name` or `pkg/Name`, with `*` allowed) when you know roughly what something is called. Default limit 20. On miss, the response includes a `suggestions` field with edit-distance matches — try those before falling back to `search`.", InputSchema: tool.FindSymbolSchema, OutputSchema: tool.FindSymbolOutputSchema, Handler: findSymbol},
+		{Name: "get_symbols_overview", Description: "When you have a file path (not a symbol id): get the top-level symbols of that file. Cheaper than a loop of `node_get` calls. Use after `tree_overview(scope=...)` or `search` to drill into a known file.", InputSchema: tool.GetSymbolsOverviewSchema, OutputSchema: tool.GetSymbolsOverviewOutputSchema, Handler: getSymbolsOverview},
+		{Name: "find_code", Description: "Line-shaped patterns: regex (`pattern_kind=regex`) for grep-ish work, or tree-sitter AST patterns (`pattern_kind=tree_sitter`) for code-shaped queries (e.g. 'all calls to Foo'). Use `scope` to limit to a directory. For 'which functions handle *X*?' use `search_code` instead.", InputSchema: tool.FindCodeSchema, OutputSchema: tool.FindCodeOutputSchema, Handler: findCode},
+		{Name: "search_code", Description: "When you want 'which functions handle *X*?': wraps `find_code` and groups matches by enclosing function, deduped, ranked by structural importance. Best tool for 'where is X handled' questions. Use `find_code` when you need raw matches without the grouping.", InputSchema: tool.SearchCodeSchema, OutputSchema: tool.SearchCodeOutputSchema, Handler: searchCode},
+		{Name: "find_referencing_symbols", Description: "Single-hop symbol-addressed alias of `node_edges`. Accepts a node ID OR a name_path. For multi-hop (transitive) callers/callees, use `query_graph` instead — `find_referencing_symbols` only returns direct neighbours.", InputSchema: tool.FindReferencingSymbolsSchema, OutputSchema: tool.FindReferencingSymbolsOutputSchema, Handler: findReferencingSymbols},
+		{Name: "get_graph_schema", Description: "List the canonical node kinds (FUNCTION/METHOD/CLASS/MODULE/FILE/PACKAGE/REPO), edge kinds (callers/callees/tests/overrides/imports), and layer names. Call this first when you need to write a `query_graph` filter or any kind-aware query — no need to hardcode strings.", InputSchema: tool.GetGraphSchemaSchema, OutputSchema: tool.GetGraphSchemaOutputSchema, Handler: getGraphSchema},
+		{Name: "get_code_snippet", Description: "Source slice for a symbol by stable id OR qualified name_path. One call replaces find_symbol+node_source. Use when you already know what you want and just need the body. On miss, the response includes a `suggestions` field with edit-distance matches.", InputSchema: tool.GetCodeSnippetSchema, OutputSchema: tool.GetCodeSnippetOutputSchema, Handler: getCodeSnippet},
+		{Name: "get_architecture", Description: "Repo-level health at a glance: dead-code candidates, hot spots (high fan-out), import cycles, language breakdown, package list. Run once after `tree_overview` for a first-look snapshot. Capped per-section (dead-code ≤50, cycles ≤10) — re-call with filters if you need more.", InputSchema: tool.GetArchitectureSchema, OutputSchema: tool.GetArchitectureOutputSchema, Handler: getArchitecture},
+		{Name: "query_graph", Description: "Trace reachability across multiple hops — the right tool for 'who transitively depends on X?' or 'what does X transitively reach?'. One call replaces a loop of `node_edges` calls. `depth` 1–5 (default 2); cost-capped at 1000 rows / 5 s / 5000 visited nodes so large traversals terminate safely. Pass `follow:[\"callers\"]` for transitive callers, `[\"callees\"]` for transitive callees, or alternate via `follow:[\"callees\",\"callers\"]`.", InputSchema: tool.QueryGraphSchema, OutputSchema: tool.QueryGraphOutputSchema, Handler: queryGraph},
 		{Name: "detect_changes", Description: "Impact of a git-ref diff: changed files, hunks, enclosing function/method per hunk, and callers/tests/overrides per affected symbol. Accepts {base,head} or {since} (Issue #11).", InputSchema: tool.DetectChangesSchema, OutputSchema: tool.DetectChangesOutputSchema, Handler: detectChanges},
 	}
 	for _, t := range tools {

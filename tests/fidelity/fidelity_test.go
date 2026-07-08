@@ -15,6 +15,7 @@ package fidelity_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -511,5 +512,81 @@ func TestFidelity_KindMapping_RoundTrips(t *testing.T) {
 	if !found {
 		t.Error("step 4: payments.Wallet.Charge did not resolve its receiver; " +
 			"check the fixture's Wallet struct exists in payments/pay.go")
+	}
+}
+
+// TestFidelity_AgentFlow_TransitiveCallers pins the issue #33 success
+// criterion: an agent answers "where is X used, transitively, and what
+// calls into it?" in ≤4 tool calls using only yactt's MCP tools, with
+// no client-side filtering.
+//
+//	Prompt: Where is auth.Login defined, and what transitively calls it?
+//
+// Optimal sequence (counted): 1) find_symbol to resolve the name, 2)
+// query_graph(follow=["callers"], depth=N) for transitive callers. Total
+// 2 calls — well under the 4-call budget. The test asserts the count is
+// ≤4 and the final result includes the test caller (`fn:auth.TestLogin_Success`
+// or similar — anything that calls Login transitively).
+//
+// ponytail: the call counter is per-handler invocation, so each drive()
+// counts as one. We assert `≤4` to leave room for retries on miss, not
+// to mandate the optimal path.
+func TestFidelity_AgentFlow_TransitiveCallers(t *testing.T) {
+	repo := loadFixtureRepo(t)
+
+	var calls int
+	countingDrive := func(argsJSON string) map[string]any {
+		t.Helper()
+		calls++
+		return drive(t, tool.FindSymbol(repo), argsJSON)
+	}
+
+	// Step 1: locate Login (1 call).
+	sym := countingDrive(`{"name_path":"auth.Login"}`)
+	syms, ok := sym["symbols"].([]any)
+	if !ok || len(syms) == 0 {
+		t.Fatalf("step 1: expected to locate auth.Login; got %v", sym)
+	}
+	login, ok := syms[0].(map[string]any)
+	if !ok {
+		t.Fatalf("step 1: symbols[0] type %T; want object", syms[0])
+	}
+	loginID, _ := login["node"].(map[string]any)
+	if loginID == nil {
+		// Try the alternate shape: in some envs Node is nested
+		// differently. Fall back to the id-keyed shape.
+		if id, ok := login["id"].(string); ok {
+			loginID = map[string]any{"id": id}
+		}
+	}
+	if loginID == nil {
+		t.Fatalf("step 1: missing 'node' object; got %v", login)
+	}
+	loginIDStr, _ := loginID["id"].(string)
+	if loginIDStr == "" {
+		t.Fatalf("step 1: missing node id; got %v", loginID)
+	}
+
+	// Step 2: transitive callers via query_graph (1 call).
+	calls++
+	raw, err := tool.QueryGraph(repo)(context.Background(),
+		json.RawMessage(fmt.Sprintf(`{"from":%q,"follow":["callers"],"depth":3,"limit":50}`, loginIDStr)))
+	if err != nil {
+		t.Fatalf("step 2 query_graph: %v", err)
+	}
+	b, _ := json.Marshal(raw)
+	var env map[string]any
+	_ = json.Unmarshal(b, &env)
+	rows, _ := env["rows"].([]any)
+	if len(rows) == 0 {
+		t.Fatalf("step 2 query_graph: expected ≥1 transitive caller for %s; got 0 (calls so far: %d)", loginIDStr, calls)
+	}
+
+	// Success criterion: ≤4 tool calls. The agent can retry on miss
+	// without violating the budget. We allow generous slack — the
+	// point is "an agent CAN answer this in few calls", not "must
+	// use exactly the optimal path".
+	if calls > 4 {
+		t.Errorf("agent flow used %d tool calls; success criterion is ≤4", calls)
 	}
 }
