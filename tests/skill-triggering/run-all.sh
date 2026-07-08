@@ -2,9 +2,9 @@
 # Run the skill-triggering matrix: every (harness × skill × prompt) pair.
 #
 # Usage:
-#   HARNESS=claude|pi|both  ./run-all.sh [max-turns] [skill ...]
-#   HARNESS=both ./run-all.sh 3                  # all 8 prompts × 2 harnesses = 16 runs
-#   HARNESS=pi ./run-all.sh 3 code-explore       # 4 prompts × 1 harness = 4 runs
+#   HARNESS=claude|pi|junie|all  ./run-all.sh [max-turns] [skill ...]
+#   HARNESS=all ./run-all.sh 3                    # all 8 prompts × 3 harnesses = 24 runs
+#   HARNESS=junie ./run-all.sh 3 code-explore     # 4 prompts × 1 harness = 4 runs
 #
 # Side effects:
 #   - Writes transcripts + summaries to $YACTT_OUTPUT_DIR/<ts>/<harness>/<skill>/
@@ -29,6 +29,9 @@ fi
 HARNESSES=("$HARNESS")
 if [ "$HARNESS" = "both" ]; then
   HARNESSES=(claude pi)
+fi
+if [ "$HARNESS" = "all" ]; then
+  HARNESSES=(claude pi junie)
 fi
 
 TIMESTAMP="$(date -u '+%Y%m%dT%H%M%SZ')"

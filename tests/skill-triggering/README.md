@@ -2,8 +2,9 @@
 
 Measures whether AI agents reach for yactt's MCP tools (and load the
 plugin's skills) across **multiple agent harnesses** — claude (Anthropic
-Claude Code) and pi (`MiniMax-M3[1m]` via the yactt pi-extension) —
-so harness-specific regressions are caught.
+Claude Code), pi (`MiniMax-M3[1m]` via the yactt pi-extension), and
+junie (JetBrains Junie CLI via the yactt junie-extension) — so
+harness-specific regressions are caught.
 
 Adapted from snowball's [`tests/skill-triggering/`](https://github.com/snowball-dev/snowball)
 pattern; restructures the matrix to compare two harnesses side-by-side
@@ -40,18 +41,23 @@ missed several harness-specific issues that the matrix caught:
    `mcp__plugin_yactt_yactt__`; pi prefixes with `yactt_` AND routes
    via `args.server/args.tool`. Detection regex is per-driver.
 3. **Token vs cost reporting** — Claude reports totals on the
-   `result` event; pi reports per-message. The scorer reads the
+   `result` event; pi reports per-message; junie aggregates per-model
+   `errorCode[]` entries on the result event. The scorer reads the
    right shape per harness.
 
 ## Usage
 
 ```sh
-# Run the matrix (all 8 prompts × both harnesses = 16 runs)
+# Run the matrix (all 8 prompts × all 3 harnesses = 24 runs)
+HARNESS=all ./run-all.sh 3
+
+# Pairwise (claude + pi, the original matrix)
 HARNESS=both ./run-all.sh 3
 
 # Single harness
 HARNESS=claude ./run-all.sh 3 code-explore
 HARNESS=pi ./run-all.sh 3 using-yactt
+HARNESS=junie ./run-all.sh 3 code-explore
 
 # Single (skill, prompt) test
 HARNESS=pi ./run-test.sh code-explore prompts/code-explore/01-caller.txt 3
@@ -81,7 +87,8 @@ tests/skill-triggering/
 ├── drivers/
 │   ├── claude.sh                # claude -p invocation
 │   ├── pi.sh                    # pi -p invocation
-│   └── pi-mcp.json              # isolated MCP config for the pi driver
+│   ├── pi-mcp.json              # isolated MCP config for the pi driver
+│   └── junie.sh                 # junie CLI invocation (uses junie-extension/)
 └── prompts/
     ├── using-yactt/             # broad-intent prompts
     │   ├── 01-orient.{txt,kw}
@@ -110,9 +117,14 @@ phrase the task the way a real user would.
 - **Single-tenant** — runs against `tests/fixtures/sample-go/`.
 - **Non-deterministic** — tool selection varies turn-to-turn. Run
   N≥3 before claiming any per-prompt delta is real.
-- **Harness availability** — requires `claude` and/or `pi` on PATH
-  with an active auth session. The harness fails fast if either is
-  unavailable.
+- **Harness availability** — requires `claude`, `pi`, and/or `junie`
+  on PATH with an active auth session (Junie auto-auths via the IDE
+  token; pass `--auth=<token>` if running headless). The harness
+  fails fast if the chosen one is unavailable.
+- **Junie cost is reported as 0.00 USD** — Junie bills through the
+  IDE/JetBrains subscription rather than per-token, so the
+  `errorCode[].cost` field is 0 by default. The benchmark still
+  reports `tokens_total` for cost-as-proxy comparisons.
 - **Headless** — uses `--dangerously-skip-permissions` for claude so
   every Bash call doesn't gate on an approval prompt. Pi doesn't need
   it. Run only in trusted workspaces.

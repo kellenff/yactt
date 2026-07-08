@@ -80,6 +80,18 @@ pi install git:github.com/kellenff/yactt
 
 Same trust chain as the Claude plugin — the extension calls the shared `plugins/yactt/scripts/install.sh` to fetch and verify the binary. Restarts pick up any registered MCP server changes; the very first session after install writes the config, the second session onwards the yactt tools are live.
 
+### For Junie users
+
+The Junie extension gives Junie the same 21-tool single-repo surface as the Claude plugin. Because Junie's MCP config has no project-dir variable substitution, a small launcher walks up from `cwd` looking for `.git` and hands the resolved path to `yactt mcp serve`:
+
+```bash
+bash plugins/yactt/scripts/install.sh
+ln -s "$(pwd)/junie-extension/scripts/yactt-launcher.sh" ~/.local/bin/yactt-launcher
+ln -s "$(pwd)/junie-extension" ~/.junie/extensions/yactt
+```
+
+Same trust chain as the Claude plugin and Pi extension — the shared `plugins/yactt/scripts/install.sh` does the fetch, SHA-256 verify, and TOFU. See [`junie-extension/README.md`](junie-extension/README.md) for details.
+
 ### For AI agent authors
 
 Any MCP-capable client. Wire the server into your `.mcp.json`:
