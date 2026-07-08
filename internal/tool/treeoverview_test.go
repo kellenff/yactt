@@ -114,3 +114,91 @@ func countNodes(n TreeOverviewResult) int {
 	}
 	return total
 }
+
+// hasChildID reports whether the top-level children of `n` include a node
+// whose ID contains `substr`. Cheap assertion for "scope narrowed to the
+// expected subtree" without depending on id-prefix conventions.
+func hasChildID(n TreeOverviewResult, substr string) bool {
+	for _, c := range n.Children {
+		if strings.Contains(c.ID, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBuildOverviewTree_ScopeFiltersToSubtree(t *testing.T) {
+	repo := loadFixtureRepo(t)
+	handler := TreeOverview(repo)
+	scope := repo.Root() + "/auth"
+	out, err := handler(context.Background(),
+		json.RawMessage(`{"repo":"","scope":`+jsonQuote(scope)+`,"depth":3}`))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	root, ok := out.(TreeOverviewResult)
+	if !ok {
+		t.Fatalf("result type: got %T", out)
+	}
+	if len(root.Children) == 0 {
+		t.Fatalf("expected at least one top-level child under scope %q; got 0", scope)
+	}
+	if !hasChildID(root, "auth") {
+		t.Fatalf("expected a top-level child with id containing %q; got: %v", "auth", root.Children)
+	}
+	if hasChildID(root, "payments") {
+		t.Fatalf("scope %q should have excluded the payments package; got: %v", scope, root.Children)
+	}
+	// Summary should advertise the scope so a caller can see why the tree
+	// is narrower than usual.
+	if !strings.Contains(root.Summary, scope) {
+		t.Fatalf("expected root.Summary to mention scope %q; got %q", scope, root.Summary)
+	}
+}
+
+func TestBuildOverviewTree_ScopeOutsideRepoErrors(t *testing.T) {
+	repo := loadFixtureRepo(t)
+	handler := TreeOverview(repo)
+	_, err := handler(context.Background(),
+		json.RawMessage(`{"repo":"","scope":"/definitely/not/the/repo","depth":2}`))
+	if err == nil {
+		t.Fatalf("expected error for scope outside repo; got nil")
+	}
+	if !strings.Contains(err.Error(), "scope") {
+		t.Fatalf("error should mention 'scope'; got %q", err.Error())
+	}
+}
+
+func TestBuildOverviewTree_EmptyScopeBehavesLikeNoScope(t *testing.T) {
+	repo := loadFixtureRepo(t)
+	handler := TreeOverview(repo)
+	// Empty scope must not error and must return at least one top-level
+	// child — same shape as the no-scope happy path.
+	out, err := handler(context.Background(),
+		json.RawMessage(`{"repo":"","scope":"","depth":2}`))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	root, ok := out.(TreeOverviewResult)
+	if !ok {
+		t.Fatalf("result type: got %T", out)
+	}
+	if len(root.Children) == 0 {
+		t.Fatalf("empty scope should produce a non-empty tree; got 0 children")
+	}
+	// Summary should NOT advertise a scope when none was given.
+	if strings.Contains(root.Summary, "scoped to") {
+		t.Fatalf("empty scope should not annotate root.Summary; got %q", root.Summary)
+	}
+}
+
+// jsonQuote wraps s in JSON double-quotes with proper escaping. Inline here
+// (not in helpers) because it's only used by two scope tests and a generic
+// helper would over-generalise.
+func jsonQuote(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}

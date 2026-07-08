@@ -217,6 +217,11 @@ func TestTreeOverviewBoundary(t *testing.T) {
 		{name: "no_repo_bound", args: `{}`, want: "no repo bound"},
 		{name: "empty_repo_string", args: `{"repo":""}`, want: "no repo bound"},
 	})
+	// ponytail: scope validation lives behind a real repo, so it's covered
+	// by TestBuildOverviewTree_ScopeOutsideRepoErrors in treeoverview_test.go
+	// rather than this nil-repo boundary suite. Adding a scope case here
+	// would just hit the no-repo-bound guard first and never reach the
+	// scope check.
 }
 
 func TestGetNodeBoundary(t *testing.T) {

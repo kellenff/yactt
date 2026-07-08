@@ -16,6 +16,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/entity"
@@ -25,6 +27,7 @@ import (
 // TreeOverviewArgs is the typed boundary input for tree_overview.
 type TreeOverviewArgs struct {
 	Repo          string   `json:"repo"`
+	Scope         string   `json:"scope"`
 	Depth         int      `json:"depth"`
 	IncludeLayers []string `json:"include_layers"`
 }
@@ -67,6 +70,7 @@ var TreeOverviewSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
     "repo":           { "type": "string", "description": "Absolute path or repo alias" },
+    "scope":          { "type": "string", "description": "Optional absolute path under repo root; narrows the walk to a package or subdirectory. Mirrors search.Search's q.Scope." },
     "depth":          { "type": "integer", "default": 2, "minimum": 1, "maximum": 6 },
     "include_layers": {
       "type": "array",
@@ -118,7 +122,16 @@ func TreeOverview(repo *store.Repo) func(ctx context.Context, args json.RawMessa
 		if a.Depth > 6 {
 			a.Depth = 6
 		}
-		root, truncated, err := buildOverviewTree(repo, repo.Root(), a.Depth)
+		// Scope: optional absolute path under repo root. Empty means whole
+		// repo. We path-clean and reject paths outside the root so callers
+		// get a clear error instead of a silently empty tree.
+		if a.Scope != "" {
+			a.Scope = filepath.Clean(a.Scope)
+			if !strings.HasPrefix(a.Scope, repo.Root()) {
+				return nil, fmt.Errorf("tree_overview: scope %q is outside repo root %q", a.Scope, repo.Root())
+			}
+		}
+		root, truncated, err := buildOverviewTree(repo, repo.Root(), a.Depth, a.Scope)
 		if err != nil {
 			return nil, err
 		}
@@ -134,11 +147,20 @@ func TreeOverview(repo *store.Repo) func(ctx context.Context, args json.RawMessa
 // more level (files + functions). We do this synthetically since the repo
 // index only stores (file, symbols[]) pairs.
 //
+// `scope` is an optional absolute path under rootPath; non-empty means
+// only files whose path is under scope contribute to the tree. The
+// synthetic root is still rooted at rootPath so the response is always
+// parseable as a tree from the repo root.
+//
 // Returns the tree plus a `truncated` flag; the handler stamps the warning
 // onto the root when the budget ran out.
-func buildOverviewTree(repo *store.Repo, rootPath string, depth int) (TreeOverviewResult, bool, error) {
-	b := &overviewBuilder{budget: maxResponseBytes}
-	root, err := b.build(repo, rootPath, rootPath, depth, domain.KindRepo, "Repository: "+rootPath)
+func buildOverviewTree(repo *store.Repo, rootPath string, depth int, scope string) (TreeOverviewResult, bool, error) {
+	b := &overviewBuilder{budget: maxResponseBytes, scope: scope}
+	summary := "Repository: " + rootPath
+	if scope != "" {
+		summary += " (scoped to " + scope + ")"
+	}
+	root, err := b.build(repo, rootPath, rootPath, depth, domain.KindRepo, summary)
 	if err != nil {
 		return TreeOverviewResult{}, false, err
 	}
@@ -152,6 +174,7 @@ type overviewBuilder struct {
 	budget    int
 	used      int
 	truncated bool
+	scope     string // optional path prefix; empty = whole repo
 }
 
 // nodeOverhead is the fixed per-node JSON cost we charge before adding a
@@ -198,6 +221,9 @@ func (b *overviewBuilder) build(repo *store.Repo, rootPath, nodePath string, dep
 	// Group files by package (their parent directory under root).
 	pkgMap := make(map[string][]string)
 	for _, p := range repo.Files() {
+		if b.scope != "" && !strings.HasPrefix(p, b.scope) {
+			continue
+		}
 		pkg := packagePath(rootPath, p)
 		pkgMap[pkg] = append(pkgMap[pkg], p)
 	}

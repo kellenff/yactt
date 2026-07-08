@@ -19,7 +19,7 @@ yactt exposes 21 MCP tools (prefix `mcp__plugin_yactt_yactt__*`). Every later st
 
 ## The ladder (cheapest first)
 
-1. **`tree_overview`** — map the repo. Tune `depth` (1–6, default 2) and `include_layers` (`summary` / `structure` / `signature`).
+1. **`tree_overview`** — map the repo. Tune `depth` (1–6, default 2), `include_layers` (`summary` / `structure` / `signature`), and `scope` (absolute path under the repo root — narrows the walk to a package or subdir; same convention as `search`'s `scope`).
 2. **`get_symbols_overview`** — top-level outline of a specific file when you know the path.
 3. **`search`** (BM25 over name + doc-comment) / **`find_symbol`** (glob over name-path) — locate the target.
 4. **`node_get`** — pull specific layers of a node (`summary`, `signature`, `body`, `source`, `tokens`) using the stable `id` from steps 1–3.
