@@ -45,10 +45,10 @@ type DetectChangesArgs struct {
 // the columns exposed by find_symbol/get_code_snippet — enough to drive a
 // follow-up call without re-resolving.
 type SymbolRef struct {
-	ID       string                `json:"id"`
-	Kind     domain.NodeKind       `json:"kind"`
-	Summary  string                `json:"summary"`
-	Receiver *entity.ReceiverView  `json:"receiver,omitempty"`
+	ID       string               `json:"id"`
+	Kind     domain.NodeKind      `json:"kind"`
+	Summary  string               `json:"summary"`
+	Receiver *entity.ReceiverView `json:"receiver,omitempty"`
 }
 
 // Change is one affected symbol plus the fan-out of callers / tests /
@@ -459,30 +459,97 @@ func mergeRanges(rs []domain.LineRange) []domain.LineRange {
 	return out
 }
 
-// enclosingSymbol returns the smallest parser.Symbol whose [StartRow,
-// EndRow) range fully contains [start, end). Returns ("", "", false)
-// when no enclosing declaration is found (e.g. a hunk in import-only
-// code, a constant block, or a file the parser didn't index).
+// enclosingSymbol returns the parser.Symbol that owns hunk [start, end):
+// the smallest declaration that fully contains the hunk (Tier 1),
+// falling back to the smallest declaration whose body the hunk's first
+// row lands in (Tier 2 — handles hunks that overflow the function with
+// trailing additions), and finally to the declaration that overlaps
+// the most rows of the hunk (Tier 3 — handles hunks that start in
+// code-preamble and cross into a function). Returns ("", "", false)
+// when no tier matches so detect_changes emits a file-only Change row.
 //
-// "Smallest containing" is the right semantics for an edit-impact tool:
-// when a hunk lives inside a method inside a class, the method is the
-// blast radius, not the class.
+// "Smallest blast radius" is the right semantics for an edit-impact
+// tool: when a hunk lives inside a method inside a class, the method
+// is the change, not the class. Tier 3 uses largest-overlap as the
+// tie-break to avoid attributing a multi-declaration hunk to a tiny
+// trailing declaration that just barely intersects its tail.
 func enclosingSymbol(repo *store.Repo, file string, start, end int) (parser.Symbol, string, bool) {
+	syms := repo.Symbols(file)
+	if len(syms) == 0 {
+		return parser.Symbol{}, "", false
+	}
+	pkg := packagePath(repo.Root(), file)
+
+	// Tier 1: smallest symbol strictly containing the hunk. Most
+	// hunks land here — git's --unified=0 keeps the range tight to
+	// the changed lines and a body-only edit sits fully inside the
+	// enclosing function.
 	var best *parser.Symbol
 	bestSize := -1
-	syms := repo.Symbols(file)
 	for i := range syms {
 		s := syms[i]
 		if int(s.StartRow) <= start && end <= int(s.EndRow) {
 			size := int(s.EndRow - s.StartRow)
-			if size > bestSize {
+			if best == nil || size < bestSize {
 				best = &syms[i]
 				bestSize = size
 			}
 		}
 	}
-	if best == nil {
-		return parser.Symbol{}, "", false
+	if best != nil {
+		return *best, id.For(*best, pkg), true
 	}
-	return *best, id.For(*best, packagePath(repo.Root(), file)), true
+
+	// Tier 2: smallest symbol whose body contains hunk.start. Picks
+	// up the common case where the diff replaces a one-line function
+	// with a multi-line version and adds new declarations on the
+	// trailing rows — the hunk's first row still anchors to the
+	// function whose signature changed.
+	bestSize = -1
+	for i := range syms {
+		s := syms[i]
+		if int(s.StartRow) <= start && start < int(s.EndRow) {
+			size := int(s.EndRow - s.StartRow)
+			if best == nil || size < bestSize {
+				best = &syms[i]
+				bestSize = size
+			}
+		}
+	}
+	if best != nil {
+		return *best, id.For(*best, pkg), true
+	}
+
+	// Tier 3: symbol with the largest overlap with the hunk. Only
+	// reached when the hunk starts in preamble (package clause or
+	// imports) and crosses a function boundary — e.g. an import
+	// rewrite that incidentally touches the first function below.
+	// Largest-overlap wins so the bulk of the change drives the
+	// attribution, not the trailing single-row declaration that the
+	// "smallest symbol" rule would otherwise prefer.
+	var bestOverlap int
+	for i := range syms {
+		s := syms[i]
+		lo := start
+		if int(s.StartRow) > lo {
+			lo = int(s.StartRow)
+		}
+		hi := end
+		if int(s.EndRow) < hi {
+			hi = int(s.EndRow)
+		}
+		if hi <= lo {
+			continue
+		}
+		overlap := hi - lo
+		if overlap > bestOverlap {
+			best = &syms[i]
+			bestOverlap = overlap
+		}
+	}
+	if best != nil {
+		return *best, id.For(*best, pkg), true
+	}
+
+	return parser.Symbol{}, "", false
 }

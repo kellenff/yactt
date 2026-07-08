@@ -12,7 +12,9 @@ import (
 	"testing"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/store"
+	"github.com/kellenff/yactt/internal/store/repofixture"
 )
 
 // --- git fixture helpers --------------------------------------------------
@@ -428,6 +430,104 @@ func TestMergeRanges(t *testing.T) {
 	}
 }
 
+// TestEnclosingSymbol pins the three-tier fallback that detect_changes
+// relies on to surface a Change.Symbol on simple hunk ranges. The bug
+// this guards against (#27): the original resolver used "largest
+// containing" semantics with strict containment, so a hunk that
+// overflowed the function body or landed partly in preamble fell to
+// file-only and `Symbol` came back nil. Each tier is exercised
+// against the shared repofixture (auth/login.go) so the test
+// doesn't depend on git or on a synthetic fixture file.
+//
+// Tier 1 — hunk strictly inside a function → that function.
+// Tier 2 — hunk starts in a function, extends past it → that
+//
+//	function (regression for fidelity test #4).
+//
+// Tier 3 — hunk starts in preamble, overlaps multiple symbols →
+//
+//	symbol with the largest row-overlap (regression for the
+//	"smallest symbol wins" pathology).
+//
+// None  — hunk entirely above all declarations → false.
+func TestEnclosingSymbol(t *testing.T) {
+	fx := repofixture.New(t)
+	repo, _, err := store.Load(fx.Root)
+	if err != nil {
+		t.Fatalf("store.Load: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	syms := repo.Symbols(fx.LoginPath)
+	if len(syms) == 0 {
+		t.Fatal("no symbols in fixture auth/login.go; cannot anchor test ranges")
+	}
+	byName := map[string]parser.Symbol{}
+	for _, s := range syms {
+		byName[s.Name] = s
+	}
+	login, ok := byName["Login"]
+	if !ok {
+		t.Fatal("no Login symbol in fixture; cannot anchor Tier-1 ranges")
+	}
+	auth, ok := byName["Authenticate"]
+	if !ok {
+		t.Fatal("no Authenticate symbol in fixture; cannot anchor Tier-3 ranges")
+	}
+
+	cases := []struct {
+		name       string
+		start, end int
+		wantID     string
+		wantOK     bool
+	}{
+		{
+			name:   "Tier 1: hunk strictly inside function",
+			start:  int(login.StartRow) + 1,
+			end:    int(login.StartRow) + 2,
+			wantID: "fn:auth.Login",
+			wantOK: true,
+		},
+		{
+			name:   "Tier 2: hunk starts in function and overflows past it",
+			start:  int(login.StartRow),
+			end:    int(auth.EndRow),
+			wantID: "fn:auth.Login",
+			wantOK: true,
+		},
+		{
+			// Login spans 3 rows (3..6); Authenticate spans 6 rows
+			// (13..19). A hunk starting at row 0 and ending at
+			// Authenticate's end overlaps both — T3 should pick
+			// Authenticate because its overlap (6) is larger than
+			// Login's (3), not because it is the larger symbol.
+			name:   "Tier 3: preamble-overlapping hunk picks max overlap",
+			start:  0,
+			end:    int(auth.EndRow),
+			wantID: "fn:auth.Authenticate",
+			wantOK: true,
+		},
+		{
+			name:   "None: hunk entirely above any declaration",
+			start:  0,
+			end:    1,
+			wantID: "",
+			wantOK: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sym, id, ok := enclosingSymbol(repo, fx.LoginPath, tc.start, tc.end)
+			if ok != tc.wantOK {
+				t.Errorf("ok = %v, want %v (sym.Name=%q)", ok, tc.wantOK, sym.Name)
+			}
+			if id != tc.wantID {
+				t.Errorf("id = %q, want %q", id, tc.wantID)
+			}
+		})
+	}
+}
+
 // TestParseUnifiedDiff exercises the diff parser directly. The handler
 // composes it once per call; pinning the parser here catches regressions
 // without the noise of a real git subprocess.
@@ -484,7 +584,7 @@ func TestParseUnifiedDiff(t *testing.T) {
 // Pinning each branch keeps the handler's first call site obvious.
 func TestNormaliseRefs(t *testing.T) {
 	type tc struct {
-		base, since, head string
+		base, since, head  string
 		wantBase, wantHead string
 		wantErr            string
 	}
