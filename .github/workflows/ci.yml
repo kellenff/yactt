@@ -72,15 +72,16 @@ jobs:
     #     symbols. Offline query against the v1.24+ vuln DB embedded in the
     #     govulncheck binary.
     #   - gitleaks (Issue #4, mitigation #4b): committed-secret detection in
-    #     the working tree. We download the gitleaks CLI tarball directly
-    #     from the v8.18.4 GitHub release and verify it against the
-    #     SHA256SUMS published on the same release — no third-party action
-    #     wrapper, no Docker, ~3 MB download per run. The umbrella originally
-    #     used gitleaks/gitleaks-action@v2.3.2; that wrapper had a URL-
-    #     construction bug that 404'd on the binary tarball, and the
+    #     the working tree. We install gitleaks via `go install
+    #     github.com/zricethezav/gitleaks/v8@v8.18.4` — the Go module
+    #     proxy's content-addressable download is the audit anchor, same
+    #     trust model as govulncheck directly above. No SHA256SUMS, no
+    #     cosign, no third-party action wrapper to maintain. The umbrella
+    #     originally used gitleaks/gitleaks-action@v2.3.2; that wrapper had
+    #     a URL-construction bug that 404'd on the binary tarball. The
     #     rollback attributed it to "gitleaks upstream availability
-    #     issues" — that was wrong. The CLI is reachable; bypassing the
-    #     wrapper sidesteps the bug class entirely.
+    #     issues" — that was wrong. Switching to `go install` sidesteps
+    #     the wrapper entirely.
     #
     # GitHub Secret Scanning (repo settings → Code security and analysis)
     # remains enabled as a second layer for partner-pattern tokens.
@@ -105,21 +106,17 @@ jobs:
           govulncheck ./...
 
       - name: gitleaks
-        # ponytail: download gitleaks directly, skip the third-party
-        # action wrapper whose URL construction previously 404'd.
-        # Verify the tarball against the SHA256SUMS published alongside
-        # the release (gitleaks upstream signs that file with cosign).
-        env:
-          GITLEAKS_VERSION: "8.18.4"
+        # ponytail: install gitleaks via the Go module proxy (same
+        # pattern as govulncheck directly above). The proxy's content-
+        # addressable download is the audit anchor — no SHA256SUMS
+        # file, no cosign, no third-party action wrapper to maintain.
+        # The umbrella originally used gitleaks/gitleaks-action@v2.3.2;
+        # that wrapper had a URL-construction bug, and switching to
+        # `go install` sidesteps the wrapper entirely.
         run: |
           set -euo pipefail
-          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
-          arch="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -sSL --fail "${base}/${arch}"                                    -o "/tmp/${arch}"
-          curl -sSL --fail "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o /tmp/SHA256SUMS
-          ( cd /tmp && grep "linux_x64" SHA256SUMS | sha256sum -c - )
-          tar -xzf "/tmp/${arch}" -C /tmp
-          /tmp/gitleaks detect --source . --no-banner
+          go install github.com/zricethezav/gitleaks/v8@v8.18.4
+          gitleaks detect --source . --no-banner
 
       - name: upload smoke binary
         if: always()
