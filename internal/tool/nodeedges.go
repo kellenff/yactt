@@ -10,6 +10,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/lsp"
 	"github.com/kellenff/yactt/internal/parser"
@@ -169,11 +170,12 @@ func scanCalleesFromIndex(repo *store.Repo, file string, sym parser.Symbol, limi
 				continue
 			}
 			seen[targetKey] = true
+			ent := entityFromSymbol(l.Sym, l.File, repo)
 			out = append(out, NodeEdgesResult{
 				EdgeKind:      domain.EdgeCallees,
 				TargetID:      targetIDForLookup(repo, l),
-				TargetKind:    symbolKind(l.Sym),
-				TargetSummary: symbolSummary(l.Sym),
+				TargetKind:    ent.DomainKind(),
+				TargetSummary: ent.Summary(),
 				Location:      loc,
 				Confidence:    0.5,
 				Provenance:    *p,
@@ -226,11 +228,12 @@ func scanCalleesLive(repo *store.Repo, file string, sym parser.Symbol, limit int
 				continue
 			}
 			seen[targetKey] = true
+			ent := entityFromSymbol(e.Sym, e.File, repo)
 			out = append(out, NodeEdgesResult{
 				EdgeKind:      domain.EdgeCallees,
 				TargetID:      targetIDForLookup(repo, e),
-				TargetKind:    symbolKind(e.Sym),
-				TargetSummary: symbolSummary(e.Sym),
+				TargetKind:    ent.DomainKind(),
+				TargetSummary: ent.Summary(),
 				Location:      loc,
 				Confidence:    0.5,
 				Provenance:    *p,
@@ -328,10 +331,11 @@ func scanCallers(repo *store.Repo, file string, sym parser.Symbol, limit int, p 
 				return true
 			})
 			if found {
+				ent := entity.FromParser(e, otherPath, packagePath(repo.Root(), otherPath))
 				out = append(out, NodeEdgesResult{
 					EdgeKind:   domain.EdgeCallers,
-					TargetID:   id.For(e, packagePath(repo.Root(), otherPath)),
-					TargetKind: symbolKind(e),
+					TargetID:   ent.ID(),
+					TargetKind: ent.DomainKind(),
 					Location:   location(otherPath, e.StartRow, e.EndRow),
 					Confidence: 0.5,
 					Provenance: *p,
@@ -457,11 +461,12 @@ func scanTests(repo *store.Repo, _ string, sym parser.Symbol, limit int, p *doma
 			continue
 		}
 		for _, s := range repo.Symbols(path) {
+			ent := entity.FromParser(s, path, packagePath(repo.Root(), path))
 			out = append(out, NodeEdgesResult{
 				EdgeKind:      domain.EdgeTests,
-				TargetID:      id.For(s, packagePath(repo.Root(), path)),
-				TargetKind:    symbolKind(s),
-				TargetSummary: symbolSummary(s),
+				TargetID:      ent.ID(),
+				TargetKind:    ent.DomainKind(),
+				TargetSummary: ent.Summary(),
 				Location:      location(path, s.StartRow, s.EndRow),
 				Confidence:    0.7,
 				Provenance:    *p,
@@ -779,5 +784,5 @@ func location(file string, start, end int) domain.Location {
 
 // targetIDForLookup renders the canonical node ID for a symbol lookup.
 func targetIDForLookup(repo *store.Repo, e store.SymbolLookup) string {
-	return symbolID(e.File, e.Sym, repo.Root())
+	return entityFromSymbol(e.Sym, e.File, repo).ID()
 }

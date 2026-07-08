@@ -103,7 +103,8 @@ func FindSymbol(repo *store.Repo) func(ctx context.Context, args json.RawMessage
 		matches := matchByNamePattern(repo, pkgPrefix, namePattern)
 		out := make([]FindSymbolResult, 0, len(matches))
 		for _, m := range matches {
-			nid := symbolID(m.File, m.Sym, repo.Root())
+			ent := entityFromSymbol(m.Sym, m.File, repo)
+			nid := ent.ID()
 			entry := FindSymbolResult{}
 			if a.IncludeBody {
 				body, err := store.BodyFor(repo, nid)
@@ -113,7 +114,7 @@ func FindSymbol(repo *store.Repo) func(ctx context.Context, args json.RawMessage
 			}
 			n, err := store.QuickNode(repo, nid)
 			if err != nil || n == nil {
-				n = &domain.Node{ID: nid, Kind: symbolKind(m.Sym), Name: m.Sym.Name}
+				n = &domain.Node{ID: nid, Kind: ent.DomainKind(), Name: m.Sym.Name}
 			}
 			entry.Node = n
 			out = append(out, entry)

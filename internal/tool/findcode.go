@@ -11,6 +11,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/store"
 )
@@ -35,10 +36,11 @@ type FindCodeMatch struct {
 
 // FindCodeContext provides enclosing function/class metadata.
 type FindCodeContext struct {
-	NodeID         string           `json:"nodeId"`
-	Kind           domain.NodeKind  `json:"kind"`
-	Summary        string           `json:"summary"`
-	EnclosingRange domain.LineRange `json:"enclosingRange"`
+	NodeID         string                `json:"nodeId"`
+	Kind           domain.NodeKind       `json:"kind"`
+	Summary        string                `json:"summary"`
+	Receiver       *entity.ReceiverView  `json:"receiver,omitempty"`
+	EnclosingRange domain.LineRange      `json:"enclosingRange"`
 }
 
 // FindCodeSchema is the JSON Schema for find_code. Mirrors §4.9.
@@ -356,10 +358,12 @@ func findCodeTreeSitter(repo *store.Repo, scope, fileFilter, pattern string, wit
 func enclosingContext(repo *store.Repo, path string, line int) *FindCodeContext {
 	for _, s := range repo.Symbols(path) {
 		if s.StartRow <= line && line < s.EndRow {
+			ent := entityFromSymbol(s, path, repo)
 			return &FindCodeContext{
-				NodeID:         symbolID(path, s, repo.Root()),
-				Kind:           symbolKind(s),
-				Summary:        symbolSummary(s),
+				NodeID:         ent.ID(),
+				Kind:           ent.DomainKind(),
+				Summary:        ent.Summary(),
+				Receiver:       ent.ReceiverView(),
 				EnclosingRange: domain.LineRange{Start: s.StartRow, End: s.EndRow},
 			}
 		}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/store"
 )
@@ -20,10 +21,11 @@ type GetSymbolsOverviewArgs struct {
 
 // SymbolsOverviewNode is one symbol entry.
 type SymbolsOverviewNode struct {
-	ID      string          `json:"id"`
-	Kind    domain.NodeKind `json:"kind"`
-	Name    string          `json:"name"`
-	Summary string          `json:"summary"`
+	ID       string                `json:"id"`
+	Kind     domain.NodeKind       `json:"kind"`
+	Name     string                `json:"name"`
+	Summary  string                `json:"summary"`
+	Receiver *entity.ReceiverView  `json:"receiver,omitempty"`
 }
 
 // GetSymbolsOverviewSchema is the JSON Schema for get_symbols_overview.
@@ -51,10 +53,11 @@ var GetSymbolsOverviewOutputSchema = json.RawMessage(`{
         "type": "object",
         "required": ["id", "kind", "name", "summary"],
         "properties": {
-          "id":      { "type": "string" },
-          "kind":    { "type": "string" },
-          "name":    { "type": "string" },
-          "summary": { "type": "string" }
+          "id":       { "type": "string" },
+          "kind":     { "type": "string", "description": "Domain kind (FUNCTION/METHOD/CLASS/MODULE). For the grammar-form and id-prefix mapping, call get_graph_schema and inspect kindMap." },
+          "name":     { "type": "string" },
+          "summary":  { "type": "string" },
+          "receiver": { "type": ["object", "null"] }
         }
       }
     },
@@ -90,11 +93,13 @@ func GetSymbolsOverview(repo *store.Repo) func(ctx context.Context, args json.Ra
 }
 
 func buildOverviewNode(repo *store.Repo, file string, s parser.Symbol) SymbolsOverviewNode {
+	ent := entityFromSymbol(s, file, repo)
 	return SymbolsOverviewNode{
-		ID:      symbolID(file, s, repo.Root()),
-		Kind:    symbolKind(s),
-		Name:    s.Name,
-		Summary: symbolSummary(s),
+		ID:       ent.ID(),
+		Kind:     ent.DomainKind(),
+		Name:     s.Name,
+		Summary:  ent.Summary(),
+		Receiver: ent.ReceiverView(),
 	}
 }
 

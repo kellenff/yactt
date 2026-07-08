@@ -126,7 +126,7 @@ func resolveSymbolToID(repo *store.Repo, symbol string) (id.ID, error) {
 		return id.ID{}, fmt.Errorf("no symbol matches %q", symbol)
 	}
 	first := matches[0]
-	nid := symbolID(first.File, first.Sym, repo.Root())
+	nid := entityFromSymbol(first.Sym, first.File, repo).ID()
 	return id.Parse(nid)
 }
 

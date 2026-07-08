@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/store"
 )
@@ -203,7 +204,10 @@ func countsAndPackages(repo *store.Repo) (ArchSummary, []ArchLanguage, []ArchPac
 	// Symbol counts. `SymbolsByPath` returns top-level declarations per file.
 	for _, syms := range symsByPath {
 		for _, s := range syms {
-			switch parser.SymbolKind(s) {
+			// Architecture summary only needs the kind triple, not the
+			// resolved receiver; FromParser is cheaper than entityFromSymbol
+			// (no repo lookup) and works without a file path.
+			switch entity.FromParser(s, "", "").DomainKind() {
 			case domain.KindFunction:
 				sum.FunctionCount++
 			case domain.KindMethod:
@@ -268,13 +272,14 @@ func hotspotsAndDeadCode(repo *store.Repo, top int) ([]ArchHotspot, []ArchDeadCo
 
 	for file, syms := range repo.SymbolsByPath() {
 		for _, s := range syms {
-			kind := parser.SymbolKind(s)
+			ent := entityFromSymbol(s, file, repo)
+			kind := ent.DomainKind()
 			if !kind.IsCode() {
 				continue
 			}
 			callers := len(repo.EdgesByCaller(file, s))
 			all = append(all, cand{
-				id:     symbolID(file, s, repo.Root()),
+				id:     ent.ID(),
 				kind:   kind,
 				name:   s.Name,
 				file:   file,

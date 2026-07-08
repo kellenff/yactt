@@ -166,7 +166,7 @@ func resolveNamePath(repo *store.Repo, namePath string) (id.ID, int, error) {
 	if first == nil {
 		return id.ID{}, 0, fmt.Errorf("get_code_snippet: cannot locate %q", namePath)
 	}
-	nodeIDStr := symbolID(first.File, first.Sym, repo.Root())
+	nodeIDStr := entityFromSymbol(first.Sym, first.File, repo).ID()
 	nodeID, err := id.Parse(nodeIDStr)
 	if err != nil {
 		return id.ID{}, 0, fmt.Errorf("get_code_snippet: resolved %q to %q but id is invalid: %w", namePath, nodeIDStr, err)
@@ -222,7 +222,7 @@ func readSource(repo *store.Repo, nodeID id.ID, rng []int, includeTrivia bool) (
 	}
 	return &GetCodeSnippetResult{
 		ID:         nodeID.String(),
-		Kind:       symbolKind(sym),
+		Kind:       entityFromSymbol(sym, file, repo).DomainKind(),
 		Text:       body,
 		LineRange:  r,
 		Encoding:   "utf-8",
