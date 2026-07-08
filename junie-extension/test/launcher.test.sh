@@ -22,11 +22,15 @@ run_in() {
 	(cd "$1" && YACTT_LAUNCHER_DRY_RUN=1 bash "${LAUNCHER}")
 }
 
-# Setup: a project root with `.git` and a deep subdir without.
+# Setup: a real git repo (git rev-parse rejects an empty `.git/`
+# dir as not-a-repo) + a non-git workspace for the fallback case.
+# Canonicalize TMP — on macOS /tmp is a symlink and the launcher
+# resolves symlinks before printing.
 TMP="$(mktemp -d)"
+TMP="$(cd "${TMP}" && pwd -P)"
 trap 'rm -rf "${TMP}"' EXIT
 mkdir -p "${TMP}/proj/sub/deep"
-mkdir -p "${TMP}/proj/.git"
+(cd "${TMP}/proj" && git init -q)
 
 # 1. cwd IS the project root.
 assert_eq "$(run_in "${TMP}/proj")" "${TMP}/proj" "root cwd resolves to itself"
