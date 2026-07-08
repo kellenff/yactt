@@ -31,7 +31,7 @@ var FindSymbolSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "name_path": { "type": "string", "description": "Slash-separated path. Globs allowed (e.g. 'class/User*/method/*')." },
+    "name_path": { "type": "string", "description": "Qualified name using '/' or '.' as the package separator (e.g. 'class/User/method/validate' or 'auth.Login'). Globs allowed on the final segment when the slash form is used." },
     "scope":     { "type": "string" },
     "kind":      { "type": "array", "items": { "enum": ["function","method","class","module"] } },
     "include_body": { "type": "boolean", "default": false },
@@ -87,18 +87,25 @@ func FindSymbol(repo *store.Repo) func(ctx context.Context, args json.RawMessage
 		// For MVP we treat the last segment as the symbol name pattern; prior
 		// segments are package-path qualifiers we use as a scope hint.
 		// Phase 2: walk the qualifier chain through receiver types.
+		// ponytail: dotted form (e.g. "auth.Login") is the canonical Go name
+		// and routes through splitNamePath so models don't have to know about
+		// the slash form. Slash form keeps the kind-prefix + glob support.
 		var pkgPrefix string
 		var namePattern string
-		if len(segments) > 1 {
-			packageSegments := segments[:len(segments)-1]
-			// Trim the leading "kind/type" segment if present (e.g. "class/User"
-			// should match the "User" type without the "class" prefix).
-			if len(packageSegments) > 0 && isKindSegment(packageSegments[0]) {
-				packageSegments = packageSegments[1:]
+		if !strings.Contains(a.NamePath, "/") && strings.Contains(a.NamePath, ".") {
+			pkgPrefix, namePattern = splitNamePath(a.NamePath)
+		} else {
+			if len(segments) > 1 {
+				packageSegments := segments[:len(segments)-1]
+				// Trim the leading "kind/type" segment if present (e.g. "class/User"
+				// should match the "User" type without the "class" prefix).
+				if len(packageSegments) > 0 && isKindSegment(packageSegments[0]) {
+					packageSegments = packageSegments[1:]
+				}
+				pkgPrefix = strings.Join(packageSegments, ".")
 			}
-			pkgPrefix = strings.Join(packageSegments, ".")
+			namePattern = segments[len(segments)-1]
 		}
-		namePattern = segments[len(segments)-1]
 		// Glob → match.
 		matches := matchByNamePattern(repo, pkgPrefix, namePattern)
 		out := make([]FindSymbolResult, 0, len(matches))

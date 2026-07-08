@@ -174,18 +174,6 @@ func resolveNamePath(repo *store.Repo, namePath string) (id.ID, int, error) {
 	return nodeID, matchCount, nil
 }
 
-// splitNamePath splits "auth.Login" or "auth/Login" into ("auth", "Login").
-// Pure splitting — no symbol resolution. Empty parts are skipped so
-// ".Login" → ("", "Login") falls through to the name-only lookup.
-func splitNamePath(s string) (pkg, name string) {
-	for i := len(s) - 1; i >= 0; i-- {
-		if c := s[i]; c == '.' || c == '/' {
-			return strings.TrimPrefix(s[:i], "./"), s[i+1:]
-		}
-	}
-	return "", s
-}
-
 // readSource materializes the source slice for a resolved id. Shared by
 // the id branch and the name_path branch. Bounds the line range to the
 // symbol when the caller asks for a slice outside it (so a typo in

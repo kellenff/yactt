@@ -454,6 +454,29 @@ func TestFindSymbol_ExactNamePath(t *testing.T) {
 	}
 }
 
+// TestFindSymbol_DottedNamePath_Login pins the regression for issue #28:
+// the canonical Go form `auth.Login` (dotted) must resolve to the same
+// node id as the slash form. Before the fix this silently returned
+// `symbols: []`.
+func TestFindSymbol_DottedNamePath_Login(t *testing.T) {
+	repo := loadRepo(t)
+	out := callJSON(t, tool.FindSymbol(repo), `{"name_path":"auth.Login","limit":5,"include_body":false}`)
+	env, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("find_symbol envelope type: got %T", out)
+	}
+	hits, ok := env["symbols"].([]tool.FindSymbolResult)
+	if !ok {
+		t.Fatalf("find_symbol symbols slice type: got %T", env["symbols"])
+	}
+	if len(hits) == 0 {
+		t.Fatal("expected at least one match for auth.Login")
+	}
+	if hits[0].Node == nil || hits[0].Node.ID != "fn:auth.Login" {
+		t.Fatalf("first hit node id=%q want fn:auth.Login", hits[0].Node.ID)
+	}
+}
+
 // TestFindSymbol_PrefixGlob_Login documents the prefix-glob behaviour:
 // `auth/Login*` is the package hint + a glob pattern; it should resolve
 // to `Login` (the function under test) without picking up unrelated

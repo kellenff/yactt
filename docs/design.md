@@ -583,7 +583,7 @@ You have a mental qualification path, not a fuzzy query. `find_symbol` lets the 
     "properties": {
       "name_path": {
         "type": "string",
-        "description": "Slash-separated path (e.g. 'class/User/method/validate'). Globs allowed (e.g. 'class/User*/method/*')."
+        "description": "Qualified name using '/' or '.' as the package separator (e.g. 'class/User/method/validate' or 'auth.Login'). Globs allowed on the final segment when the slash form is used."
       },
       "scope":        { "type": "string", "description": "Repo or directory to scope the search; defaults to whole repo." },
       "kind":         { "type": "array", "items": { "enum": ["function","method","class","module"] } },
