@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/store/repofixture"
 )
@@ -57,6 +58,58 @@ func TestGetGraphSchema_AllListsPopulated(t *testing.T) {
 	}
 	if len(out.CodeKinds) == 0 {
 		t.Error("codeKinds is empty")
+	}
+	if out.KindMap == nil {
+		t.Error("kindMap is nil")
+	}
+}
+
+// TestGetGraphSchema_KindMap_CoversAllNodeKinds pins that every
+// canonical kind in NodeKinds has an entry in KindMap with a non-empty
+// id prefix. Per issue #25: this is the schema entry a model uses to
+// discover the cross-layer translations.
+func TestGetGraphSchema_KindMap_CoversAllNodeKinds(t *testing.T) {
+	r := loadTestRepo(t)
+	out := runSchema(t, r)
+
+	if len(out.KindMap) != len(out.NodeKinds) {
+		t.Errorf("kindMap len = %d, want %d (one per nodeKind)", len(out.KindMap), len(out.NodeKinds))
+	}
+	for _, k := range out.NodeKinds {
+		m, ok := out.KindMap[k]
+		if !ok {
+			t.Errorf("kindMap missing entry for %q", k)
+			continue
+		}
+		if m.ID == "" {
+			t.Errorf("kindMap[%q].ID is empty", k)
+		}
+	}
+}
+
+// TestGetGraphSchema_KindMap_AlignsWithEntity pins that get_graph_schema's
+// kindMap matches the entity package's canonical table byte-for-byte.
+// Catches drift between the schema tool's output and the source of truth.
+func TestGetGraphSchema_KindMap_AlignsWithEntity(t *testing.T) {
+	r := loadTestRepo(t)
+	out := runSchema(t, r)
+
+	want := entity.AllMappingsByKind()
+	if len(out.KindMap) != len(want) {
+		t.Fatalf("kindMap len = %d, want %d", len(out.KindMap), len(want))
+	}
+	for k, w := range want {
+		got, ok := out.KindMap[k]
+		if !ok {
+			t.Errorf("kindMap missing %q", k)
+			continue
+		}
+		if got.ID != w.ID {
+			t.Errorf("kindMap[%q].ID = %q, want %q", k, got.ID, w.ID)
+		}
+		if len(got.Grammars) != len(w.Grammars) {
+			t.Errorf("kindMap[%q].Grammars len = %d, want %d", k, len(got.Grammars), len(w.Grammars))
+		}
 	}
 }
 

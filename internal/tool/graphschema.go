@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/store"
 )
 
@@ -20,12 +21,17 @@ type GetGraphSchemaArgs struct{}
 // version that derives them from a manifest file still produces the same
 // shape on the wire.
 type GraphSchemaResult struct {
-	NodeKinds    []domain.NodeKind    `json:"nodeKinds"`
-	EdgeKinds    []domain.EdgeKind    `json:"edgeKinds"`
-	Layers       []domain.LayerName   `json:"layers"`
-	DefaultEdges []domain.EdgeKind    `json:"defaultEdges"`
-	CodeKinds    []domain.NodeKind    `json:"codeKinds"`
-	Provenance   domain.Provenance    `json:"provenance"`
+	NodeKinds    []domain.NodeKind                `json:"nodeKinds"`
+	EdgeKinds    []domain.EdgeKind                `json:"edgeKinds"`
+	Layers       []domain.LayerName               `json:"layers"`
+	DefaultEdges []domain.EdgeKind                `json:"defaultEdges"`
+	CodeKinds    []domain.NodeKind                `json:"codeKinds"`
+	// KindMap is the canonical three-way mapping — domain → (grammar forms,
+	// id prefix). Per issue #25: lets a model discover the layer
+	// translations from the schema tool itself, so a string compare
+	// against the wrong layer's spelling can be diagnosed in-place.
+	KindMap    map[domain.NodeKind]entity.KindMapping `json:"kindMap"`
+	Provenance domain.Provenance                     `json:"provenance"`
 }
 
 // GetGraphSchemaSchema is the JSON Schema for get_graph_schema. Empty args
@@ -42,13 +48,14 @@ var GetGraphSchemaSchema = json.RawMessage(`{
 // get_graph_schema.
 var GetGraphSchemaOutputSchema = json.RawMessage(`{
   "type": "object",
-  "required": ["nodeKinds", "edgeKinds", "layers", "defaultEdges", "codeKinds", "provenance"],
+  "required": ["nodeKinds", "edgeKinds", "layers", "defaultEdges", "codeKinds", "kindMap", "provenance"],
   "properties": {
     "nodeKinds":    { "type": "array", "items": { "type": "string" } },
     "edgeKinds":    { "type": "array", "items": { "type": "string" } },
     "layers":       { "type": "array", "items": { "type": "string" } },
     "defaultEdges": { "type": "array", "items": { "type": "string" } },
     "codeKinds":    { "type": "array", "items": { "type": "string" } },
+    "kindMap":      { "type": "object", "additionalProperties": { "type": "object", "required": ["grammar", "id"], "properties": { "grammar": { "type": "array", "items": { "type": "string" } }, "id": { "type": "string" } } } },
     "provenance":   { "type": "object" }
   },
   "additionalProperties": false
@@ -95,6 +102,22 @@ func codeKinds() []domain.NodeKind {
 	return out
 }
 
+// buildKindMap returns the canonical three-way mapping keyed by canonical
+// kind. Reads from entity.AllMappingsByKind so the table lives in one
+// place; here we just shape the output. Returning a fresh map per call
+// (cheap, ≤ 7 entries) keeps the handler side-effect-free.
+func buildKindMap() map[domain.NodeKind]entity.KindMapping {
+	src := entity.AllMappingsByKind()
+	out := make(map[domain.NodeKind]entity.KindMapping, len(src))
+	for k, m := range src {
+		// Defensive copy of the Grammars slice so callers can't mutate
+		// the entity package's table through the response.
+		gs := append([]string(nil), m.Grammars...)
+		out[k] = entity.KindMapping{Grammars: gs, ID: m.ID}
+	}
+	return out
+}
+
 // GetGraphSchema returns a Handler that emits the graph schema. The
 // constructor takes *store.Repo to keep the wire-shape-test registration
 // uniform across tools, even though the answer is repo-independent.
@@ -111,6 +134,7 @@ func GetGraphSchema(repo *store.Repo) func(ctx context.Context, args json.RawMes
 			Layers:       append([]domain.LayerName(nil), domain.AllLayerNames...),
 			DefaultEdges: append([]domain.EdgeKind(nil), domain.AllEdges...),
 			CodeKinds:    codeKinds(),
+			KindMap:      buildKindMap(),
 			Provenance:   domain.YacttProvenance(),
 		}, nil
 	}

@@ -55,7 +55,7 @@ var FindSymbolOutputSchema = json.RawMessage(`{
         "type": "object",
         "required": ["node"],
         "properties": {
-          "node": { "type": "object" },
+          "node": { "type": "object", "properties": { "kind": { "type": "string", "description": "Domain kind (FUNCTION/METHOD/CLASS/MODULE). For the grammar-form and id-prefix mapping, call get_graph_schema and inspect kindMap." } } },
           "body": { "type": ["object", "null"] }
         }
       }
