@@ -74,3 +74,22 @@ func joinDotted(pkg, name string) string {
 	}
 	return pkg + "." + name
 }
+
+// splitNamePath splits a qualified name into (pkg, name) using the
+// rightmost '.' or '/' as the package separator. Mirrors the dotted-Go
+// form (auth.Login) and the slash form (auth/Login) so a model trained
+// on either gets the same answer. Single source of truth for both
+// find_symbol and get_code_snippet.
+//
+// ponytail: rightmost-wins means a method on a type — `TestUser.Login` —
+// parses as pkg="TestUser", name="Login", which is the same ambiguous
+// answer the slash form gives today. Don't widen this until a real
+// fixture demands multi-segment dotted paths.
+func splitNamePath(s string) (pkg, name string) {
+	for i := len(s) - 1; i >= 0; i-- {
+		if c := s[i]; c == '.' || c == '/' {
+			return strings.TrimPrefix(s[:i], "./"), s[i+1:]
+		}
+	}
+	return "", s
+}

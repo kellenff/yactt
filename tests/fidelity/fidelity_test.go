@@ -99,12 +99,20 @@ func TestFidelity_Task1_CodeNavigation_LocateAndCaller(t *testing.T) {
 		t.Fatalf("step 1 tree_overview: expected non-empty children; got %v", overview)
 	}
 
-	// Step 2: find_symbol("auth/Login") — locate. ponytail: slash-
-	// separated (per find_symbol's name_path grammar), not dotted.
+	// Step 2: find_symbol("auth/Login") — locate. Both the slash and
+	// the dotted form resolve to the same node (issue #28 fixed the
+	// dotted miss).
 	symStep := drive(t, tool.FindSymbol(repo), `{"name_path":"auth/Login"}`)
 	syms, ok := symStep["symbols"].([]any)
 	if !ok || len(syms) == 0 {
 		t.Fatalf("step 2 find_symbol: expected non-empty symbols; got %v", symStep)
+	}
+
+	// Step 2b: dotted form must agree (issue #28 regression pin).
+	symDotted := drive(t, tool.FindSymbol(repo), `{"name_path":"auth.Login"}`)
+	dottedSyms, ok := symDotted["symbols"].([]any)
+	if !ok || len(dottedSyms) == 0 {
+		t.Fatalf("step 2b find_symbol: dotted form returned no symbols; got %v", symDotted)
 	}
 
 	// Step 3: find_referencing_symbols("fn:auth.Login") — one caller.
