@@ -312,12 +312,25 @@ contract at the MCP dispatch layer: one line per `tools/call`,
 `is_error` set on handler error, and a clean no-op when no
 auditor is attached.
 
+## 7. In-CI secret-scanning gate
+
+`ci.yml` runs `gitleaks detect --source . --no-banner` on every PR
+against `ubuntu-latest`. The gitleaks CLI is downloaded directly from
+the `v8.18.4` GitHub release and verified against the SHA256SUMS file
+published alongside the release — bypassing the
+`gitleaks/gitleaks-action@v2.3.2` wrapper that the umbrella originally
+used (it had a URL-construction bug). What it does NOT defend
+against: provider-side partner-pattern tokens (AWS, GitHub PATs);
+GitHub Secret Scanning (repo settings → Code security and analysis)
+remains enabled as a second layer.
+
 ## Summary table
 
 | Path                         | Integrity gate                          | Where it lives                |
 |------------------------------|-----------------------------------------|-------------------------------|
 | Tree-sitter grammar bindings | `go mod verify` + no-`replace` grep     | `ci.yml` → `go mod verify`    |
-| Go-module CVEs               | `govulncheck ./...`                     | `ci.yml` → `vuln` job         |
+| Go-module CVEs               | `govulncheck ./...`                     | `ci.yml` → `security` job     |
+| Committed secrets (PR-time)  | `gitleaks detect --source . --no-banner` (v8.18.4 + SHA256SUMS) | `ci.yml` → `security` job (Issue #4) |
 | Release tarball (build)      | SHA256SUMS + SLSA L3 attestation        | `release.yml` → `build` job   |
 | Release tarball (publish)    | `gh attestation verify` re-check       | `release.yml` → `release` job |
 | Install (consumer)           | SHA256SUMS + TOFU + semver allowlist    | `plugins/yactt/scripts/install.sh` |
