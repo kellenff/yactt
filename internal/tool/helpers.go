@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"github.com/kellenff/yactt/internal/domain"
-	"github.com/kellenff/yactt/internal/id"
+	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/store"
 )
@@ -31,22 +31,36 @@ func baseName(p string) string {
 	return p
 }
 
-// symbolID builds a canonical node ID for a parser.Symbol. The package part
-// uses the dotted directory path so `node_get(fn:auth.login.Login)` resolves
-// back to the right file.
-func symbolID(file string, s parser.Symbol, root string) string {
-	return id.For(s, packagePath(root, file))
-}
-
-// symbolKind maps a parser.Symbol kind to a domain.NodeKind.
-func symbolKind(s parser.Symbol) domain.NodeKind {
-	return parser.SymbolKind(s)
-}
-
-// symbolSummary produces a "Function: Name" style summary without a doc
-// comment (search re-uses the same pattern).
-func symbolSummary(s parser.Symbol) string {
-	return parser.SymbolSummary(s)
+// entityFromSymbol is the tool layer's single source of truth for
+// lifting a parser.Symbol into an entity.Entity. It builds the entity
+// (kind triple + identity) and resolves the receiver via the repo's
+// symbol index, so callers get one value with everything pre-computed.
+//
+// ponytail: the receiver lookup is best-effort (try-with-pkg, then
+// without) — unresolvable receivers stay nil and the wire omits the
+// receiver field. Don't narrow this until a real consumer hits misses.
+func entityFromSymbol(s parser.Symbol, file string, repo *store.Repo) entity.Entity {
+	e := entity.FromParser(s, file, packagePath(repo.Root(), file))
+	if s.Receiver == "" {
+		return e
+	}
+	pkg := packagePath(repo.Root(), file)
+	// Try with the enclosing package first; fall back to a package-less
+	// search for TS/JS-style receivers and Go receivers in same-package
+	// types. Mirrors findsymbol.go's matchByNamePattern two-pass logic.
+	for _, m := range repo.Lookup(pkg, s.Receiver) {
+		cand := entity.FromParser(m.Sym, m.File, packagePath(repo.Root(), m.File))
+		if cand.DomainKind().IsCode() {
+			return *e.WithReceiver(&cand)
+		}
+	}
+	for _, m := range repo.Lookup("", s.Receiver) {
+		cand := entity.FromParser(m.Sym, m.File, packagePath(repo.Root(), m.File))
+		if cand.DomainKind().IsCode() {
+			return *e.WithReceiver(&cand)
+		}
+	}
+	return e
 }
 
 // joinDotted combines pkg + name into a dotted id body, dropping empty

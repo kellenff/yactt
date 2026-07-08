@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/store"
 )
 
@@ -35,7 +36,12 @@ type TreeOverviewResult struct {
 	Kind       domain.NodeKind      `json:"kind"`
 	Summary    string               `json:"summary,omitempty"`
 	Provenance *domain.Provenance   `json:"provenance,omitempty"`
-	Children   []TreeOverviewResult `json:"children,omitempty"`
+	// Receiver is the bounded on-wire view of this entity's receiver
+	// (only set for methods whose receiver resolves to a class/module in
+	// the indexed set). Omitted for non-methods and unresolved
+	// receivers — see entity.ReceiverView for the four-field shape.
+	Receiver *entity.ReceiverView `json:"receiver,omitempty"`
+	Children []TreeOverviewResult `json:"children,omitempty"`
 	// Warning is set on the root only, when buildOverviewTree had to stop
 	// descending because the response would have exceeded maxResponseBytes.
 	// ponytail: this exists because callers need a "I missed something" signal
@@ -222,15 +228,17 @@ func (b *overviewBuilder) build(repo *store.Repo, rootPath, nodePath string, dep
 			if depth >= 2 {
 				syms := repo.Symbols(f)
 				for _, s := range syms {
-					symID := symbolID(f, s, rootPath)
-					if !b.reserve(symID, symbolSummary(s)) {
+					ent := entityFromSymbol(s, f, repo)
+					symID := ent.ID()
+					if !b.reserve(symID, ent.Summary()) {
 						break
 					}
 					symNode := TreeOverviewResult{
 						ID:         symID,
-						Kind:       symbolKind(s),
-						Summary:    symbolSummary(s),
+						Kind:       ent.DomainKind(),
+						Summary:    ent.Summary(),
 						Provenance: prov(),
+						Receiver:   ent.ReceiverView(),
 					}
 					fileNode.Children = append(fileNode.Children, symNode)
 				}

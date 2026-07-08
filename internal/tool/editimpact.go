@@ -130,8 +130,9 @@ func detectConflicts(repo *store.Repo, _ parser.Symbol, newName string) []Confli
 	lookup := repo.Lookup("", newName)
 	out := []Conflict{}
 	for _, e := range lookup {
+		ent := entityFromSymbol(e.Sym, e.File, repo)
 		out = append(out, Conflict{
-			ID:     symbolID(e.File, e.Sym, repo.Root()),
+			ID:     ent.ID(),
 			Reason: "name collision with existing symbol in " + packagePath(repo.Root(), e.File),
 		})
 	}

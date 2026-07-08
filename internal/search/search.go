@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/kellenff/yactt/internal/domain"
-	"github.com/kellenff/yactt/internal/id"
+	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/store"
 )
@@ -66,12 +66,13 @@ func Search(r *store.Repo, q Query) []Result {
 			if !matched {
 				continue
 			}
+			ent := entity.FromParser(sym, path, pkg)
 			results = append(results, Result{
 				Score: score,
 				Node: SymbolResult{
-					ID:          buildID(sym, pkg),
-					Kind:        parser.SymbolKind(sym),
-					Summary:     parser.SymbolSummary(sym),
+					ID:          ent.ID(),
+					Kind:        ent.DomainKind(),
+					Summary:     ent.Summary(),
 					PathContext: path,
 				},
 			})
@@ -90,7 +91,7 @@ func kindMatches(s parser.Symbol, kf []domain.NodeKind) bool {
 	if len(kf) == 0 {
 		return true
 	}
-	dk := parser.SymbolKind(s)
+	dk := entity.FromParser(s, "", "").DomainKind()
 	for _, k := range kf {
 		if k == dk {
 			return true
@@ -191,10 +192,11 @@ func scoreSymbol(s parser.Symbol, doc string, q Query, path, pkg string) (float6
 }
 
 // buildID renders the canonical node ID for a search hit. Thin
-// delegation to id.For — kind→prefix mapping is single-sourced there so
-// the tool layer cannot drift from the persisted index again.
+// delegation through entity.FromParser — the canonical mapping lives
+// in the entity package now, so id.For is bypassed here. Any future
+// kind-table changes happen in one place.
 func buildID(s parser.Symbol, pkg string) string {
-	return id.For(s, pkg)
+	return entity.FromParser(s, "", pkg).ID()
 }
 
 // Pattern is a structured search pattern used by find_code. It supports regex

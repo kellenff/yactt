@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/store"
@@ -44,9 +45,10 @@ type DetectChangesArgs struct {
 // the columns exposed by find_symbol/get_code_snippet — enough to drive a
 // follow-up call without re-resolving.
 type SymbolRef struct {
-	ID      string          `json:"id"`
-	Kind    domain.NodeKind `json:"kind"`
-	Summary string          `json:"summary"`
+	ID       string                `json:"id"`
+	Kind     domain.NodeKind       `json:"kind"`
+	Summary  string                `json:"summary"`
+	Receiver *entity.ReceiverView  `json:"receiver,omitempty"`
 }
 
 // Change is one affected symbol plus the fan-out of callers / tests /
@@ -270,10 +272,11 @@ func DetectChanges(repo *store.Repo) func(ctx context.Context, args json.RawMess
 					break
 				}
 				b := symBuckets[symID]
+				ent := entityFromSymbol(b.sym, b.file, repo)
 				changes = append(changes, Change{
 					File:      b.file,
 					Ranges:    mergeRanges(b.ranges),
-					Symbol:    &SymbolRef{ID: b.symID, Kind: symbolKind(b.sym), Summary: symbolSummary(b.sym)},
+					Symbol:    &SymbolRef{ID: ent.ID(), Kind: ent.DomainKind(), Summary: ent.Summary(), Receiver: ent.ReceiverView()},
 					Callers:   scanCallers(repo, b.file, b.sym, a.Limit, &prov),
 					Tests:     scanTests(repo, b.file, b.sym, a.Limit, &prov),
 					Overrides: scanOverrides(repo, b.file, b.sym, a.Limit, &prov),
