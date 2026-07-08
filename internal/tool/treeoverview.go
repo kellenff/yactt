@@ -87,9 +87,10 @@ var TreeOverviewOutputSchema = json.RawMessage(`{
   "required": ["id", "kind"],
   "properties": {
     "id":         { "type": "string" },
-    "kind":       { "type": "string" },
+    "kind":       { "type": "string", "description": "Domain kind (FUNCTION/METHOD/CLASS/MODULE). For the grammar-form and id-prefix mapping, call get_graph_schema and inspect kindMap." },
     "summary":    { "type": "string" },
     "provenance": { "type": "object" },
+    "receiver":   { "type": ["object", "null"] },
     "children":   { "type": "array" },
     "warning":    { "type": "string" }
   },

@@ -71,7 +71,7 @@ var GetCodeSnippetOutputSchema = json.RawMessage(`{
   "required": ["id", "kind", "text", "lines", "encoding", "provenance"],
   "properties": {
     "id":         { "type": "string" },
-    "kind":       { "type": "string" },
+    "kind":       { "type": "string", "description": "Domain kind (FUNCTION/METHOD/CLASS/MODULE). For the grammar-form and id-prefix mapping, call get_graph_schema and inspect kindMap." },
     "text":       { "type": "string" },
     "lines":      { "type": "object" },
     "encoding":   { "type": "string" },

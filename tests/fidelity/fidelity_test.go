@@ -21,6 +21,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/entity"
+	"github.com/kellenff/yactt/internal/id"
+	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/tool"
 )
@@ -341,5 +345,137 @@ func writeFiles(t *testing.T, root string, files map[string]string) {
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestFidelity_KindMapping_RoundTrips pins the cross-layer kind
+// mapping contract end-to-end. Per issue #25: a model that sees
+// `kind:"FUNCTION"` in a tool response and writes a filter against the
+// grammar spelling should silently fail today; this test makes the
+// mapping discoverable via `get_graph_schema`'s `kindMap` field and
+// pins the canonical table across FromParser/FromID round-trips.
+//
+// Four steps:
+//  1. get_graph_schema surfaces a non-empty kindMap keyed by every
+//     canonical kind, each carrying a grammar-form list and id prefix.
+//  2. For every (canonical, grammar) pair in the table, FromParser
+//     produces an Entity whose DomainKind/IDKind match the listing.
+//  3. For every grammar form, the canonical ID survives a parse →
+//     FromID round-trip with the same DomainKind.
+//  4. For a known method in the fixture repo (payments.Wallet.Charge),
+//     entityFromSymbol resolves the receiver to the Wallet class.
+func TestFidelity_KindMapping_RoundTrips(t *testing.T) {
+	repo := loadFixtureRepo(t)
+
+	// Step 1: get_graph_schema surfaces kindMap.
+	schema := drive(t, tool.GetGraphSchema(repo), `{}`)
+	kindMapRaw, ok := schema["kindMap"].(map[string]any)
+	if !ok || len(kindMapRaw) == 0 {
+		t.Fatalf("step 1 get_graph_schema: missing or empty kindMap; got %v", schema["kindMap"])
+	}
+
+	// Step 2: every (canonical, grammar) pair in the table produces an
+	// Entity with matching DomainKind/IDKind via FromParser.
+	for domainKindRaw, m := range kindMapRaw {
+		mapping, ok := m.(map[string]any)
+		if !ok {
+			t.Errorf("step 2 kindMap[%q] not an object; got %T", domainKindRaw, m)
+			continue
+		}
+		grammarList, _ := mapping["grammar"].([]any)
+		idPrefix, _ := mapping["id"].(string)
+		if idPrefix == "" {
+			t.Errorf("step 2 kindMap[%q].id is empty", domainKindRaw)
+		}
+		for _, g := range grammarList {
+			grammar, _ := g.(string)
+			// Methods need a Receiver populated so idKindFromGrammar
+			// returns "meth" instead of falling back to "fn".
+			sym := parser.Symbol{Kind: grammar, Name: "X", Receiver: "R"}
+			ent := entity.FromParser(sym, "pkg/file.go", "pkg")
+			if string(ent.DomainKind()) != domainKindRaw {
+				t.Errorf("step 2 grammar=%q → DomainKind=%q, want %q",
+					grammar, ent.DomainKind(), domainKindRaw)
+			}
+			if string(ent.IDKind()) != idPrefix {
+				t.Errorf("step 2 grammar=%q → IDKind=%q, want %q",
+					grammar, ent.IDKind(), idPrefix)
+			}
+		}
+	}
+
+	// Step 3: every grammar form's canonical ID round-trips through
+	// Parse → FromID with the same DomainKind.
+	for _, m := range kindMapRaw {
+		mapping, _ := m.(map[string]any)
+		grammarList, _ := mapping["grammar"].([]any)
+		for _, g := range grammarList {
+			grammar, _ := g.(string)
+			sym := parser.Symbol{Kind: grammar, Name: "X", Receiver: "R"}
+			orig := entity.FromParser(sym, "pkg/file.go", "pkg")
+			parsed, err := id.Parse(orig.ID())
+			if err != nil {
+				t.Errorf("step 3 Parse(%q) = %v", orig.ID(), err)
+				continue
+			}
+			recovered := entity.FromID(parsed)
+			if recovered.DomainKind() != orig.DomainKind() {
+				t.Errorf("step 3 DomainKind round-trip: %q → %q → %q",
+					grammar, orig.DomainKind(), recovered.DomainKind())
+			}
+			if recovered.ID() != orig.ID() {
+				t.Errorf("step 3 ID round-trip: %q → %q → %q",
+					grammar, orig.ID(), recovered.ID())
+			}
+		}
+	}
+
+	// Step 4: a known method (payments.Wallet.Charge) resolves its
+	// receiver via the symbol index. The fixture deliberately adds
+	// a Wallet struct + method so this step has something to resolve.
+	// We mirror the tool layer's entityFromSymbol resolution pass:
+	// build the entity, then call ResolveReceivers with a callback
+	// that wraps repo.Lookup (try-with-pkg, then without).
+	var methodEntities []entity.Entity
+	for _, path := range repo.Files() {
+		for _, s := range repo.Symbols(path) {
+			if s.Kind != "method_declaration" || s.Name != "Charge" {
+				continue
+			}
+			methodEntities = append(methodEntities,
+				entity.FromParser(s, path, store.PackagePath(repo.Root(), path)))
+		}
+	}
+	lookup := entity.ReceiverLookup(func(receiverName, pkg string) (entity.Entity, bool) {
+		for _, m := range repo.Lookup(pkg, receiverName) {
+			cand := entity.FromParser(m.Sym, m.File, store.PackagePath(repo.Root(), m.File))
+			if cand.DomainKind().IsCode() {
+				return cand, true
+			}
+		}
+		for _, m := range repo.Lookup("", receiverName) {
+			cand := entity.FromParser(m.Sym, m.File, store.PackagePath(repo.Root(), m.File))
+			if cand.DomainKind().IsCode() {
+				return cand, true
+			}
+		}
+		return entity.Entity{}, false
+	})
+	entity.ResolveReceivers(methodEntities, lookup)
+
+	found := false
+	for _, ent := range methodEntities {
+		if ent.Receiver() == nil {
+			continue
+		}
+		if ent.Receiver().DomainKind() != domain.KindClass {
+			t.Errorf("step 4 %s: receiver kind = %q, want CLASS",
+				ent.ID(), ent.Receiver().DomainKind())
+		}
+		found = true
+	}
+	if !found {
+		t.Error("step 4: payments.Wallet.Charge did not resolve its receiver; " +
+			"check the fixture's Wallet struct exists in payments/pay.go")
 	}
 }
