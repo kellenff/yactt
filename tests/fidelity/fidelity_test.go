@@ -254,8 +254,11 @@ func listExportedNames(n tool.TreeOverviewResult) []string {
 // The fixture's git history doesn't exist, so the test sets up a fresh
 // repo with two commits: v1 has `Login` returning a hard-coded string; v2
 // adds a parameter `token` to `Login`. The diff between HEAD~1 and HEAD
-// must surface auth/login.go in the `files` list (and ideally populate
-// `changes[].symbol.id` with `fn:auth.Login`).
+// must surface auth/login.go in the `files` list AND bind a `Change`
+// row to `fn:auth.Login` — the symbol resolver's tiered fallback
+// (see internal/tool/detectchanges.go:enclosingSymbol) anchors the
+// hunk's first row to `Login` even when the diff also adds helper
+// declarations on trailing rows.
 func TestFidelity_Task4_DiffImpact_PublicSurfaceChange(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skipf("git not on PATH: %v", err)
@@ -320,26 +323,49 @@ func (e strErr) Error() string { return string(e) }
 	dc := drive(t, tool.DetectChanges(repo),
 		`{"base":"HEAD~1","scope":["auth/login.go"]}`)
 
-	// Final assertion: auth/login.go is in the `files` list. ponytail:
-	// checks the file-level summary rather than the per-change symbol
-	// because the symbol resolver can return nil when a hunk range
-	// doesn't cleanly map to a single declaration; the file-level
-	// signal is the more robust regression detector.
+	// Final assertions:
+	//   1. auth/login.go is in the `files` list (file-level summary).
+	//   2. a `Change` row is bound to `fn:auth.Login` (symbol-level
+	//      attribution). The tiered resolver guarantees this even when
+	//      the hunk overflows `Login`'s body with trailing declarations.
 	files, ok := dc["files"].([]any)
 	if !ok {
 		t.Fatalf("step 1 detect_changes: missing 'files' field; got %v", dc)
 	}
-	found := false
+	foundFile := false
 	for _, f := range files {
 		if m, ok := f.(map[string]any); ok {
 			if name, _ := m["file"].(string); name == "auth/login.go" {
-				found = true
+				foundFile = true
 				break
 			}
 		}
 	}
-	if !found {
+	if !foundFile {
 		t.Fatalf("step 1 detect_changes: expected auth/login.go in files; got %v", files)
+	}
+
+	changes, ok := dc["changes"].([]any)
+	if !ok {
+		t.Fatalf("step 1 detect_changes: missing 'changes' field; got %v", dc)
+	}
+	foundSymbol := false
+	for _, c := range changes {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		sym, ok := cm["symbol"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if id, _ := sym["id"].(string); id == "fn:auth.Login" {
+			foundSymbol = true
+			break
+		}
+	}
+	if !foundSymbol {
+		t.Fatalf("step 1 detect_changes: expected fn:auth.Login in changes; got %v", changes)
 	}
 }
 
