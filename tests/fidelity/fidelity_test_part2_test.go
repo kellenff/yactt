@@ -1,6 +1,7 @@
 package fidelity_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,36 +90,34 @@ def other_helper(x):
 //	affected.
 //
 // Canonical flow:
-//   1. tree_overview(depth=2) — orient on the repo's structure.
-//   2. From the tree, extract every FUNCTION/METHOD/CLASS node whose
-//      ID begins with `auth.` (the auth package's surface).
-//   3. For each, find_referencing_symbols — produces a caller set.
-//   4. Final assertion: at least one auth export has a non-empty
-//      caller set (proving the chain produced a useful summary).
+//  1. tree_overview(scope=<repo>/auth, depth=3) — orient on the auth
+//     package's structure only.
+//  2. From the tree, every FUNCTION/METHOD/CLASS node is an auth export
+//     (the scope already filtered the rest out).
+//  3. For each, find_referencing_symbols — produces a caller set.
+//  4. Final assertion: at least one auth export has a non-empty
+//     caller set (proving the chain produced a useful summary).
 //
-// ponytail: tree_overview has no `scope` arg (it always roots at
-// repo.Root), so step 1 doesn't constrain to auth — the chain walks
-// the full tree and filters client-side. This mirrors how a real
-// harness without scope support would solve the prompt.
+// ponytail: the canonical flow uses tree_overview's `scope` arg directly
+// (added in #26) so the chain doesn't pay for the rest of the repo. If
+// `scope` ever regresses, step 1's tree will still be valid (whole-repo
+// fallback) but the chain becomes cheaper-when-scoped → drift to assert.
 func TestFidelity_Task6_Mixed_MultiStepRefactorSummary(t *testing.T) {
 	repo := loadFixtureRepo(t)
 
-	// Step 1: tree_overview — get the full tree.
-	out := driveRaw(t, tool.TreeOverview(repo), `{"depth":3}`)
+	// Step 1: tree_overview scoped to the auth package.
+	scope := repo.Root() + "/auth"
+	out := driveRaw(t, tool.TreeOverview(repo),
+		fmt.Sprintf(`{"depth":3,"scope":%q}`, scope))
 	tree, ok := out.(tool.TreeOverviewResult)
 	if !ok {
 		t.Fatalf("step 1: unexpected TreeOverview type: %T", out)
 	}
 
-	// Step 2: extract the auth-package surface from the tree.
-	authNames := []string{}
-	for _, name := range listExportedNames(tree) {
-		if strings.HasPrefix(name, "auth.") || strings.HasPrefix(name, "fn:auth.") || strings.HasPrefix(name, "meth:auth.") || strings.HasPrefix(name, "class:auth.") {
-			authNames = append(authNames, name)
-		}
-	}
+	// Step 2: every exported symbol in the scoped tree is an auth export.
+	authNames := listExportedNames(tree)
 	if len(authNames) == 0 {
-		t.Fatalf("step 2: expected ≥1 auth export in tree_overview; got 0")
+		t.Fatalf("step 2: expected ≥1 auth export in scoped tree; got 0 (scope=%q)", scope)
 	}
 
 	// Step 3: for each auth export, find_referencing_symbols.

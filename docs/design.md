@@ -163,6 +163,7 @@ The very first call any consumer makes on entering a repo. Cheapest possible ori
     "type": "object",
     "properties": {
       "repo":  { "type": "string", "description": "Absolute path or repo alias" },
+      "scope": { "type": "string", "description": "Optional absolute path under repo root; narrows the walk to a package or subdirectory. Mirrors search.Search's q.Scope." },
       "depth": { "type": "integer", "default": 2, "minimum": 1, "maximum": 6 },
       "include_layers": {
         "type": "array",
@@ -180,6 +181,7 @@ The very first call any consumer makes on entering a repo. Cheapest possible ori
 ```graphql
 query TreeOverview(
   $repo: String!
+  $scope: String
   $depth: Int!
   $includeLayers: [String!]!
 ) {
@@ -187,7 +189,7 @@ query TreeOverview(
     id
     kind
     summary
-    packages(depth: $depth) {
+    packages(depth: $depth, scope: $scope) {
       id
       kind
       summary
@@ -208,6 +210,11 @@ query TreeOverview(
   }
 }
 ```
+
+> `$scope` (optional) is an absolute path under `$repo`'s root; the resolver
+> filters packages whose files don't have a path prefix matching `$scope`.
+> Empty / null means the whole repo — same convention as `search`'s
+> `q.Scope`. See [#26](https://github.com/kellenff/yactt/issues/26).
 
 #### Under the hood
 
