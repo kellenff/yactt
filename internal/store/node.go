@@ -3,12 +3,14 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/lsp"
 	"github.com/kellenff/yactt/internal/parser"
@@ -384,6 +386,56 @@ func parseHoverTypes(hover string) map[string]any {
 		return nil
 	}
 	return out
+}
+
+// Signature returns the public signature text for a symbol — the
+// declaration line (and the LSP-augmented types when an LSP server is
+// wired for the file's language). This is the same string the
+// `node_get` tool returns in the `signature` layer; exposed at the
+// store level so callers like the chunker don't need to re-walk the
+// parse tree or duplicate the LSP-or-tree-sitter dispatch logic.
+//
+// Returns "" when the file is unavailable or the symbol's row range
+// is empty. Callers that need provenance (gopls vs tree-sitter) should
+// continue to use MaterializeNode + the LayerSignature gate.
+func (r *Repo) Signature(path string, sym parser.Symbol) string {
+	f, err := r.CachedFile(path)
+	if err != nil {
+		return ""
+	}
+	text, _, _ := r.signatureMaterializer(f, sym)
+	return text
+}
+
+// PackageOf returns the dotted package path for a file under the repo
+// root. Empty string when the file is at the repo root (no directory
+// component). Wraps PackagePath so chunkers and other store clients
+// don't need to redo the path-to-package mapping the resolver already
+// owns.
+func (r *Repo) PackageOf(path string) string {
+	return PackagePath(r.root, path)
+}
+
+// SymbolID returns the canonical id.ID string for a parser symbol —
+// the same form used in `node_get`, the persisted call-edge index, and
+// the cross-tool registry. Delegates to entity.FromParser so the
+// grammar→canonical→id triple stays in one place; the chunker and
+// search backends call this rather than re-deriving from grammar
+// strings.
+//
+// The returned id round-trips through id.Parse.
+func (r *Repo) SymbolID(path string, sym parser.Symbol) (string, error) {
+	pkg := r.PackageOf(path)
+	if pkg == "" && r.rootPkg != "" {
+		// Files at the repo root use the repo's declared root package.
+		// Matches the convention in store.pkgFromPath / rebuildIndex.
+		pkg = r.rootPkg
+	}
+	e := entity.FromParser(sym, path, pkg)
+	if e.ID() == "" {
+		return "", fmt.Errorf("store: cannot form id for symbol %q in %s", sym.Name, path)
+	}
+	return e.ID(), nil
 }
 
 // SourceMaterializer returns the lossless byte slice for a symbol, or an
