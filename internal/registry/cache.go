@@ -5,17 +5,10 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
-	"strconv"
 
+	"github.com/kellenff/yactt/internal/config"
 	"github.com/kellenff/yactt/internal/store"
 )
-
-// DefaultMaxDiskCacheBytes is the disk cache's default per-repo
-// size cap, kept here so the cmd layer and the index_repository
-// tool can't drift. 512 MiB fits a small/medium repo's parsed
-// file cache comfortably; override via YACTT_DISK_CACHE_MAX_BYTES
-// (set to 0 for unlimited growth).
-const DefaultMaxDiskCacheBytes int64 = 512 * 1024 * 1024
 
 // LoadOptsWithDiskCache returns the store.LoadOption slice that
 // wires a per-repo disk cache rooted at the same
@@ -23,26 +16,17 @@ const DefaultMaxDiskCacheBytes int64 = 512 * 1024 * 1024
 // uses. Returns nil when no cache root can be resolved — callers
 // should then fall back to in-memory-only loading.
 //
-// The cap is read from YACTT_DISK_CACHE_MAX_BYTES (or
-// DefaultMaxDiskCacheBytes when the env is unset).
-//
-// ponytail: the env-var parsing here matches cmd/yactt/main.go's
-// pre-existing behaviour byte-for-byte. The two implementations
-// were duplicates; consolidation landed with this slice.
+// The cap is read from $YACTT_DISK_CACHE_MAX_BYTES via
+// internal/config; see config.DiskCacheMaxBytes for the env-var
+// contract and the default.
 func LoadOptsWithDiskCache(repoRoot string) []store.LoadOption {
 	dir := diskCacheDir(repoRoot)
 	if dir == "" {
 		return nil
 	}
-	maxBytes := DefaultMaxDiskCacheBytes
-	if env := os.Getenv("YACTT_DISK_CACHE_MAX_BYTES"); env != "" {
-		if n, err := strconv.ParseInt(env, 10, 64); err == nil && n >= 0 {
-			maxBytes = n
-		}
-	}
 	return []store.LoadOption{
 		store.WithDiskCache(dir),
-		store.WithDiskCacheMaxBytes(maxBytes),
+		store.WithDiskCacheMaxBytes(config.DiskCacheMaxBytes()),
 	}
 }
 
