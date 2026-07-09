@@ -28,6 +28,8 @@ import (
 	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/tool"
+
+	"github.com/kellenff/yactt/internal/chunker"
 )
 
 const usage = `yactt — federated code intelligence for AI agents
@@ -39,6 +41,8 @@ Usage:
                                           Without: serves the registry (list_projects,
                                           index_repository, index_status, delete_project).
                                           --audit-log=F writes one JSON line per tool call to F.
+  yactt chunk --repo <path> [options]     Emit AST-bounded NDJSON chunks to stdout.
+                                          See "yactt chunk --help" for options.
   yactt version                           Print version info.
   yactt help                              Show this message.
 
@@ -80,6 +84,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+	case "chunk":
+		if err := runChunk(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -111,6 +120,167 @@ func runOverview(args []string) error {
 	}
 	b, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(b))
+	return nil
+}
+
+const chunkUsage = `yactt chunk — emit AST-bounded NDJSON chunks for vector-store ingest.
+
+Usage:
+  yactt chunk --repo <path> [options]
+
+Options:
+  --repo <path>            Path to the repository root (required).
+  --policy <name>          Chunking policy: function (default), class, module.
+  --languages <csv>        Comma-separated language filter (e.g. "go,typescript").
+  --include <glob>         filepath.Match glob; can be repeated.
+  --exclude <glob>         filepath.Match glob; can be repeated. Applied after --include.
+  --with-tests             Include *_test.go and per-language test files.
+  -o, --output <file>      Output file; default stdout.
+
+Output is one Chunk per line in NDJSON. The shape is documented on
+internal/chunker.Chunk. Errors during the load step are reported on
+stderr; per-chunk decode errors are skipped (partial output is
+preferred to no output for ingest pipelines).
+`
+
+// runChunk parses `yactt chunk` flags, loads the repo, and writes
+// NDJSON chunks to the chosen writer. Mirrors runOverview's flag
+// parsing style (positional + "--key=value"/"--key value") so the CLI
+// is internally consistent.
+func runChunk(args []string) error {
+	var (
+		opts       chunker.Options
+		outputPath string
+		repoPath   string
+		repoSet    bool
+	)
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--help" || a == "-h":
+			fmt.Print(chunkUsage)
+			return nil
+		case a == "--repo":
+			if i+1 >= len(args) {
+				return errors.New("chunk: --repo requires a path argument")
+			}
+			repoPath = args[i+1]
+			repoSet = true
+			i++
+		case strings.HasPrefix(a, "--repo="):
+			repoPath = strings.TrimPrefix(a, "--repo=")
+			repoSet = true
+		case a == "--policy":
+			if i+1 >= len(args) {
+				return errors.New("chunk: --policy requires a value (function|class|module)")
+			}
+			opts.Policy = chunker.Policy(args[i+1])
+			i++
+		case strings.HasPrefix(a, "--policy="):
+			opts.Policy = chunker.Policy(strings.TrimPrefix(a, "--policy="))
+		case a == "--languages":
+			if i+1 >= len(args) {
+				return errors.New("chunk: --languages requires a comma-separated value")
+			}
+			for _, l := range strings.Split(args[i+1], ",") {
+				l = strings.TrimSpace(l)
+				if l == "" {
+					continue
+				}
+				opts.Languages = append(opts.Languages, parser.Name(l))
+			}
+			i++
+		case strings.HasPrefix(a, "--languages="):
+			for _, l := range strings.Split(strings.TrimPrefix(a, "--languages="), ",") {
+				l = strings.TrimSpace(l)
+				if l == "" {
+					continue
+				}
+				opts.Languages = append(opts.Languages, parser.Name(l))
+			}
+		case a == "--include":
+			if i+1 >= len(args) {
+				return errors.New("chunk: --include requires a glob")
+			}
+			opts.Include = append(opts.Include, args[i+1])
+			i++
+		case strings.HasPrefix(a, "--include="):
+			opts.Include = append(opts.Include, strings.TrimPrefix(a, "--include="))
+		case a == "--exclude":
+			if i+1 >= len(args) {
+				return errors.New("chunk: --exclude requires a glob")
+			}
+			opts.Exclude = append(opts.Exclude, args[i+1])
+			i++
+		case strings.HasPrefix(a, "--exclude="):
+			opts.Exclude = append(opts.Exclude, strings.TrimPrefix(a, "--exclude="))
+		case a == "--with-tests":
+			opts.WithTests = true
+		case a == "-o" || a == "--output":
+			if i+1 >= len(args) {
+				return errors.New("chunk: --output requires a path")
+			}
+			outputPath = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--output="):
+			outputPath = strings.TrimPrefix(a, "--output=")
+		case strings.HasPrefix(a, "-o="):
+			outputPath = strings.TrimPrefix(a, "-o=")
+		case strings.HasPrefix(a, "-"):
+			return fmt.Errorf("chunk: unknown flag: %s", a)
+		default:
+			// Positional args aren't accepted by chunk; everything
+			// is a flag.
+			return fmt.Errorf("chunk: unexpected positional argument: %s", a)
+		}
+	}
+	if !repoSet {
+		return errors.New("chunk: --repo <path> is required\n\n" + chunkUsage)
+	}
+	if opts.Policy != "" {
+		switch opts.Policy {
+		case chunker.PolicyFunction, chunker.PolicyClass, chunker.PolicyModule:
+		default:
+			return fmt.Errorf("chunk: unknown policy %q (want function|class|module)", opts.Policy)
+		}
+	}
+
+	abs, err := filepath.Abs(repoPath)
+	if err != nil {
+		return err
+	}
+	repo, errs, err := store.Load(abs, loadOptsWithDiskCache(abs)...)
+	if err != nil {
+		return fmt.Errorf("load: %w", err)
+	}
+	defer func() { _ = repo.Close() }()
+	if len(errs) > 0 {
+		fmt.Fprintf(os.Stderr, "load: %d file errors\n", len(errs))
+	}
+
+	out := io.Writer(os.Stdout)
+	if outputPath != "" {
+		f, ferr := os.Create(outputPath)
+		if ferr != nil {
+			return fmt.Errorf("chunk: create output: %w", ferr)
+		}
+		defer func() { _ = f.Close() }()
+		out = f
+	}
+
+	return runChunkPipeline(repo, opts, out, os.Stderr)
+}
+
+// runChunkPipeline is the testable core of runChunk: load the repo,
+// run the chunker, write to stdout, log to stderr. Splitting it out
+// keeps the CLI's flag-parsing code out of the unit-test path while
+// letting tests assert on the exact NDJSON bytes emitted.
+func runChunkPipeline(r *store.Repo, opts chunker.Options, stdout, stderr io.Writer) error {
+	n, err := chunker.Run(context.Background(), r, opts, stdout)
+	if err != nil {
+		return fmt.Errorf("chunk: %w", err)
+	}
+	fmt.Fprintf(stderr, "chunk: %d chunks written\n", n)
 	return nil
 }
 
