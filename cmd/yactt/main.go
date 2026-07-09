@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/kellenff/yactt/internal/tool"
 
 	"github.com/kellenff/yactt/internal/chunker"
+	"github.com/kellenff/yactt/internal/hybrid"
 )
 
 const usage = `yactt — federated code intelligence for AI agents
@@ -43,6 +45,8 @@ Usage:
                                           --audit-log=F writes one JSON line per tool call to F.
   yactt chunk --repo <path> [options]     Emit AST-bounded NDJSON chunks to stdout.
                                           See "yactt chunk --help" for options.
+  yactt hybrid --repo <path> --query Q    Run hybrid retrieval (structural + BM25 + vector,
+                                          merged with RRF). See "yactt hybrid --help".
   yactt version                           Print version info.
   yactt help                              Show this message.
 
@@ -86,6 +90,11 @@ func main() {
 		}
 	case "chunk":
 		if err := runChunk(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+	case "hybrid":
+		if err := runHybrid(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
@@ -281,6 +290,211 @@ func runChunkPipeline(r *store.Repo, opts chunker.Options, stdout, stderr io.Wri
 		return fmt.Errorf("chunk: %w", err)
 	}
 	fmt.Fprintf(stderr, "chunk: %d chunks written\n", n)
+	return nil
+}
+
+const hybridUsage = `yactt hybrid — fan a query out to structural + BM25 + vector channels and merge via RRF.
+
+Usage:
+  yactt hybrid --repo <path> --query "<query>" [options]
+
+Options:
+  --repo <path>            Repository root (required).
+  --query "<string>"       Query string (required). Tokenized on whitespace;
+                           quoted phrases become single terms.
+  --limit <n>              Final top-K; default 10.
+  --channels <csv>         Comma-separated channel list to enable. Default
+                           "structural,bm25,vector". Use to benchmark single-
+                           channel vs hybrid (e.g. "bm25" alone).
+  --with-tests             Include test files in the BM25 + vector corpus.
+  --explain                Print per-channel rankings alongside the merged list,
+                           so you can see WHY hybrid wins (or loses) on a query.
+  -h, --help               Show this message.
+
+Output:
+  Default: JSON object {"results": [...]}. Each hit carries id, rrf-score,
+  channel, and (for bm25/vector) the underlying chunk payload.
+  With --explain: JSON object {"structural":[...],"bm25":[...],"vector":[...],
+  "rrf":[...]}, so the per-channel and merged rankings are visible side by side.
+
+Notes:
+  - The vector channel uses a stdlib bag-of-tokens reference backend. It's
+    good enough to demo the merge and run the benchmark, not competitive
+    with a real embedding model. See docs/hybrid-retrieval.md for the
+    plug-in shape (LangChain, LlamaIndex, pgvector, Chroma, ...).
+  - Per-channel failures degrade gracefully: a failing vector backend
+    doesn't kill the merge; the structural + BM25 hits still surface.
+`
+
+// runHybrid parses `yactt hybrid` flags, loads the repo, and emits
+// the merged retrieval result. Mirrors runChunk's flag-parsing
+// style (positional + "--key value"/"--key=value") so the CLI is
+// internally consistent.
+func runHybrid(args []string) error {
+	var (
+		opts       hybrid.Options
+		repoPath   string
+		repoSet    bool
+		querySet   bool
+		explain    bool
+		limitSet   bool
+		channelsCS string // empty means "all"
+	)
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--help" || a == "-h":
+			fmt.Print(hybridUsage)
+			return nil
+		case a == "--repo":
+			if i+1 >= len(args) {
+				return errors.New("hybrid: --repo requires a path argument")
+			}
+			repoPath = args[i+1]
+			repoSet = true
+			i++
+		case strings.HasPrefix(a, "--repo="):
+			repoPath = strings.TrimPrefix(a, "--repo=")
+			repoSet = true
+		case a == "--query":
+			if i+1 >= len(args) {
+				return errors.New("hybrid: --query requires a string argument")
+			}
+			opts.Query = args[i+1]
+			querySet = true
+			i++
+		case strings.HasPrefix(a, "--query="):
+			opts.Query = strings.TrimPrefix(a, "--query=")
+			querySet = true
+		case a == "--limit":
+			if i+1 >= len(args) {
+				return errors.New("hybrid: --limit requires a value")
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				return fmt.Errorf("hybrid: --limit: %w", err)
+			}
+			opts.Limit = n
+			limitSet = true
+			i++
+		case strings.HasPrefix(a, "--limit="):
+			n, err := strconv.Atoi(strings.TrimPrefix(a, "--limit="))
+			if err != nil {
+				return fmt.Errorf("hybrid: --limit: %w", err)
+			}
+			opts.Limit = n
+			limitSet = true
+		case a == "--channels":
+			if i+1 >= len(args) {
+				return errors.New("hybrid: --channels requires a comma-separated value")
+			}
+			channelsCS = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--channels="):
+			channelsCS = strings.TrimPrefix(a, "--channels=")
+		case a == "--with-tests":
+			opts.ChunkerOpts.WithTests = true
+		case a == "--explain":
+			explain = true
+		case strings.HasPrefix(a, "-"):
+			return fmt.Errorf("hybrid: unknown flag: %s", a)
+		default:
+			return fmt.Errorf("hybrid: unexpected positional argument: %s", a)
+		}
+	}
+	if !repoSet {
+		return errors.New("hybrid: --repo <path> is required\n\n" + hybridUsage)
+	}
+	if !querySet {
+		return errors.New("hybrid: --query <string> is required\n\n" + hybridUsage)
+	}
+	if !limitSet {
+		opts.Limit = 10
+	}
+
+	channels, err := parseChannels(channelsCS)
+	if err != nil {
+		return err
+	}
+	opts.Channels = channels
+	// The CLI ships the stdlib reference vector backend. Production
+	// users embed yactt as a Go library (cmd/yactt-hybrid would be
+	// the dedicated binary form once we have a build-time injection
+	// point — see docs/plans/issue-37-hybrid-retrieval.md). The CLI
+	// stays zero-dep so it works out of the box.
+	if opts.Channels.Vector {
+		opts.Vector = hybrid.NewBagOfTokens()
+	}
+
+	abs, err := filepath.Abs(repoPath)
+	if err != nil {
+		return err
+	}
+	repo, errs, err := store.Load(abs, loadOptsWithDiskCache(abs)...)
+	if err != nil {
+		return fmt.Errorf("load: %w", err)
+	}
+	defer func() { _ = repo.Close() }()
+	if len(errs) > 0 {
+		fmt.Fprintf(os.Stderr, "load: %d file errors\n", len(errs))
+	}
+	opts.Repo = repo
+
+	out := io.Writer(os.Stdout)
+	return runHybridPipeline(repo, opts, explain, out, os.Stderr)
+}
+
+// parseChannels parses the comma-separated channel list. Empty
+// string → all three on (production default). Unknown channels are
+// rejected with a clear error so typos surface immediately.
+func parseChannels(s string) (hybrid.Channels, error) {
+	if s == "" {
+		return hybrid.AllChannels(), nil
+	}
+	c := hybrid.Channels{}
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		switch p {
+		case "":
+			continue
+		case "structural":
+			c.Structural = true
+		case "bm25":
+			c.BM25 = true
+		case "vector":
+			c.Vector = true
+		default:
+			return c, fmt.Errorf("hybrid: unknown channel %q (want structural|bm25|vector)", p)
+		}
+	}
+	if !c.Structural && !c.BM25 && !c.Vector {
+		return c, errors.New("hybrid: --channels must include at least one of structural|bm25|vector")
+	}
+	return c, nil
+}
+
+// runHybridPipeline is the testable core of runHybrid. It runs the
+// orchestrator and writes either the merged JSON or the per-channel
+// explain view. Splitting it out keeps the CLI's flag-parsing out
+// of the unit-test path.
+func runHybridPipeline(r *store.Repo, opts hybrid.Options, explain bool, stdout, stderr io.Writer) error {
+	if explain {
+		out, err := hybrid.Explain(context.Background(), opts)
+		if err != nil {
+			return fmt.Errorf("hybrid: %w", err)
+		}
+		b, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Fprintln(stdout, string(b))
+		fmt.Fprintf(stderr, "hybrid: %d channels, %d merged hits\n", len(out)-1, len(out["rrf"]))
+		return nil
+	}
+	hits, err := hybrid.Run(context.Background(), opts)
+	if err != nil {
+		return fmt.Errorf("hybrid: %w", err)
+	}
+	b, _ := json.MarshalIndent(map[string]any{"results": hits}, "", "  ")
+	fmt.Fprintln(stdout, string(b))
+	fmt.Fprintf(stderr, "hybrid: %d hits\n", len(hits))
 	return nil
 }
 
