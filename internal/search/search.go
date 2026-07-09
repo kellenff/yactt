@@ -50,7 +50,16 @@ func Search(r *store.Repo, q Query) []Result {
 	}
 	results := make([]Result, 0, 32)
 	syms := r.SymbolsByPath()
-	for path, decls := range syms {
+	// Iterate in deterministic file-path order. The map itself
+	// has randomized iteration order; without sorting, equal-score
+	// hits would shuffle across runs even with SliceStable below.
+	paths := make([]string, 0, len(syms))
+	for p := range syms {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		decls := syms[path]
 		if q.Scope != "" && !strings.HasPrefix(path, q.Scope) {
 			continue
 		}
@@ -78,7 +87,7 @@ func Search(r *store.Repo, q Query) []Result {
 			})
 		}
 	}
-	sort.Slice(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
 	if len(results) > q.Limit {
 		results = results[:q.Limit]
 	}
