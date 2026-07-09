@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"net"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -175,16 +176,17 @@ func loadSynthRepo(tb testing.TB) (*store.Repo, chunker.Options) {
 // ----- recall benchmark (Ollama-gated) -----
 
 // TestRecall_ASTBeatsBaseline is the recall@5 + recall@10
-// comparison. Gated behind -short: requires Ollama at
-// localhost:11434. Run with:
+// comparison. Skips when Ollama is unreachable on localhost:11434
+// (CI without Ollama, local dev without `ollama serve`, etc.) and
+// also when `-short` is set. Run with:
 //
 //	go test -count=1 -timeout 600s -run TestRecall_ASTBeatsBaseline ./tests/chunking/
-//
-// Skip when -short is set (matches the LSP-test convention used
-// elsewhere in the repo).
 func TestRecall_ASTBeatsBaseline(t *testing.T) {
 	if testing.Short() {
-		t.Skip("requires Ollama at localhost:11434")
+		t.Skip("requires Ollama at localhost:11434 (-short skips external services)")
+	}
+	if !ollamaReachable() {
+		t.Skip("requires Ollama at localhost:11434 (not running)")
 	}
 	r, opts := loadSynthRepo(t)
 	syms, _ := readFixtureSymbols(t)
@@ -438,6 +440,20 @@ func readFixtureSymbols(tb testing.TB) ([]genfixture.Symbol, error) {
 }
 
 // ----- embedding (Ollama) + cache -----
+
+// ollamaReachable returns true if a TCP connection to localhost:11434
+// succeeds. Used to skip the recall benchmark when Ollama isn't
+// running (CI without Ollama, local dev without `ollama serve`).
+// The dial is short-lived (no payload sent), so a false positive
+// here would still surface as an embedding error.
+func ollamaReachable() bool {
+	conn, err := net.DialTimeout("tcp", "localhost:11434", 500*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
 
 type embedder struct {
 	baseURL string
