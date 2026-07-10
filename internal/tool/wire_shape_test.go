@@ -196,6 +196,88 @@ func TestWireShape_AllTools(t *testing.T) {
 	runWireShapeCases(t, r, cases)
 }
 
+// TestWireShape_QueryGraphSeeds mirrors TestWireShape_DetectChanges: the
+// multi-seed path of query_graph is a separate invocation shape, not just
+// a different args string for the same tool. Each sub-cases registers
+// query_graph on a fresh MCP server and asserts the wire-shape contract
+// holds (structuredContent is a JSON object, the "rows" envelope key is
+// present). Two flavours: plain multi-seed, and multi-seed with weights.
+func TestWireShape_QueryGraphSeeds(t *testing.T) {
+	fx := repofixture.New(t)
+	r, _, err := store.Load(fx.Root)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	runOne := func(t *testing.T, args string) {
+		t.Helper()
+		stdin := &bytes.Buffer{}
+		stdout := &bytes.Buffer{}
+		s := mcp.NewServer("wire-shape-query-graph-seeds", "0.0.0-test", "2024-11-05", stdout,
+			func() (io.Reader, error) { return stdin, nil },
+		)
+		s.RegisterTool(wireShapeDefs["query_graph"](r))
+
+		req := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      "query_graph",
+				"arguments": json.RawMessage(args),
+			},
+		}
+		reqBytes, _ := json.Marshal(req)
+		stdin.Write(reqBytes)
+		stdin.Write([]byte("\n"))
+
+		if err := s.Serve(context.Background()); err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+		sc := assertStructuredContentIsObject(t, stdout)
+		if _, ok := sc["rows"]; !ok {
+			t.Errorf("envelope key \"rows\" missing: structuredContent = %+v", sc)
+		}
+	}
+
+	t.Run("multi_seed_fanout", func(t *testing.T) {
+		// Two seeds reach overlapping but distinct trees. Verify the
+		// response envelope still carries the rows key and that the
+		// multi-seed-specific fields (seeds, weights, seedScores) are
+		// all present in the structuredContent.
+		stdin := &bytes.Buffer{}
+		stdout := &bytes.Buffer{}
+		s := mcp.NewServer("wire-shape-query-graph-seeds", "0.0.0-test", "2024-11-05", stdout,
+			func() (io.Reader, error) { return stdin, nil },
+		)
+		s.RegisterTool(wireShapeDefs["query_graph"](r))
+		req := map[string]any{
+			"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+			"params": map[string]any{
+				"name": "query_graph",
+				"arguments": json.RawMessage(`{"seeds":["meth:auth.Alpha.Ping","fn:auth.Authenticate"],"follow":["callees","callers"],"depth":2,"limit":10}`),
+			},
+		}
+		reqBytes, _ := json.Marshal(req)
+		stdin.Write(reqBytes)
+		stdin.Write([]byte("\n"))
+		if err := s.Serve(context.Background()); err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+		sc := assertStructuredContentIsObject(t, stdout)
+		for _, k := range []string{"rows", "seeds", "weights", "seedScores"} {
+			if _, ok := sc[k]; !ok {
+				t.Errorf("multi-seed envelope key %q missing: structuredContent = %+v", k, sc)
+			}
+		}
+	})
+
+	t.Run("multi_seed_with_weights", func(t *testing.T) {
+		runOne(t, `{"seeds":["fn:auth.Login","fn:auth.Authenticate"],"weights":[0.8,0.2],"follow":["callees"],"depth":2,"limit":5}`)
+	})
+}
+
 // TestWireShape_EmptyResults guards the contract for the previously-
 // broken edge case: when a list-returning handler produces zero matches,
 // it returns an empty slice. Wrapped in an envelope, that's still a

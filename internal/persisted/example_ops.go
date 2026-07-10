@@ -6,10 +6,12 @@ package persisted
 // with static args — so the persisted_query MVP stays audit-free.
 // Step-chaining and parameter forwarding are deliberate follow-ups.
 //
-//	"onboarding"   tree_overview depth=2 — repo at package level
-//	"repo-map"     tree_overview depth=1 — top-level directories only
-//	"architecture" get_architecture    — languages, packages, hotspots,
-//	                                    dead-code candidates, cycles
+//	"onboarding"    tree_overview depth=2 — repo at package level
+//	"repo-map"      tree_overview depth=1 — top-level directories only
+//	"architecture"  get_architecture    — languages, packages, hotspots,
+//	                                     dead-code candidates, cycles
+//	"graph_rag_demo" query_graph seeds=[main] — GraphRAG-shaped fanout
+//	                                     from a common Go entry point
 func RegisterExampleOps(r *Registry) {
 	r.MustRegister(Op{
 		ID:          "onboarding",
@@ -36,6 +38,17 @@ func RegisterExampleOps(r *Registry) {
 		Args: map[string]any{
 			"top":            10,
 			"include_cycles": true,
+		},
+	})
+	r.MustRegister(Op{
+		ID:          "graph_rag_demo",
+		Description: "GraphRAG-shaped fanout: query_graph with a multi-seed set, follow=callers+callees, depth=2. Demonstrates the new seeds parameter from issue #35. Surfaces an error if fn:main.main doesn't resolve in the loaded repo.",
+		Tool:        "query_graph",
+		Args: map[string]any{
+			"seeds":  []string{"fn:main.main"},
+			"follow": []string{"callers", "callees"},
+			"depth":  2,
+			"limit":  50,
 		},
 	})
 }

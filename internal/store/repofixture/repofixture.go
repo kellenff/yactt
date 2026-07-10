@@ -34,8 +34,9 @@ type Fixture struct {
 }
 
 // New constructs the fixture under t.TempDir(). Files are written 0o644.
-// The fixture is fully self-contained; cleanup is automatic.
-func New(t *testing.T) *Fixture {
+// The fixture is fully self-contained; cleanup is automatic. Accepts
+// testing.TB so benchmarks (testing.B) can reuse the same fixture.
+func New(t testing.TB) *Fixture {
 	t.Helper()
 	dir := t.TempDir()
 
