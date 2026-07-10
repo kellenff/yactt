@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -157,7 +158,8 @@ func TestQueryGraph_DefaultsAndValidation(t *testing.T) {
 		args    string
 		wantErr string
 	}{
-		{"missing from", `{"follow":["callees"]}`, "from is required"},
+		{"missing from and seeds", `{"follow":["callees"]}`, "provide one of from or seeds"},
+		{"both from and seeds", `{"from":"meth:auth.Alpha.Ping","seeds":["fn:auth.Login"],"follow":["callees"]}`, "mutually exclusive"},
 		{"empty follow", `{"from":"meth:auth.Alpha.Ping","follow":[]}`, "follow must be a non-empty list"},
 		{"unknown follow", `{"from":"meth:auth.Alpha.Ping","follow":["wat"]}`, "unknown follow kind"},
 		{"depth too high", `{"from":"meth:auth.Alpha.Ping","follow":["callees"],"depth":99}`, "depth 99 out of range"},
@@ -166,6 +168,8 @@ func TestQueryGraph_DefaultsAndValidation(t *testing.T) {
 		{"unknown exclude", `{"from":"meth:auth.Alpha.Ping","follow":["callees"],"exclude":"prod"}`, "unknown exclude value"},
 		{"unresolved from", `{"from":"fn:auth.NoSuch","follow":["callees"]}`, "cannot locate"},
 		{"bad from id", `{"from":"nope:nope","follow":["callees"]}`, ""},
+		{"weights align mismatch", `{"seeds":["fn:auth.Login"],"weights":[0.5,0.5],"follow":["callers"]}`, "weights must align"},
+		{"bad seed id", `{"seeds":["fn:auth.NoSuchFn"],"follow":["callers"]}`, "cannot locate seeds"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -201,6 +205,22 @@ func TestQueryGraph_DefaultsAndValidation(t *testing.T) {
 			t.Fatalf("limit:0 should default to 100, got error: %v", err)
 		}
 	})
+
+	t.Run("seeds list capped at 50", func(t *testing.T) {
+		// Build a JSON with 51 seed entries — past the cap.
+		seedJSON := make([]string, 51)
+		for i := range seedJSON {
+			seedJSON[i] = fmt.Sprintf(`"fn:auth.Fn%d"`, i)
+		}
+		args := `{"seeds":[` + strings.Join(seedJSON, ",") + `],"follow":["callers"]}`
+		_, err := QueryGraph(r)(context.Background(), json.RawMessage(args))
+		if err == nil {
+			t.Fatalf("expected cap error, got nil")
+		}
+		if !strings.Contains(err.Error(), "capped at 50") {
+			t.Fatalf("error %q does not contain %q", err.Error(), "capped at 50")
+		}
+	})
 }
 
 // TestQueryGraph_Provenance pins that the tool stamps Tool="yactt" — the
@@ -232,4 +252,233 @@ func targetIDs(rows []QueryGraphRow) []string {
 		out[i] = row.TargetID
 	}
 	return out
+}
+
+// TestQueryGraph_MultiSeed_Fanout pins the GraphRAG contract for two seeds
+// that reach DISTINCT trees: each seed's neighbourhood is independent, so
+// the union of rows reflects both. The fixture's Alpha.Ping and Beta.Ping
+// call Charge and Refund respectively (different callees at depth 1) —
+// with multi-seed and follow=callees, we expect both Charge and Refund
+// in the output at depth 1.
+func TestQueryGraph_MultiSeed_Fanout(t *testing.T) {
+	r := loadQueryGraphRepo(t)
+
+	qg := runQueryGraph(t, r, `{
+		"seeds": ["meth:auth.Alpha.Ping", "meth:auth.Beta.Ping"],
+		"follow": ["callees"],
+		"depth": 1,
+		"limit": 50
+	}`)
+
+	if qg.From != "" {
+		t.Errorf("From = %q, want \"\" for multi-seed path", qg.From)
+	}
+	if len(qg.Seeds) != 2 {
+		t.Errorf("Seeds = %v, want 2 entries", qg.Seeds)
+	}
+	if len(qg.Weights) != 2 {
+		t.Errorf("Weights = %v, want 2 entries (uniform 1.0)", qg.Weights)
+	}
+	for _, w := range qg.Weights {
+		if w != 1.0 {
+			t.Errorf("Weights = %v, want uniform 1.0", qg.Weights)
+		}
+	}
+
+	depth1 := map[string]bool{}
+	for _, row := range qg.Rows {
+		if row.Depth != 1 {
+			t.Errorf("row %q has depth %d, want 1", row.TargetID, row.Depth)
+		}
+		depth1[row.TargetID] = true
+	}
+	if !depth1["fn:payments.Charge"] {
+		t.Errorf("depth 1 missing fn:payments.Charge; got %v", targetIDs(qg.Rows))
+	}
+	if !depth1["fn:payments.Refund"] {
+		t.Errorf("depth 1 missing fn:payments.Refund; got %v", targetIDs(qg.Rows))
+	}
+
+	// Per-seed max Score: each seed produced one row at score 0.5.
+	for seedID, score := range qg.SeedScores {
+		if score != 0.5 {
+			t.Errorf("seedScores[%q] = %f, want 0.5", seedID, score)
+		}
+	}
+	if len(qg.SeedScores) != 2 {
+		t.Errorf("SeedScores has %d entries, want 2", len(qg.SeedScores))
+	}
+}
+
+// TestQueryGraph_MultiSeed_Dedup pins the dedup contract for the
+// "two seeds reach the same node" case. Authenticate, User.Refresh, and
+// Alpha.Ping ALL call Charge (depth 1). The output must contain Charge
+// ONCE — not three times — with the highest-scoring contribution.
+func TestQueryGraph_MultiSeed_Dedup(t *testing.T) {
+	r := loadQueryGraphRepo(t)
+
+	qg := runQueryGraph(t, r, `{
+		"seeds": ["fn:auth.Authenticate", "meth:auth.User.Refresh", "meth:auth.Alpha.Ping"],
+		"follow": ["callees"],
+		"depth": 1,
+		"limit": 50
+	}`)
+
+	// Charge should appear exactly once.
+	count := 0
+	for _, row := range qg.Rows {
+		if row.TargetID == "fn:payments.Charge" {
+			count++
+			if row.Depth != 1 {
+				t.Errorf("Charge row depth = %d, want 1", row.Depth)
+			}
+			if row.Score != 0.5 {
+				t.Errorf("Charge row score = %f, want 0.5 (1/(1+1) with uniform weights)", row.Score)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("Charge appeared %d times, want 1 (multi-seed dedup contract)", count)
+	}
+
+	// All three seeds contributed → all three in SeedScores at score 0.5.
+	for _, seedID := range []string{
+		"fn:auth.Authenticate",
+		"meth:auth.User.Refresh",
+		"meth:auth.Alpha.Ping",
+	} {
+		if score, ok := qg.SeedScores[seedID]; !ok {
+			t.Errorf("SeedScores missing seed %q", seedID)
+		} else if score != 0.5 {
+			t.Errorf("SeedScores[%q] = %f, want 0.5", seedID, score)
+		}
+	}
+}
+
+// TestQueryGraph_ScoreFormula_Weighted pins that Score = weight * (1/(1+depth))
+// when weights are non-uniform. Two seeds at depth 1, weights [0.8, 0.2].
+// Both call Charge → dedup to one row with max(0.8 * 0.5, 0.2 * 0.5) =
+// max(0.4, 0.1) = 0.4. SeedScores tracks each seed's contribution
+// independently: 0.4 and 0.1 respectively.
+func TestQueryGraph_ScoreFormula_Weighted(t *testing.T) {
+	r := loadQueryGraphRepo(t)
+
+	qg := runQueryGraph(t, r, `{
+		"seeds": ["fn:auth.Authenticate", "meth:auth.Alpha.Ping"],
+		"weights": [0.8, 0.2],
+		"follow": ["callees"],
+		"depth": 1,
+		"limit": 50
+	}`)
+
+	var chargeRow *QueryGraphRow
+	for i := range qg.Rows {
+		if qg.Rows[i].TargetID == "fn:payments.Charge" {
+			chargeRow = &qg.Rows[i]
+			break
+		}
+	}
+	if chargeRow == nil {
+		t.Fatalf("Charge row not found; got %v", targetIDs(qg.Rows))
+	}
+	want := 0.4 // max(0.8*0.5, 0.2*0.5)
+	if chargeRow.Score != want {
+		t.Errorf("Charge row Score = %f, want %f (max of weighted contributions)", chargeRow.Score, want)
+	}
+
+	// Per-seed scores are the contributions regardless of which seed won
+	// the row. Authenticate's contribution is 0.8 * 0.5 = 0.4; Alpha.Ping
+	// contributes 0.2 * 0.5 = 0.1.
+	wantAuth, wantAlpha := 0.4, 0.1
+	if got := qg.SeedScores["fn:auth.Authenticate"]; got != wantAuth {
+		t.Errorf("SeedScores[Authenticate] = %f, want %f", got, wantAuth)
+	}
+	if got := qg.SeedScores["meth:auth.Alpha.Ping"]; got != wantAlpha {
+		t.Errorf("SeedScores[Alpha.Ping] = %f, want %f", got, wantAlpha)
+	}
+}
+
+// TestQueryGraph_CapsFire_Limit pins that hitting the limit truncates
+// with Truncated=true. The fixture's call graph is small, but we can
+// force truncation by setting limit=1 with multiple seeds that fan out.
+func TestQueryGraph_CapsFire_Limit(t *testing.T) {
+	r := loadQueryGraphRepo(t)
+
+	qg := runQueryGraph(t, r, `{
+		"seeds": ["meth:auth.Alpha.Ping", "meth:auth.Beta.Ping", "fn:auth.Authenticate"],
+		"follow": ["callees"],
+		"depth": 5,
+		"limit": 1
+	}`)
+
+	if !qg.Truncated {
+		t.Errorf("Truncated = false, want true (limit=1 with multi-seed fanout)")
+	}
+	if len(qg.Rows) > 1 {
+		t.Errorf("len(Rows) = %d, want <= 1", len(qg.Rows))
+	}
+}
+
+// TestQueryGraph_DedupSeedsInput pins that the seed list is deduped at
+// the boundary — re-listing the same seed id does not produce duplicate
+// frontier entries. Using a single seed duplicated 3x should behave
+// identically to a single-seed list.
+func TestQueryGraph_DedupSeedsInput(t *testing.T) {
+	r := loadQueryGraphRepo(t)
+
+	// Single seed, depth 2, follow callers.
+	qgSingle := runQueryGraph(t, r, `{
+		"from": "fn:payments.Charge",
+		"follow": ["callers"],
+		"depth": 1,
+		"limit": 50
+	}`)
+
+	// Same seed listed 3 times — should produce the same row set (with
+	// SeedScores reflecting only the deduplicated seed).
+	qgDups := runQueryGraph(t, r, `{
+		"seeds": ["fn:payments.Charge", "fn:payments.Charge", "fn:payments.Charge"],
+		"follow": ["callers"],
+		"depth": 1,
+		"limit": 50
+	}`)
+
+	if len(qgSingle.Rows) != len(qgDups.Rows) {
+		t.Errorf("deduped seeds: single row count = %d, dups row count = %d", len(qgSingle.Rows), len(qgDups.Rows))
+	}
+	if len(qgDups.Seeds) != 1 {
+		t.Errorf("deduped seeds: Seeds slice length = %d, want 1", len(qgDups.Seeds))
+	}
+	if len(qgDups.Weights) != 1 {
+		t.Errorf("deduped seeds: Weights slice length = %d, want 1", len(qgDups.Weights))
+	}
+}
+
+// TestQueryGraph_SingleSeedPreservesFromField pins that the single-seed
+// path (from=...) still echoes From in the response and omits Seeds/
+// Weights/SeedScores. The multi-seed path inverts this — Seeds is set,
+// From is empty. The contract: exactly one of (From) or (Seeds) carries
+// the seed id, never both.
+func TestQueryGraph_SingleSeedPreservesFromField(t *testing.T) {
+	r := loadQueryGraphRepo(t)
+
+	qg := runQueryGraph(t, r, `{
+		"from": "fn:auth.Login",
+		"follow": ["callees"],
+		"depth": 1,
+		"limit": 10
+	}`)
+
+	if qg.From != "fn:auth.Login" {
+		t.Errorf("From = %q, want \"fn:auth.Login\"", qg.From)
+	}
+	if qg.Seeds != nil {
+		t.Errorf("Seeds = %v, want nil (single-seed path omits Seeds)", qg.Seeds)
+	}
+	if qg.Weights != nil {
+		t.Errorf("Weights = %v, want nil (single-seed path omits Weights)", qg.Weights)
+	}
+	if qg.SeedScores != nil {
+		t.Errorf("SeedScores = %v, want nil (single-seed path omits SeedScores)", qg.SeedScores)
+	}
 }

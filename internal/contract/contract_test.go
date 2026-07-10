@@ -45,6 +45,7 @@ func everySchema(t *testing.T) map[string]json.RawMessage {
 		"get_symbols_overview":     tool.GetSymbolsOverviewSchema,
 		"find_code":                tool.FindCodeSchema,
 		"find_referencing_symbols": tool.FindReferencingSymbolsSchema,
+		"query_graph":              tool.QueryGraphSchema,
 		"persisted_query":          tool.PersistedQuerySchema,
 		"list_projects":            tool.ListProjectsSchema,
 		"index_repository":         tool.IndexRepositorySchema,
@@ -74,6 +75,7 @@ func everyOutputSchema(t *testing.T) map[string]json.RawMessage {
 		"get_symbols_overview":     tool.GetSymbolsOverviewOutputSchema,
 		"find_code":                tool.FindCodeOutputSchema,
 		"find_referencing_symbols": tool.FindReferencingSymbolsOutputSchema,
+		"query_graph":              tool.QueryGraphOutputSchema,
 		"persisted_query":          tool.PersistedQueryOutputSchema,
 		"list_projects":            tool.ListProjectsOutputSchema,
 		"index_repository":         tool.IndexRepositoryOutputSchema,
@@ -280,6 +282,20 @@ func TestFindCodeBoundary(t *testing.T) {
 func TestFindReferencingSymbolsBoundary(t *testing.T) {
 	perToolArgBoundary(t, "find_referencing_symbols", tool.FindReferencingSymbols(nil), []boundaryTest{
 		{name: "missing_symbol", args: `{}`, want: "symbol is required"},
+	})
+}
+
+// TestQueryGraphBoundary pins the validation contract at the handler
+// boundary (nil repo). The handler must reject malformed args BEFORE
+// touching the repo. Multi-seed validation (mutually-exclusive from,
+// max-50 seeds, weights 1:1) is exercised here too — the goal is to
+// catch a future regression where validation drifts behind locateSeeds.
+func TestQueryGraphBoundary(t *testing.T) {
+	perToolArgBoundary(t, "query_graph", tool.QueryGraph(nil), []boundaryTest{
+		{name: "missing_from_and_seeds", args: `{"follow":["callees"]}`, want: "provide one of from or seeds"},
+		{name: "both_from_and_seeds", args: `{"from":"fn:a.Foo","seeds":["fn:a.Bar"],"follow":["callees"]}`, want: "mutually exclusive"},
+		{name: "empty_follow", args: `{"from":"fn:a.Foo","follow":[]}`, want: "follow must be a non-empty list"},
+		{name: "weights_mismatch", args: `{"seeds":["fn:a.Foo"],"weights":[0.5,0.5],"follow":["callers"]}`, want: "weights must align"},
 	})
 }
 

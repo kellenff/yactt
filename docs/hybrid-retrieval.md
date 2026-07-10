@@ -247,3 +247,132 @@ For deeper multi-hop retrieval (the "what depends on X transitively?"
 questions), yactt also exposes the call graph directly via the existing
 `query_graph` MCP tool — see issue #35. For context assembly (packing
 the top-K into a token-budgeted prompt), see issue #36.
+
+## GraphRAG without the LLM step
+
+yactt's structural channel isn't just a single-trip BM25/vector proxy.
+Because yactt already holds the property graph for the parsed repo
+(functions, methods, classes, files, packages + call edges), it can play
+the role that Microsoft GraphRAG's "graph LLM" step plays for prose:
+**expand a seed set into a subgraph and rank the results for packing.**
+
+For code, the graph is *given* by the AST — no entity-extraction LLM
+step is needed. The yactt-native pipeline:
+
+```
+vector / BM25 retriever ──► top-K chunk ids ──► seeds (canonical yactt ids)
+                                                       │
+                                                       ▼
+                                     query_graph (multi-seed, follow=*)
+                                                       │
+                                                       ▼
+                                    ranked subgraph (rows with score)
+                                                       │
+                                                       ▼
+                                         packer (issue #36)
+                                                       │
+                                                       ▼
+                                                      LLM
+```
+
+The graph-channel work happens entirely in-process against the in-memory
+symbol index, so the expansion itself is fast — measured on the 100-file
+`tests/chunking/genfixture` fixture, a 5-hop transitive-caller traversal
+across the seeded chain returns ≤1000 ranked rows in low single-digit ms
+wallclock (`go test ./internal/tool/... -bench BenchmarkQueryGraph`). The
+500 ms budget in issue #35's success criterion is the BFS + scanner
+ceiling for a 100K-LOC monorepo; the in-memory dispatch has ~100×
+headroom on the smaller fixture.
+
+### Worked example (CLI)
+
+```bash
+# 1. Vector retriever (any embedding-backed CLI). For the demo, we
+#    use yactt's stdlib-only BagOfTokens via the hybrid orchestrator:
+yactt hybrid --repo ./tests/fixtures/sample-go \
+  --query "who calls auth Login" --limit 3 --explain > /tmp/hits.json
+
+# 2. Extract seed node ids from the structural channel hits — these
+#    are already stable fn:/meth: addresses.
+SEEDS=$(jq -r '[.structural[].id] | join(",")' /tmp/hits.json)
+
+# 3. Hand the seed set to query_graph. Pass weights when the vector
+#    channel has similarity scores; otherwise query_graph defaults
+#    to uniform 1.0 weights.
+yactt --mcp-call query_graph --repo ./tests/fixtures/sample-go -- '
+{
+  "seeds":  ($s | split(",")),
+  "follow": ["callers","callees","tests"],
+  "depth":  3,
+  "limit":  100
+}'
+
+# 4. Pipe the returned ranked rows into the packer (issue #36; not
+#    shipped in this slice). When the packer ships:
+# yactt pack --rows <query_graph.json> --question "..."
+```
+
+Inside yactt the pipeline is two method calls:
+
+```go
+// 1. Hybrid retrieval produces canonical yactt ids (chunker.Chunk.ID
+//    == graph address).
+hits, _ := hybrid.Run(ctx, hybrid.Options{
+    Repo:     repo,
+    Query:    "who calls auth Login",
+    Limit:    5,
+    Channels: hybrid.AllChannels(),
+    Vector:   myOpenAIBackend,
+})
+
+// 2. Feed hits as seeds to query_graph. Pass RRF scores as weights
+//    to bias the expansion toward what the retriever scored highly.
+seeds   := make([]string, len(hits))
+weights := make([]float64, len(hits))
+for i, h := range hits {
+    seeds[i]   = h.ID
+    weights[i] = h.Score // clamp to [0, 1]
+}
+
+qgArgs, _ := json.Marshal(map[string]any{
+    "seeds":   seeds,
+    "weights": weights,
+    "follow":  []string{"callers", "callees", "tests"},
+    "depth":   3,
+    "limit":   100,
+})
+out, _ := tool.QueryGraph(repo)(ctx, qgArgs)
+graph  := out.(*tool.QueryGraphResult)
+
+// graph.Rows is ranked: higher `score` = closer to a high-weight seed.
+// graph.SeedScores maps each contributing seed to its max score —
+// useful for explain / debugging.
+// graph.Rows[i].TargetID is the canonical yactt id; feed it to a
+// node_get / get_code_snippet call to materialise the body.
+```
+
+### yactt ↔ Microsoft GraphRAG ↔ AST
+
+| Microsoft GraphRAG                  | yactt                                |
+|-------------------------------------|--------------------------------------|
+| text chunks → LLM entity extraction | AST → fn/meth/class file addresses   |
+| LLM-derived entity graph            | persisted call-edge index            |
+| community detection + summarisation | depth-bounded BFS + score ranking    |
+| chunk → entity → graph → community  | chunk → seed → graph → pack → LLM    |
+
+The LLM extraction step is unnecessary when the AST is the source of
+truth: the symbol index already gives you named nodes with stable ids
+and call-graph edges.
+
+### Cross-links
+
+- Issue #36 (packer) — TODO: this pipeline ends at the LLM step; the
+  intermediate `rows → packed-prompt` transform is owned by the packer.
+  Once #36 lands, the wired example above shrinks from two CLI invocations
+  to one.
+- `internal/tool/querygraph.go` — the engine itself. Multi-seed seeds,
+  weights, and per-row score are all defined here. Pin `MaxSeeds=50`,
+  `MaxVisited=5000`, `MaxRuntime=5s` so the cost caps are documented
+  alongside the call.
+- `internal/hybrid/hybrid.go` — for the upstream seed source. Hits already
+  carry stable yactt ids.
