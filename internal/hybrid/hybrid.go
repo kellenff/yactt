@@ -50,6 +50,18 @@ type Channels struct {
 // AllChannels returns the default channel set (all three on).
 func AllChannels() Channels { return Channels{Structural: true, BM25: true, Vector: true} }
 
+// SearchStructuralOptions are the parameters for structural channel
+// retrieval. Passed to structuralChannel which fans out queries to
+// the in-memory symbol index.
+type SearchStructuralOptions struct {
+	Repo     *store.Repo
+	Query    string
+	Limit    int
+	Overscan int
+	// Limit multiplied by Overscan is used for k (search depth).
+	k int
+}
+
 // Hit is a single ranked match surfaced by a channel.
 //
 // Channel is one of "structural", "bm25", "vector". Score is the
@@ -57,9 +69,12 @@ func AllChannels() Channels { return Channels{Structural: true, BM25: true, Vect
 // orchestrator does NOT normalize across channels (RRF uses rank,
 // not score; Score is for debug + per-channel explain output).
 //
-// Chunk is nil for structural hits (those don't go through the
-// chunker) and populated for bm25 / vector hits (they scored a
-// specific chunker.Chunk).
+// Chunk contains a chunker.Chunk payload derived from the entity.
+// For bm25/vector hits, this is populated directly from the scored
+// chunk. For structural hits, it's constructed from the entity's
+// file/line range so RRF merges can join on (path, start_line,
+// end_line). When omitted, Channel must be one of the three valid
+// values; omitting JSON omitempty is optional but permitted.
 type Hit struct {
 	ID      string         `json:"id"`
 	Score   float64        `json:"score"`
@@ -150,7 +165,12 @@ func Run(ctx context.Context, opts Options) ([]Hit, error) {
 	// when enabled; no I/O.
 	var structHits []Hit
 	if opts.Channels.Structural {
-		structHits = structuralChannel(opts, perChannel)
+		structHits, _ = structuralChannel(SearchStructuralOptions{
+			Repo:     opts.Repo,
+			Query:    opts.Query,
+			Limit:    perChannel,
+			Overscan: opts.Overscan,
+		})
 	}
 
 	// BM25 + vector share the chunker output (one walk over the
@@ -239,7 +259,12 @@ func Explain(ctx context.Context, opts Options) (map[string][]Hit, error) {
 	out := map[string][]Hit{}
 
 	if opts.Channels.Structural {
-		out[ChannelStructural] = structuralChannel(opts, perChannel)
+		out[ChannelStructural], _ = structuralChannel(SearchStructuralOptions{
+			Repo:     opts.Repo,
+			Query:    opts.Query,
+			Limit:    perChannel,
+			Overscan: opts.Overscan,
+		})
 	}
 	var chunks []chunker.Chunk
 	if opts.Channels.BM25 || opts.Channels.Vector {

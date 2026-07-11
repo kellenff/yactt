@@ -383,3 +383,58 @@ func ids(h []Hit) []string {
 	sort.Strings(out)
 	return out
 }
+
+// TestStructuralChannel_WithChunk verifies that structural hits are
+// attached with chunk payloads matching the BM25/vector channel shape.
+// This addresses issue #50: structural channel must provide join keys
+// for downstream RRF merges.
+func TestStructuralChannel_WithChunk(t *testing.T) {
+	fix := repofixture.New(t)
+	repo, _ := loadRepo(t, fix.Root)
+	defer func() { _ = repo.Close() }()
+
+	got, err := structuralChannel(SearchStructuralOptions{
+		Repo:    repo,
+		Query:   "Login",
+		Limit:   10,
+		Overscan: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Structural channel must return hits with non-nil chunks
+	for i, h := range got {
+		if h.Channel == ChannelStructural && h.Chunk == nil {
+			t.Errorf("hit %d: structural hit missing chunk payload", i)
+			continue
+		}
+		if h.Chunk != nil {
+			// Verify chunk has expected fields from structural entity
+			if h.Chunk.ID == "" {
+				t.Errorf("hit %d: chunk.ID is empty for structural hit", i)
+			}
+			if h.Chunk.File == "" {
+				t.Errorf("hit %d: chunk.file is empty for structural hit", i)
+			}
+			if h.Chunk.StartLine <= 0 {
+				t.Errorf("hit %d: chunk.start_line must be positive, got %d", i, h.Chunk.StartLine)
+			}
+			if h.Chunk.EndLine <= 0 {
+				t.Errorf("hit %d: chunk.end_line must be positive, got %d", i, h.Chunk.EndLine)
+			}
+		}
+	}
+
+	// All returned hits should have chunks (structural channel with chunker attached)
+	hasStructural := false
+	for _, h := range got {
+		if h.Channel == ChannelStructural && h.Chunk != nil {
+			hasStructural = true
+			break
+		}
+	}
+	if !hasStructural {
+		t.Error("structural channel returned hits without chunks")
+	}
+}
