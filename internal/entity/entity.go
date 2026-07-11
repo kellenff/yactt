@@ -252,3 +252,19 @@ func primaryGrammarFor(k domain.NodeKind) string {
 	}
 	return ""
 }
+
+// QualifiedName returns the qualified name for an entity as it would
+// appear in source (e.g., "Auth.Login" for a method). For functions,
+// modules, and classes this is just the entity name.
+func QualifiedName(e Entity) string {
+	if e.idKind == id.KindMethod {
+		return e.receiverName + "." + e.name
+	}
+	return e.name
+}
+
+// StartRow returns the 0-based starting row (line) for this entity's declaration.
+func (e Entity) StartRow() int { return e.startRow }
+
+// EndRow returns the exclusive end row for this entity's declaration.
+func (e Entity) EndRow() int { return e.endRow }
