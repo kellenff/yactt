@@ -53,6 +53,12 @@ func TestParseRef_Rejects(t *testing.T) {
 		{"file://relative", project.ErrNotAbsolute},
 		{"file:///foo/%2e%2e/bar", project.ErrNotAbsolute},
 		{"file:///foo/../bar", project.ErrNotAbsolute},
+		// Defence-in-depth: double-encoded traversal slips past
+		// url.Parse (which decodes one level to "/abs/%2e%2e/bar")
+		// but url.PathUnescape catches it. Reject so a downstream
+		// unescape step can't sneak it through.
+		{"file:///foo/%252e%252e/bar", project.ErrNotAbsolute},
+		{"file:///foo/%252E%252E/bar", project.ErrNotAbsolute},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {

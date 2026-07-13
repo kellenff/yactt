@@ -121,12 +121,26 @@ func TreeOverview(reg *registry.Registry) func(ctx context.Context, args json.Ra
 			return nil, fmt.Errorf("invalid tree_overview args: %w", err)
 		}
 		// Deprecated alias: if Project is empty and Repo is set,
-		// wrap Repo as a file:// URI and emit a stderr notice.
+		// pass Repo through as the project URI. Accept three shapes:
+		//
+		//   1. bare absolute path ("/abs/path")  -> wrap as file://
+		//   2. file:// URI already ("file:///abs/path")  -> pass through
+		//   3. anything else                       -> let ParseRef reject
+		//
+		// The wrap-vs-passthrough distinction is the one the PR-54
+		// review caught: prepending "file://" to an already-URI-
+		// shaped value produced "file://file:///abs/path", which
+		// url.Parse then refuses. Treat the value as a URI first
+		// and only fall back to wrapping when it isn't one.
 		// Project wins when both are present.
 		if a.Project == "" && a.Repo != "" {
 			fmt.Fprintf(os.Stderr,
-				"deprecation: tree_overview's 'repo' field is renamed to 'project' (file:// URI); will be removed in the next release\n")
-			a.Project = "file://" + a.Repo
+				"deprecation: tree_overview's 'repo' field is renamed to 'project' (file:// URI); will be removed in v0.2.0\n")
+			if strings.HasPrefix(a.Repo, "file://") {
+				a.Project = a.Repo
+			} else {
+				a.Project = "file://" + a.Repo
+			}
 		}
 		repo, err := project.Resolve(reg, a.Project)
 		if err != nil {

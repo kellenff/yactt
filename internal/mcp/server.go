@@ -11,6 +11,15 @@ import (
 	"time"
 )
 
+// ProtocolVersion is the MCP protocol version we advertise on
+// `initialize`. Bump when MCP bumps its spec; clients must match
+// or attempt a negotiation. Today this is the published
+// 2024-11-05 version (the one in the MCP changelog when yactt
+// adopted the spec). Lift into build-time config (e.g.
+// -ldflags="-X github.com/kellenff/yactt/internal/mcp.ProtocolVersion=...")
+// if the spec starts drifting faster than yactt releases.
+const ProtocolVersion = "2024-11-05"
+
 // Handler is the per-tool function. It receives a raw argument payload and
 // returns either a structured result (returned under `structuredContent`) or
 // an error to surface as a tool-level error.
@@ -79,8 +88,9 @@ type auditPathExtractor func(json.RawMessage) []string
 // NewServer constructs an MCP server bound to stdout for writes.
 //
 // protocolVersion is the MCP protocol version we advertise on `initialize`.
-// For MVP we hard-code the published 2024-11-05 version; clients must match
-// it or attempt a negotiation.
+// Pass mcp.ProtocolVersion for the version yactt was built against; pass
+// any other value to negotiate down to a different version (clients
+// still have to match or attempt the negotiation).
 func NewServer(name, version, protocolVersion string, stdout io.Writer, stdin func() (io.Reader, error)) *Server {
 	return &Server{
 		name:            name,

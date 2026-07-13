@@ -28,12 +28,23 @@ type IndexRepositoryArgs struct {
 }
 
 // IndexRepositoryResult is the structuredContent envelope for
-// index_repository. `entry` is the freshly-written registry row;
-// `warnings` is the per-file error slice store.Load surfaces,
-// kept here so the agent can spot a partially-loaded repo.
+// index_repository. Three independent fields:
+//
+//   - `entry` is the registry row (just-written on a cold call,
+//     returned-as-is on a warm-cache short-circuit).
+//   - `warnings` is the per-file error slice store.Load surfaces
+//     on a cold call; 0 on a short-circuit (we did no walking).
+//   - `reloaded` reports whether the handler actually walked the
+//     source tree this call. True on cold cache, source-stale-
+//     since-IndexedAt, or registry-row-missing; false on a
+//     fresh-cache short-circuit. Agents that call index_repository
+//     defensively before every code-intel tool use this to
+//     distinguish "you just paid the index cost" from "you were
+//     already up to date — go ahead".
 type IndexRepositoryResult struct {
 	Entry    registry.Entry `json:"entry"`
 	Warnings int            `json:"warnings"`
+	Reloaded bool           `json:"reloaded"`
 }
 
 // IndexRepositorySchema is the JSON Schema for index_repository.
@@ -56,10 +67,11 @@ var IndexRepositorySchema = json.RawMessage(`{
 // of index_repository.
 var IndexRepositoryOutputSchema = json.RawMessage(`{
   "type": "object",
-  "required": ["entry", "warnings"],
+  "required": ["entry", "warnings", "reloaded"],
   "properties": {
     "entry":    { "type": "object" },
-    "warnings": { "type": "integer", "minimum": 0 }
+    "warnings": { "type": "integer", "minimum": 0 },
+    "reloaded": { "type": "boolean", "description": "True when the handler walked the source tree this call; false when the registry entry was already fresh and the call short-circuited." }
   },
   "additionalProperties": false
 }`)
@@ -69,6 +81,20 @@ var IndexRepositoryOutputSchema = json.RawMessage(`{
 // and returns the persisted row. On the FIRST successful index
 // per process it invokes emitStartup (audit line) and warnTrust
 // (install TOFU) — both nil-safe and memoised.
+//
+// The handler short-circuits on a warm cache (entry exists with
+// the same Mode AND disk cache is fresh AND no source mtime is
+// newer than IndexedAt) and returns the existing entry with
+// Reloaded=false. The short-circuit is bypassed when:
+//   - the caller supplies a non-empty `name` that differs from
+//     the cached entry's Name (custom-name requests must take
+//     effect even on a warm cache — `name` is a per-call label
+//     override, not a stored property of the cache);
+//   - the cached entry's Mode differs from the requested Mode
+//     (forward-compat knob today; mandatory reload once modes
+//     branch).
+// Otherwise agents that call index_repository defensively pay the
+// store.Load cost on every invocation.
 //
 // ponytail: the disk cache + per-repo subdir that store.Load
 // touches via registry.LoadOptsWithDiskCache is the same path
@@ -99,6 +125,43 @@ func IndexRepository(reg *registry.Registry, emitStartup func(audit.Startup) err
 		}
 		if !isKnownMode(mode) {
 			return nil, fmt.Errorf("index_repository: unknown mode %q (want full|moderate|fast|cross-repo-intelligence)", mode)
+		}
+
+		// Short-circuit when the registry already has a fresh
+		// entry for `abs`. The cold-path store.Load below walks
+		// every file in the tree (file count + per-file grammar
+		// parse + LSP warm-up); on the hot path this is pure
+		// latency. The freshness rule mirrors index_status's
+		// checkCacheState: the cache directory must exist AND
+		// no source file mtime may be newer than IndexedAt. A
+		// missing registry row also forces a reload so we
+		// re-persist it.
+		//
+		// The audit + TOFU hooks below are memoised by sync.Once
+		// so the short-circuit can never accidentally double-emit.
+		// The short-circuit is bypassed when:
+		//   - the caller supplied a non-empty `name` that
+		//     differs from the cached entry's Name — `name` is
+		//     a per-call label override, not a stored property
+		//     of the cache, so a custom-name call must take
+		//     effect even on a warm cache.
+		//   - the cached entry's Mode differs from the requested
+		//     Mode (forward-compat knob today; mandatory reload
+		//     once modes branch).
+		if existing, hasEntry := reg.GetByPath(abs); hasEntry && existing.Mode == mode {
+			if a.Name == "" || a.Name == existing.Name {
+				cacheDir := registry.CacheDirForRoot(abs)
+				if _, serr := os.Stat(cacheDir); serr == nil {
+					newest, werr := newestMTime(abs)
+					if werr == nil && !newest.After(existing.IndexedAt) {
+						return &IndexRepositoryResult{
+							Entry:    existing,
+							Warnings: 0,
+							Reloaded: false,
+						}, nil
+					}
+				}
+			}
 		}
 
 		// One-shot store.Load to count files + detect languages.
@@ -148,6 +211,7 @@ func IndexRepository(reg *registry.Registry, emitStartup func(audit.Startup) err
 		return &IndexRepositoryResult{
 			Entry:    entry,
 			Warnings: len(errs),
+			Reloaded: true,
 		}, nil
 	}
 }

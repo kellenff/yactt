@@ -152,7 +152,7 @@ func TestEncodeResponseWithResult(t *testing.T) {
 
 func TestInitializeResultShape(t *testing.T) {
 	ir := mcp.InitializeResult{
-		ProtocolVersion: "2024-11-05",
+		ProtocolVersion: mcp.ProtocolVersion,
 		ServerInfo:      mcp.ServerInfo{Name: "yactt", Version: "0.1.0"},
 		Capabilities:    mcp.Capabilities{Tools: map[string]bool{"listChanged": false}},
 	}
@@ -164,7 +164,7 @@ func TestInitializeResultShape(t *testing.T) {
 	if err := json.Unmarshal(b, &back); err != nil {
 		t.Fatal(err)
 	}
-	if back["protocolVersion"] != "2024-11-05" {
+	if back["protocolVersion"] != mcp.ProtocolVersion {
 		t.Errorf("protocolVersion = %v", back["protocolVersion"])
 	}
 	si, _ := back["serverInfo"].(map[string]any)

@@ -76,8 +76,8 @@ func TestServerInitialize(t *testing.T) {
 	if err := json.Unmarshal(raw, &ir); err != nil {
 		t.Fatalf("result unmarshal: %v", err)
 	}
-	if ir.ProtocolVersion != "2024-11-05" {
-		t.Errorf("ProtocolVersion = %q, want 2024-11-05", ir.ProtocolVersion)
+	if ir.ProtocolVersion != mcp.ProtocolVersion {
+		t.Errorf("ProtocolVersion = %q, want %q", ir.ProtocolVersion, mcp.ProtocolVersion)
 	}
 	if ir.ServerInfo.Name != "yactt-test" {
 		t.Errorf("ServerInfo.Name = %q", ir.ServerInfo.Name)
