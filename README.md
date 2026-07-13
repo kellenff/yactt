@@ -110,6 +110,22 @@ Any MCP-capable client. Wire the server into your `.mcp.json`:
 
 The protocol version is `2024-11-05`. After `initialize` + `notifications/initialized`, call `tools/list` to enumerate the registered tools, then `tools/call` per request.
 
+### For HTTP-capable clients
+
+A persistent HTTP daemon is available via `yactt mcp serve-http` (MCP `2025-03-26` Streamable HTTP). One daemon serves every repo in the registry from a shared `*mcp.Server` — tools resolve their project via the `file://` URI passed in their arguments:
+
+```bash
+yactt mcp serve-http --port=8080
+# yactt mcp serve-http listening on 127.0.0.1:8080 protocol=2025-03-26 registry=/Users/you/.cache/yactt/projects.json ...
+```
+
+Clients connect to a single endpoint:
+
+- `http://127.0.0.1:8080/mcp` — JSON-RPC over POST/GET/DELETE. All 21 tools are available; project resolution is per-call via `args.project` (a `file://` URI) on the 16 code-intel tools, or implicit (registry row) on the 4 registry tools.
+- `http://127.0.0.1:8080/healthz` — liveness probe, unauthenticated.
+
+Default bind is `127.0.0.1` with no auth. To expose to a network, use `--bind=0.0.0.0` together with `--auth-token=<secret>`; the daemon refuses non-loopback traffic without a token. TLS termination is the operator's responsibility — front the daemon with Caddy, nginx, or a Cloudflare Tunnel for HTTPS.
+
 ### For shell pipelines
 
 Download a binary tarball, or build from source:

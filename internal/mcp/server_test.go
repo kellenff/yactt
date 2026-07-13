@@ -695,7 +695,7 @@ type captureLogger struct {
 	w  *bytes.Buffer
 }
 
-func (c *captureLogger) LogToolCall(tool string, inputPaths []string, outputBytes int, duration time.Duration, isError bool) {
+func (c *captureLogger) LogToolCall(ctx context.Context, tool string, inputPaths []string, outputBytes int, duration time.Duration, isError bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ev := map[string]any{

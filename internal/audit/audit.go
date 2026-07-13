@@ -18,6 +18,7 @@ package audit
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -59,6 +60,11 @@ type LSPEntry struct {
 // InputPaths is the set of absolute paths discovered in the JSON
 // args; OutputBytes is the size of the marshalled result; DurationMs
 // is the wall-clock time the handler consumed.
+//
+// SessionID and ClientAddr are populated only for HTTP sessions;
+// stdio omits both (omitempty). They carry the Mcp-Session-Id UUID
+// and the remote "host:port" respectively, so an operator can
+// correlate audit lines with the client that issued them.
 type ToolCall struct {
 	Event       string   `json:"event"`
 	Timestamp   string   `json:"timestamp"`
@@ -67,6 +73,8 @@ type ToolCall struct {
 	OutputBytes int      `json:"output_bytes"`
 	DurationMs  int64    `json:"duration_ms"`
 	IsError     bool     `json:"is_error"`
+	SessionID   string   `json:"session_id,omitempty"`
+	ClientAddr  string   `json:"client_addr,omitempty"`
 }
 
 // Logger is a thread-safe line-delimited JSON event writer. The zero
@@ -122,19 +130,70 @@ func EmitStartup(w io.Writer, s Startup) error {
 	return nil
 }
 
+// HTTPMeta carries per-session HTTP context for the audit emit.
+// The HTTP transport attaches one of these via WithHTTPMeta on
+// every dispatch; stdio passes nothing and the meta fields are
+// omitted from the emit.
+//
+// SessionID is the Mcp-Session-Id UUID; ClientAddr is the
+// remote "host:port".
+type HTTPMeta struct {
+	SessionID  string
+	ClientAddr string
+}
+
+// HTTPMetaKey is the exported context.Context key used by
+// WithHTTPMeta and HTTPMetaFromContext. Exported so consumers in
+// other packages can use it without re-declaring a private type
+// (Go uses pointer equality on context keys, so two private
+// types would not match).
+type HTTPMetaKey struct{}
+
+// WithHTTPMeta returns a child context carrying `meta`. A nil
+// meta is a no-op. The HTTP transport attaches a per-request
+// meta before calling Server.dispatch; the audit shim reads it
+// back via HTTPMetaFromContext.
+func WithHTTPMeta(ctx context.Context, meta HTTPMeta) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, HTTPMetaKey{}, meta)
+}
+
+// HTTPMetaFromContext returns the HTTPMeta attached by
+// WithHTTPMeta, or the zero value when none is attached. Stdio
+// sessions pass no meta and get the zero value.
+func HTTPMetaFromContext(ctx context.Context) HTTPMeta {
+	if ctx != nil {
+		if v := ctx.Value(HTTPMetaKey{}); v != nil {
+			if m, ok := v.(HTTPMeta); ok {
+				return m
+			}
+		}
+	}
+	return HTTPMeta{}
+}
+
 // LogToolCall emits a single tool_call line via the receiver's
 // logger. Safe to call on a nil receiver — it's a no-op, which
 // keeps handler code free of audit-on/off branches.
 //
 // inputPaths is typically the output of ExtractPaths(argsJSON).
 // outputBytes is the size of the marshalled result (0 on error).
-func (l *Logger) LogToolCall(tool string, inputPaths []string, outputBytes int, duration time.Duration, isError bool) {
+//
+// `ctx` is observed for an attached HTTPMeta (via WithHTTPMeta);
+// stdio passes context.Background() and the meta fields are
+// omitted. The HTTP transport attaches session_id + client_addr
+// on every dispatch so incident responders can correlate the
+// line with the originating client.
+func (l *Logger) LogToolCall(ctx context.Context, tool string, inputPaths []string, outputBytes int, duration time.Duration, isError bool) {
 	if l == nil || l.w == nil {
 		return
 	}
 	if inputPaths == nil {
 		inputPaths = []string{}
 	}
+	meta := HTTPMetaFromContext(ctx)
 	ev := ToolCall{
 		Event:       "tool_call",
 		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
@@ -143,6 +202,8 @@ func (l *Logger) LogToolCall(tool string, inputPaths []string, outputBytes int, 
 		OutputBytes: outputBytes,
 		DurationMs:  duration.Milliseconds(),
 		IsError:     isError,
+		SessionID:   meta.SessionID,
+		ClientAddr:  meta.ClientAddr,
 	}
 	b, err := json.Marshal(ev)
 	if err != nil {

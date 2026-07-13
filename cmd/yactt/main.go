@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -25,8 +26,8 @@ import (
 
 	"github.com/kellenff/yactt/internal/audit"
 	"github.com/kellenff/yactt/internal/mcp"
+	httptransport "github.com/kellenff/yactt/internal/mcp/transport/http"
 	"github.com/kellenff/yactt/internal/parser"
-	"github.com/kellenff/yactt/internal/persisted"
 	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/tool"
@@ -97,13 +98,24 @@ func main() {
 			os.Exit(1)
 		}
 	case "mcp":
-		if len(os.Args) < 3 || os.Args[2] != "serve" {
-			fmt.Fprintln(os.Stderr, "usage: yactt mcp serve [path]")
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: yactt mcp <serve|serve-http>")
 			os.Exit(2)
 		}
-		if err := runMCPServe(os.Args[3:]); err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+		switch os.Args[2] {
+		case "serve":
+			if err := runMCPServe(os.Args[3:]); err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				os.Exit(1)
+			}
+		case "serve-http":
+			if err := runMCPServeHTTP(os.Args[3:]); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				os.Exit(1)
+			}
+		default:
+			fmt.Fprintln(os.Stderr, "usage: yactt mcp <serve|serve-http>")
+			os.Exit(2)
 		}
 	case "chunk":
 		if err := runChunk(os.Args[2:]); err != nil {
@@ -612,7 +624,7 @@ func runMCPServe(args []string) error {
 	}
 	warnTrust := func() { warnInstallTrustChain(version, binSHA) }
 
-	registerAllTools(srv, reg, emitStartup, warnTrust)
+	tool.RegisterAllTools(srv, reg, emitStartup, warnTrust)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -709,142 +721,216 @@ func loadOptsWithDiskCache(repoRoot string) []store.LoadOption {
 	return registry.LoadOptsWithDiskCache(repoRoot)
 }
 
-// registerAllTools wires the tools onto the server. Behaviour
-// depends on whether `repo` is nil:
-//
-//   - repo != nil (single-repo mode): the 14 code-intelligence
-//     tools + persisted_query + the 4 registry tools. Useful for
-//     agents that need to query a repo AND manage its
-//     neighbours.
-//   - repo == nil (registry mode): only the 4 registry tools +
-//     persisted_query (which still works because it can fall
-//     back to the registry-only toolFunc map). The 14 repo-bound
-//     tools can't exist without a repo, so they aren't
-//     registered — agents in registry mode call
-//     `index_repository` first if they want to drill in.
-//
-// The order is the order in which the design's §5.1 table
-// lists tools; it's also the order clients see in
-// `tools/list`. Every tool declares both an InputSchema and an
-// OutputSchema; the OutputSchema is validated by RegisterTool
-// and must declare a top-level `type:"object"`, which is the MCP
-// contract on `structuredContent`.
-//
-// ponytail: the persisted-query toolFunc map omits the registry
-// tools today (they aren't `tool.ToolFunc`s — they don't take a
-// *store.Repo). That's fine because persisted_query's job is to
-// dispatch to repo-aware workflows; the four registry tools
-// belong to a different lifecycle (manage-the-fleet) and the
-// two never need to share an op ID namespace. Add them when an
-// agent actually needs a persisted `list_all_projects` op.
-func registerAllTools(srv *mcp.Server, reg *registry.Registry, emitStartup func(audit.Startup) error, warnTrust func()) {
-	// Four registry tools — all the server exposes, plus the 16
-	// repo-bound tools below. There is no single-repo boot path;
-	// every code-intel tool resolves its project URI through `reg`.
-	srv.RegisterTool(mcp.ToolDef{
-		Name: "list_projects", Description: "Enumerate every project in the registry, sorted by path. Call first when an agent joins an MCP session and doesn't yet know which repos are available.",
-		InputSchema: tool.ListProjectsSchema, OutputSchema: tool.ListProjectsOutputSchema,
-		Handler: tool.ListProjects(reg),
-	})
-	srv.RegisterTool(mcp.ToolDef{
-		Name: "index_repository", Description: "Required first call: walk a repo at `project` (file:// URI), write an entry to the registry, return the row. After this returns, the 16 repo-bound tools appear in `tools/list`. Mode knob is accepted (only `full` is wired today). Emits a startup audit line on the first successful index per process.",
-		InputSchema: tool.IndexRepositorySchema, OutputSchema: tool.IndexRepositoryOutputSchema,
-		Handler: tool.IndexRepository(reg, emitStartup, warnTrust),
-	})
-	srv.RegisterTool(mcp.ToolDef{
-		Name: "index_status", Description: "Registry row + per-repo cache freshness for `path`. Use this to check whether a repo is already indexed (`cacheFresh=true`) or whether `index_repository` needs to run first (`cacheFresh=false`).",
-		InputSchema: tool.IndexStatusSchema, OutputSchema: tool.IndexStatusOutputSchema,
-		Handler: tool.IndexStatus(reg),
-	})
-	srv.RegisterTool(mcp.ToolDef{
-		Name: "delete_project", Description: "Evict `project` (file:// URI) from the registry and remove its per-repo cache directory. Idempotent on missing rows — safe to retry on a stale or half-deleted entry.",
-		InputSchema: tool.DeleteProjectSchema, OutputSchema: tool.DeleteProjectOutputSchema,
-		Handler: tool.DeleteProject(reg),
-	})
 
-	// 15 repo-bound code-intel tools — all take a *registry.Registry
-	// and resolve args.Project on every call.
-	treeOverview := tool.TreeOverview(reg)
-	nodeGet := tool.GetNode(reg)
-	nodeSource := tool.NodeSource(reg)
-	nodeEdges := tool.NodeEdges(reg)
-	search := tool.Search(reg)
-	editImpact := tool.EditImpact(reg)
-	findSymbol := tool.FindSymbol(reg)
-	getSymbolsOverview := tool.GetSymbolsOverview(reg)
-	findCode := tool.FindCode(reg)
-	findReferencingSymbols := tool.FindReferencingSymbols(reg)
-	getGraphSchema := tool.GetGraphSchema()
-	getCodeSnippet := tool.GetCodeSnippet(reg)
-	getArchitecture := tool.GetArchitecture(reg)
-	queryGraph := tool.QueryGraph(reg)
-	searchCode := tool.SearchCode(reg)
-	detectChanges := tool.DetectChanges(reg)
+const mcpServeHTTPUsage = `yactt mcp serve-http — run the MCP server as a persistent HTTP daemon.
 
-	tools := []mcp.ToolDef{
-		{Name: "tree_overview", Description: "First call when orienting: map the repo structure (packages, files, top-level symbols). Tune `depth` (1–6, default 2); narrow with `scope` (absolute path under repo root) to drill into a package or subdir. Truncates at 16 KiB — start shallow, drill with `get_symbols_overview` once you know the path.", InputSchema: tool.TreeOverviewSchema, OutputSchema: tool.TreeOverviewOutputSchema, Handler: treeOverview},
-		{Name: "node_get", Description: "After `tree_overview` / `find_symbol` / `search` returns a stable `id`, pull specific layers (`summary`, `signature`, `body`, `source`, `tokens`). Cheap → expensive: start with `summary`, escalate only when you need more. Don't call without an `id`.", InputSchema: tool.GetNodeSchema, OutputSchema: tool.GetNodeOutputSchema, Handler: nodeGet},
-		{Name: "node_source", Description: "Lossless source text for a node (or a whole file via `id=file:<path>`). Use when you need the verbatim text, not a parsed layer. Pass `range=[start,end]` to bound.", InputSchema: tool.NodeSourceSchema, OutputSchema: tool.NodeSourceOutputSchema, Handler: nodeSource},
-		{Name: "node_edges", Description: "Single-hop callers / callees / tests / overrides / imports for a node. For transitive (>1 hop) caller/callee chains, use `query_graph` instead — one `query_graph` call replaces a loop of `node_edges` calls.", InputSchema: tool.NodeEdgesSchema, OutputSchema: tool.NodeEdgesOutputSchema, Handler: nodeEdges},
-		{Name: "search", Description: "BM25 over symbol name + doc-comment — best for fuzzy 'is there anything called *Foo*?' discovery. Not regex; use `find_code(pattern_kind=regex)` for line-shaped patterns. Lower limit than `find_symbol` (default 10) so prefer it for free-form search, `find_symbol` for exact lookup.", InputSchema: tool.SearchSchema, OutputSchema: tool.SearchOutputSchema, Handler: search},
-		{Name: "edit_impact", Description: "Required before any rename: returns the blast radius (callers, tests, overrides) without applying. Pair with the Edit tool afterward. Pass renames as [{id:..., new_name:...}].", InputSchema: tool.EditImpactSchema, OutputSchema: tool.EditImpactOutputSchema, Handler: editImpact},
-		{Name: "find_symbol", Description: "Glob over the name-path (`pkg.Name` or `pkg/Name`, with `*` allowed) when you know roughly what something is called. Default limit 20. On miss, the response includes a `suggestions` field with edit-distance matches — try those before falling back to `search`.", InputSchema: tool.FindSymbolSchema, OutputSchema: tool.FindSymbolOutputSchema, Handler: findSymbol},
-		{Name: "get_symbols_overview", Description: "When you have a file path (not a symbol id): get the top-level symbols of that file. Cheaper than a loop of `node_get` calls. Use after `tree_overview(scope=...)` or `search` to drill into a known file.", InputSchema: tool.GetSymbolsOverviewSchema, OutputSchema: tool.GetSymbolsOverviewOutputSchema, Handler: getSymbolsOverview},
-		{Name: "find_code", Description: "Line-shaped patterns: regex (`pattern_kind=regex`) for grep-ish work, or tree-sitter AST patterns (`pattern_kind=tree_sitter`) for code-shaped queries (e.g. 'all calls to Foo'). Use `scope` to limit to a directory. For 'which functions handle *X*?' use `search_code` instead.", InputSchema: tool.FindCodeSchema, OutputSchema: tool.FindCodeOutputSchema, Handler: findCode},
-		{Name: "search_code", Description: "When you want 'which functions handle *X*?': wraps `find_code` and groups matches by enclosing function, deduped, ranked by structural importance. Best tool for 'where is X handled' questions. Use `find_code` when you need raw matches without the grouping.", InputSchema: tool.SearchCodeSchema, OutputSchema: tool.SearchCodeOutputSchema, Handler: searchCode},
-		{Name: "find_referencing_symbols", Description: "Single-hop symbol-addressed alias of `node_edges`. Accepts a node ID OR a name_path. For multi-hop (transitive) callers/callees, use `query_graph` instead — `find_referencing_symbols` only returns direct neighbours.", InputSchema: tool.FindReferencingSymbolsSchema, OutputSchema: tool.FindReferencingSymbolsOutputSchema, Handler: findReferencingSymbols},
-		{Name: "get_graph_schema", Description: "List the canonical node kinds (FUNCTION/METHOD/CLASS/MODULE/FILE/PACKAGE/REPO), edge kinds (callers/callees/tests/overrides/imports), and layer names. Call this first when you need to write a `query_graph` filter or any kind-aware query — no need to hardcode strings.", InputSchema: tool.GetGraphSchemaSchema, OutputSchema: tool.GetGraphSchemaOutputSchema, Handler: getGraphSchema},
-		{Name: "get_code_snippet", Description: "Source slice for a symbol by stable id OR qualified name_path. One call replaces find_symbol+node_source. Use when you already know what you want and just need the body. On miss, the response includes a `suggestions` field with edit-distance matches.", InputSchema: tool.GetCodeSnippetSchema, OutputSchema: tool.GetCodeSnippetOutputSchema, Handler: getCodeSnippet},
-		{Name: "get_architecture", Description: "Repo-level health at a glance: dead-code candidates, hot spots (high fan-out), import cycles, language breakdown, package list. Run once after `tree_overview` for a first-look snapshot. Capped per-section (dead-code ≤50, cycles ≤10) — re-call with filters if you need more.", InputSchema: tool.GetArchitectureSchema, OutputSchema: tool.GetArchitectureOutputSchema, Handler: getArchitecture},
-		{Name: "query_graph", Description: "Trace reachability across multiple hops — the right tool for 'who transitively depends on X?' or 'what does X transitively reach?'. Single-seed (`from`) or multi-seed (`seeds`) — multi-seed is the GraphRAG shape that takes a vector-retriever's top-K hits as input and emits a ranked subgraph (per-row `score` = weight × 1/(1+depth)) ready for packing. One call replaces a loop of `node_edges` calls. `depth` 1–5 (default 2); cost-capped at 1000 rows / 5 s / 5000 visited nodes / 50 seeds so large traversals terminate safely. Pass `follow:[\"callers\"]` for transitive callers, `[\"callees\"]` for transitive callees, or alternate via `follow:[\"callees\",\"callers\"]`.", InputSchema: tool.QueryGraphSchema, OutputSchema: tool.QueryGraphOutputSchema, Handler: queryGraph},
-		{Name: "detect_changes", Description: "Impact of a git-ref diff: changed files, hunks, enclosing function/method per hunk, and callers/tests/overrides per affected symbol. Accepts {base,head} or {since} (Issue #11).", InputSchema: tool.DetectChangesSchema, OutputSchema: tool.DetectChangesOutputSchema, Handler: detectChanges},
+Usage:
+  yactt mcp serve-http [options]
+
+Options:
+  --port=<n>              TCP port to listen on (default 8080; 0 lets the kernel pick).
+  --bind=<addr>           Bind address (default 127.0.0.1; use 0.0.0.0 for non-loopback).
+  --auth-token=<token>    Require "Authorization: Bearer <token>" on every request.
+  --audit-log=<path>      Append one JSON line per tool call to <path> (mode 0600).
+  --registry=<path>       Registry file location (default $XDG_CACHE_HOME/yactt/projects.json).
+  --shutdown-grace=<dur>  Grace window for in-flight requests on SIGTERM (default 10s).
+  --max-sessions=<n>      Cap on concurrent sessions (default 256).
+  --idle-timeout=<dur>    Idle reap threshold (default 5m).
+  -h, --help              Show this message.
+
+Endpoints:
+  POST   /mcp                  — JSON-RPC request (tools resolve project via file:// URI in args)
+  GET    /mcp                  — open SSE stream (requires session)
+  DELETE /mcp                  — terminate session
+  GET    /healthz              — liveness probe (unauthenticated)
+
+By default the daemon binds to 127.0.0.1 and requires no auth. Use --bind=0.0.0.0
+together with --auth-token to expose to a network; without --auth-token on a
+non-loopback bind the daemon refuses all requests with 403 Forbidden.
+`
+
+// runMCPServeHTTP parses `yactt mcp serve-http` flags, builds the
+// daemon, and blocks until SIGINT/SIGTERM or a fatal error.
+func runMCPServeHTTP(args []string) error {
+	cfg := httptransport.ServerConfig{
+		ProtocolName: "yactt",
+		Version:      version,
+		ProtocolVer:  httptransport.ExpectedProtocol,
+		Port:         8080,
+		Bind:         "127.0.0.1",
+		MaxSessions:  256,
+		IdleTimeout:  5 * time.Minute,
+		ShutdownGrace: 10 * time.Second,
 	}
-	for _, t := range tools {
-		srv.RegisterTool(t)
+	var registryPath string
+	var auditPath string
+
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--help" || a == "-h":
+			fmt.Print(mcpServeHTTPUsage)
+			return nil
+		case a == "--port":
+			if i+1 >= len(args) {
+				return errors.New("--port requires a value")
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				return fmt.Errorf("--port: %w", err)
+			}
+			cfg.Port = n
+			i++
+		case strings.HasPrefix(a, "--port="):
+			n, err := strconv.Atoi(strings.TrimPrefix(a, "--port="))
+			if err != nil {
+				return fmt.Errorf("--port: %w", err)
+			}
+			cfg.Port = n
+		case a == "--bind":
+			if i+1 >= len(args) {
+				return errors.New("--bind requires an address")
+			}
+			cfg.Bind = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--bind="):
+			cfg.Bind = strings.TrimPrefix(a, "--bind=")
+		case a == "--auth-token":
+			if i+1 >= len(args) {
+				return errors.New("--auth-token requires a value")
+			}
+			cfg.Token = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--auth-token="):
+			cfg.Token = strings.TrimPrefix(a, "--auth-token=")
+		case a == "--registry":
+			if i+1 >= len(args) {
+				return errors.New("--registry requires a path")
+			}
+			registryPath = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--registry="):
+			registryPath = strings.TrimPrefix(a, "--registry=")
+		case a == "--audit-log":
+			if i+1 >= len(args) {
+				return errors.New("--audit-log requires a path")
+			}
+			auditPath = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--audit-log="):
+			auditPath = strings.TrimPrefix(a, "--audit-log=")
+		case a == "--shutdown-grace":
+			if i+1 >= len(args) {
+				return errors.New("--shutdown-grace requires a duration")
+			}
+			d, err := time.ParseDuration(args[i+1])
+			if err != nil {
+				return fmt.Errorf("--shutdown-grace: %w", err)
+			}
+			cfg.ShutdownGrace = d
+			i++
+		case strings.HasPrefix(a, "--shutdown-grace="):
+			d, err := time.ParseDuration(strings.TrimPrefix(a, "--shutdown-grace="))
+			if err != nil {
+				return fmt.Errorf("--shutdown-grace: %w", err)
+			}
+			cfg.ShutdownGrace = d
+		case a == "--max-sessions":
+			if i+1 >= len(args) {
+				return errors.New("--max-sessions requires a number")
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				return fmt.Errorf("--max-sessions: %w", err)
+			}
+			cfg.MaxSessions = n
+			i++
+		case strings.HasPrefix(a, "--max-sessions="):
+			n, err := strconv.Atoi(strings.TrimPrefix(a, "--max-sessions="))
+			if err != nil {
+				return fmt.Errorf("--max-sessions: %w", err)
+			}
+			cfg.MaxSessions = n
+		case a == "--idle-timeout":
+			if i+1 >= len(args) {
+				return errors.New("--idle-timeout requires a duration")
+			}
+			d, err := time.ParseDuration(args[i+1])
+			if err != nil {
+				return fmt.Errorf("--idle-timeout: %w", err)
+			}
+			cfg.IdleTimeout = d
+			i++
+		case strings.HasPrefix(a, "--idle-timeout="):
+			d, err := time.ParseDuration(strings.TrimPrefix(a, "--idle-timeout="))
+			if err != nil {
+				return fmt.Errorf("--idle-timeout: %w", err)
+			}
+			cfg.IdleTimeout = d
+		default:
+			return fmt.Errorf("unknown flag: %s", a)
+		}
 	}
 
-	// Persistent query registry (Phase 1.5). Each tool handler is
-	// exposed under its MCP name so an op's Tool field can reference
-	// it directly. The example ops land in persisted/example_ops.go.
-	toolFuncs := map[string]persisted.ToolFunc{
-		"tree_overview":            treeOverview,
-		"node_get":                 nodeGet,
-		"node_source":              nodeSource,
-		"node_edges":               nodeEdges,
-		"search":                   search,
-		"edit_impact":              editImpact,
-		"find_symbol":              findSymbol,
-		"get_symbols_overview":     getSymbolsOverview,
-		"find_code":                findCode,
-		"search_code":              searchCode,
-		"find_referencing_symbols": findReferencingSymbols,
-		"get_graph_schema":         getGraphSchema,
-		"get_code_snippet":         getCodeSnippet,
-		"get_architecture":         getArchitecture,
-		"query_graph":              queryGraph,
-		"detect_changes":           detectChanges,
+	if registryPath == "" {
+		registryPath = registry.DefaultPath()
+		if registryPath == "" {
+			return errors.New("mcp serve-http: cannot resolve registry path; set XDG_CACHE_HOME or pass --registry")
+		}
 	}
-	registerPersistedQuery(srv, toolFuncs)
-}
+	reg := registry.New(registryPath)
 
-// registerPersistedQuery wires the persisted_query tool onto the
-// server. Pulled out of registerAllTools because it's the one
-// tool that ships in BOTH modes (single-repo and registry), and
-// duplicating its ToolDef would invite drift.
-//
-// In registry mode (`toolFuncs == nil`), the runner's lookup
-// table is empty — every op id resolves to "unknown tool", which
-// is the right behaviour for agents that haven't drilled into a
-// project yet.
-func registerPersistedQuery(srv *mcp.Server, toolFuncs map[string]persisted.ToolFunc) {
-	preg := persisted.NewRegistry()
-	persisted.RegisterExampleOps(preg)
-	runner := persisted.NewRunner(preg, toolFuncs)
-	srv.RegisterTool(mcp.ToolDef{
-		Name:         "persisted_query",
-		Description:  "Run a registered persisted query by id. Curated workflows (onboarding, etc.) ship as named ops.",
-		InputSchema:  tool.PersistedQuerySchema,
-		OutputSchema: tool.PersistedQueryOutputSchema,
-		Handler:      tool.PersistedQuery(runner),
-	})
+	// Bind/auth warning — operator owns the decision.
+	if cfg.Bind != "" && cfg.Bind != "127.0.0.1" && cfg.Bind != "::1" && cfg.Bind != "localhost" && cfg.Token == "" {
+		fmt.Fprintln(os.Stderr,
+			"WARNING: bound to non-loopback address without --auth-token; the daemon is unauthenticated. "+
+				"Set --auth-token or reverse-proxy through an authenticated gateway.")
+	}
+
+	// Optional per-tool audit
+	var auditLogger *audit.Logger
+	var auditCloser io.Closer
+	if auditPath != "" {
+		var err error
+		auditLogger, auditCloser, err = audit.NewFileLogger(auditPath)
+		if err != nil {
+			return fmt.Errorf("open audit log %s: %w", auditPath, err)
+		}
+		defer func() {
+			if auditCloser != nil {
+				_ = auditCloser.Close()
+			}
+		}()
+	}
+
+	// Startup emit on stderr — always.
+	fmt.Fprintf(os.Stderr,
+		"yactt mcp serve-http listening on %s:%d protocol=%s registry=%s sessions=%d idle=%s grace=%s\n",
+		cfg.Bind, cfg.Port, cfg.ProtocolVer, registryPath, cfg.MaxSessions, cfg.IdleTimeout, cfg.ShutdownGrace,
+	)
+
+	daemon := httptransport.NewServer(cfg, reg)
+	if auditLogger != nil {
+		daemon.WithAudit(auditLogger)
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- daemon.ListenAndServe()
+	}()
+
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), cfg.ShutdownGrace)
+		defer cancelShutdown()
+		return daemon.Shutdown(shutdownCtx)
+	case err := <-serveErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	}
 }

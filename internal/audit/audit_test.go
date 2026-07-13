@@ -2,6 +2,7 @@ package audit_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -201,7 +202,7 @@ func TestEmitStartupNilWriter(t *testing.T) {
 func TestLoggerLogToolCall(t *testing.T) {
 	var buf bytes.Buffer
 	al := audit.NewLogger(&buf)
-	al.LogToolCall("node_get", []string{"/r/foo.go"}, 1024, 42*time.Millisecond, false)
+	al.LogToolCall(context.Background(), "node_get", []string{"/r/foo.go"}, 1024, 42*time.Millisecond, false)
 	if buf.Len() == 0 {
 		t.Fatal("no output")
 	}
@@ -231,7 +232,7 @@ func TestLoggerLogToolCall(t *testing.T) {
 	// nil input paths must marshal as [] (so downstream parsers see
 	// the field consistently, not "null").
 	var buf2 bytes.Buffer
-	audit.NewLogger(&buf2).LogToolCall("t", nil, 0, time.Millisecond, true)
+	audit.NewLogger(&buf2).LogToolCall(context.Background(), "t", nil, 0, time.Millisecond, true)
 	var got2 map[string]any
 	if err := json.Unmarshal(bytes.TrimRight(buf2.Bytes(), "\n"), &got2); err != nil {
 		t.Fatal(err)
@@ -253,7 +254,7 @@ func TestLoggerNilSafe(t *testing.T) {
 		}
 	}()
 	var l *audit.Logger
-	l.LogToolCall("t", nil, 0, 0, false)
+	l.LogToolCall(context.Background(), "t", nil, 0, 0, false)
 }
 
 // TestLoggerConcurrent pins the thread-safety contract: the dispatcher
@@ -267,7 +268,7 @@ func TestLoggerConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			al.LogToolCall("node_get", []string{"/r"}, 0, time.Microsecond, false)
+			al.LogToolCall(context.Background(), "node_get", []string{"/r"}, 0, time.Microsecond, false)
 		}()
 	}
 	wg.Wait()
@@ -391,7 +392,7 @@ func TestNewFileLogger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.LogToolCall("a", []string{"/r"}, 0, time.Millisecond, false)
+	l.LogToolCall(context.Background(), "a", []string{"/r"}, 0, time.Millisecond, false)
 	if err := closer.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +408,7 @@ func TestNewFileLogger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l2.LogToolCall("b", nil, 0, 0, true)
+	l2.LogToolCall(context.Background(), "b", nil, 0, 0, true)
 	if err := closer2.Close(); err != nil {
 		t.Fatal(err)
 	}
