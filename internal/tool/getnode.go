@@ -7,11 +7,14 @@ import (
 
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/id"
+	"github.com/kellenff/yactt/internal/project"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 )
 
 // GetNodeArgs is the typed boundary input for node_get.
 type GetNodeArgs struct {
+	Project       string   `json:"project"`
 	ID            string   `json:"id"`
 	Layers        []string `json:"layers"`
 	Range         []int    `json:"range"`
@@ -27,6 +30,7 @@ var GetNodeSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "project": { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path). Must be in the registry; call index_repository first." },
     "id": { "type": "string", "description": "Stable node ID, e.g. fn:auth.login.HandleCallback" },
     "layers": {
       "type": "array",
@@ -40,7 +44,7 @@ var GetNodeSchema = json.RawMessage(`{
     },
     "include_trivia": { "type": "boolean", "default": false }
   },
-  "required": ["id"],
+  "required": ["project", "id"],
   "additionalProperties": false
 }`)
 
@@ -62,12 +66,17 @@ var GetNodeOutputSchema = json.RawMessage(`{
 }`)
 
 // GetNode returns a Handler that materializes a node's layers.
-func GetNode(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
+func GetNode(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a GetNodeArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid node_get args: %w", err)
 		}
+		repo, err := project.Resolve(reg, a.Project)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = repo.Close() }()
 		if a.ID == "" {
 			return nil, fmt.Errorf("node_get: id is required")
 		}

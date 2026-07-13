@@ -795,8 +795,8 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo, reg *registry.Registry)
 	}
 
 	treeOverview := tool.TreeOverview(reg)
-	nodeGet := tool.GetNode(repo)
-	nodeSource := tool.NodeSource(repo)
+	nodeGet := tool.GetNode(reg)
+	nodeSource := tool.NodeSource(reg)
 	nodeEdges := tool.NodeEdges(repo)
 	search := tool.Search(repo)
 	editImpact := tool.EditImpact(repo)
