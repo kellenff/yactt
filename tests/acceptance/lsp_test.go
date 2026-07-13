@@ -46,12 +46,13 @@ func TestLSPSignature_Provenance_goplsPresent(t *testing.T) {
 	}
 
 	repo := loadRepo(t)
+	reg := seedRegForProject(t, repo.Root())
 	defer func() { _ = repo.Close() }()
 	if repo.LSP() == nil {
 		t.Skip("Repo.lsp == nil despite gopls on PATH (start failed?)")
 	}
 
-	out := callJSON(t, tool.GetNode(repo), `{"id":"fn:auth.Login","layers":["signature","body"]}`)
+	out := callJSON(t, tool.GetNode(reg), `{"id":"fn:auth.Login","layers":["signature","body"]}`)
 	n, ok := out.(*domain.Node)
 	if !ok {
 		t.Fatalf("node type: got %T", out)
@@ -77,12 +78,13 @@ func TestLSPCallers_CrossPackage_ResolvedConfidence(t *testing.T) {
 	}
 
 	repo := loadRepo(t)
+	reg := seedRegForProject(t, repo.Root())
 	defer func() { _ = repo.Close() }()
 	if repo.LSP() == nil {
 		t.Skip("Repo.lsp == nil despite gopls on PATH")
 	}
 
-	out := callJSON(t, tool.NodeEdges(repo), `{"id":"fn:payments.Charge","kinds":["callers"]}`)
+	out := callJSON(t, tool.NodeEdges(reg), `{"id":"fn:payments.Charge","kinds":["callers"]}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("node_edges envelope type: got %T", out)
@@ -150,7 +152,7 @@ func TestLSPFallback_NoGopls(t *testing.T) {
 		t.Fatalf("DetachLSPForTest did not detach; r.lsp is still non-nil")
 	}
 
-	out := callJSON(t, tool.GetNode(repo), `{"id":"fn:auth.Login","layers":["signature"]}`)
+	out := callJSON(t, tool.GetNode(reg), `{"id":"fn:auth.Login","layers":["signature"]}`)
 	n, ok := out.(*domain.Node)
 	if !ok {
 		t.Fatalf("node type: got %T", out)
@@ -176,12 +178,13 @@ func TestLSPInstalled_Hover_HonestProvenance(t *testing.T) {
 		t.Skip("gopls not on PATH")
 	}
 	repo := loadRepo(t)
+	reg := seedRegForProject(t, repo.Root())
 	defer func() { _ = repo.Close() }()
 	if repo.LSP() == nil {
 		t.Skip("Repo.lsp == nil despite gopls on PATH")
 	}
 
-	out := callJSON(t, tool.GetNode(repo), `{"id":"fn:payments.Charge","layers":["signature"]}`)
+	out := callJSON(t, tool.GetNode(reg), `{"id":"fn:payments.Charge","layers":["signature"]}`)
 	n, ok := out.(*domain.Node)
 	if !ok {
 		t.Fatalf("node type: got %T", out)

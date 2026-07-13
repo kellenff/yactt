@@ -519,29 +519,21 @@ func runHybridPipeline(r *store.Repo, opts hybrid.Options, explain bool, stdout,
 	return nil
 }
 
-// runMCPServe starts the MCP server on stdio. Two modes:
+// runMCPServe starts the MCP server on stdio. After the
+// project-reference migration, the server runs in registry
+// mode only — there is no single-repo boot path. Agents call
+// `index_repository` with a file:// URI to load a project
+// before invoking any code-intel tool.
 //
-//   - Single-repo mode (one positional path): the server loads that
-//     repo into memory and exposes the 14 code-intelligence tools
-//     against it, plus the registry tools.
-//   - Registry mode (no positional path): the server skips the repo
-//     load and exposes only the four registry tools — useful for
-//     agents that need to discover or manage which repos are indexed
-//     before drilling into one.
-//
-// Flags (parsed positionally so the path argument stays free-form):
+// Flags:
 //
 //	--audit-log=<path>   Write one JSON audit line per tools/call dispatch
 //	                     to <path>. The file is created with mode 0600 and
 //	                     appended on subsequent invocations. Omit to disable
 //	                     per-tool audit; the startup line still goes to stderr
-//	                     in single-repo mode.
+//	                     on the first index_repository success per process.
 func runMCPServe(args []string) error {
-	var (
-		repoPath    string // "" → registry mode; otherwise single-repo mode
-		repoPathSet bool
-		auditPath   string
-	)
+	var auditPath string
 	for _, a := range args {
 		switch {
 		case strings.HasPrefix(a, "--audit-log="):
@@ -552,60 +544,17 @@ func runMCPServe(args []string) error {
 		case strings.HasPrefix(a, "-"):
 			return fmt.Errorf("unknown flag: %s", a)
 		default:
-			// First non-flag positional wins; subsequent positions are
-			// rejected so a typo (e.g. two paths) doesn't silently
-			// shadow the first.
-			if repoPathSet {
-				return fmt.Errorf("unexpected positional argument: %s", a)
-			}
-			repoPath = a
-			repoPathSet = true
+			return fmt.Errorf("mcp serve: no longer takes a positional path; tools accept a file:// project URI in their args (got %q)", a)
 		}
 	}
 
-	// Registry handle is constructed up-front in both modes — the
-	// 4 registry tools are useful in single-repo mode too (admin
-	// agents need to add/remove neighbours).
+	// Registry handle is the only long-lived state. Code-intel
+	// tools resolve project URIs through it on every call.
 	regPath := registry.DefaultPath()
 	if regPath == "" {
 		return errors.New("mcp serve: cannot resolve $XDG_CACHE_HOME or $HOME; set XDG_CACHE_HOME")
 	}
 	reg := registry.New(regPath)
-
-	var repo *store.Repo
-	if repoPathSet {
-		abs, err := filepath.Abs(repoPath)
-		if err != nil {
-			return err
-		}
-		loadOpts := loadOptsWithDiskCache(abs)
-		r, errs, err := store.Load(abs, loadOpts...)
-		if err != nil {
-			return fmt.Errorf("load: %w", err)
-		}
-		defer func() { _ = r.Close() }()
-		if len(errs) > 0 {
-			fmt.Fprintf(os.Stderr, "warning: %d file errors during load\n", len(errs))
-		}
-
-		// Startup audit line on stderr. Always emitted — it carries
-		// the binary's SHA-256 (so a downstream host can cross-check
-		// against the published SHA256SUMS), the resolved root,
-		// MaxFiles cap, grammar set, and per-language LSP status. The
-		// host-visible audit trail is the design's AST09 mitigation.
-		binSHA, _ := audit.BinarySHA256(binaryPath())
-		if err := audit.EmitStartup(os.Stderr, buildStartupInfo(r, loadOpts, binSHA)); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: startup audit emit: %v\n", err)
-		}
-		// Install-hook TOFU assertion. Logs a warning when the
-		// running binary's SHA-256 differs from the (version,
-		// sha256) recorded at install time. Missing TOFU is a no-op
-		// (dev installs don't write one).
-		warnInstallTrustChain(version, binSHA)
-		repo = r
-	} else {
-		fmt.Fprintf(os.Stderr, "yactt mcp serve: registry mode (path: %s)\n", regPath)
-	}
 
 	// Optional per-tool audit logger. nil disables emission; the
 	// dispatch path checks for nil before calling.
@@ -636,7 +585,18 @@ func runMCPServe(args []string) error {
 	if auditLogger != nil {
 		srv.WithAudit(auditLogger, audit.ExtractPaths)
 	}
-	registerAllTools(srv, repo, reg)
+
+	// Build the audit + TOFU hooks for index_repository. They run
+	// at most once per process (memoised inside IndexRepository).
+	binSHA, _ := audit.BinarySHA256(binaryPath())
+	emitStartup := func(info audit.Startup) error {
+		info.Version = version
+		info.BinarySHA256 = binSHA
+		return audit.EmitStartup(os.Stderr, info)
+	}
+	warnTrust := func() { warnInstallTrustChain(version, binSHA) }
+
+	registerAllTools(srv, reg, emitStartup, warnTrust)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -761,17 +721,19 @@ func loadOptsWithDiskCache(repoRoot string) []store.LoadOption {
 // belong to a different lifecycle (manage-the-fleet) and the
 // two never need to share an op ID namespace. Add them when an
 // agent actually needs a persisted `list_all_projects` op.
-func registerAllTools(srv *mcp.Server, repo *store.Repo, reg *registry.Registry) {
-	// Four registry tools — available in BOTH modes.
+func registerAllTools(srv *mcp.Server, reg *registry.Registry, emitStartup func(audit.Startup) error, warnTrust func()) {
+	// Four registry tools — all the server exposes, plus the 16
+	// repo-bound tools below. There is no single-repo boot path;
+	// every code-intel tool resolves its project URI through `reg`.
 	srv.RegisterTool(mcp.ToolDef{
 		Name: "list_projects", Description: "Enumerate every project in the registry, sorted by path. Call first when an agent joins an MCP session and doesn't yet know which repos are available.",
 		InputSchema: tool.ListProjectsSchema, OutputSchema: tool.ListProjectsOutputSchema,
 		Handler: tool.ListProjects(reg),
 	})
 	srv.RegisterTool(mcp.ToolDef{
-		Name: "index_repository", Description: "Required first call in registry mode: walk a repo at `path`, write an entry to the registry, return the row. After this returns, the 16 repo-bound tools appear in `tools/list`. Mode knob is accepted (only `full` is wired today).",
+		Name: "index_repository", Description: "Required first call: walk a repo at `project` (file:// URI), write an entry to the registry, return the row. After this returns, the 16 repo-bound tools appear in `tools/list`. Mode knob is accepted (only `full` is wired today). Emits a startup audit line on the first successful index per process.",
 		InputSchema: tool.IndexRepositorySchema, OutputSchema: tool.IndexRepositoryOutputSchema,
-		Handler: tool.IndexRepository(reg, nil, nil),
+		Handler: tool.IndexRepository(reg, emitStartup, warnTrust),
 	})
 	srv.RegisterTool(mcp.ToolDef{
 		Name: "index_status", Description: "Registry row + per-repo cache freshness for `path`. Use this to check whether a repo is already indexed (`cacheFresh=true`) or whether `index_repository` needs to run first (`cacheFresh=false`).",
@@ -779,21 +741,13 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo, reg *registry.Registry)
 		Handler: tool.IndexStatus(reg),
 	})
 	srv.RegisterTool(mcp.ToolDef{
-		Name: "delete_project", Description: "Evict `path` from the registry and remove its per-repo cache directory. Idempotent on missing rows — safe to retry on a stale or half-deleted entry.",
+		Name: "delete_project", Description: "Evict `project` (file:// URI) from the registry and remove its per-repo cache directory. Idempotent on missing rows — safe to retry on a stale or half-deleted entry.",
 		InputSchema: tool.DeleteProjectSchema, OutputSchema: tool.DeleteProjectOutputSchema,
 		Handler: tool.DeleteProject(reg),
 	})
 
-	if repo == nil {
-		// Registry mode: stop here. The persisted_query tool is
-		// registered below with an empty toolFunc map, which the
-		// runner translates into "no such op id" errors — fine,
-		// because the example ops all target the 13 code-intel
-		// tools anyway.
-		registerPersistedQuery(srv, nil)
-		return
-	}
-
+	// 15 repo-bound code-intel tools — all take a *registry.Registry
+	// and resolve args.Project on every call.
 	treeOverview := tool.TreeOverview(reg)
 	nodeGet := tool.GetNode(reg)
 	nodeSource := tool.NodeSource(reg)

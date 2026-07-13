@@ -122,10 +122,12 @@ curl -fsSL https://github.com/kellenff/yactt/releases/latest/download/yactt_darw
 
 # then
 yactt overview /path/to/repo        # tree dump as JSON
-yactt mcp serve [/path/to/repo]     # MCP server on stdio
+yactt mcp serve                     # MCP server on stdio (registry mode)
 ```
 
 The CLI is intentionally thin — `help`, `version`, `overview`, `mcp serve`. Anything with logic lives under `internal/`.
+
+The `mcp serve` subcommand runs in **registry mode** — it boots without loading any repo. To work with a repo, an agent first calls `index_repository` with the repo's `file://` URI, then invokes code-intel tools (`tree_overview`, `find_symbol`, etc.) with the same URI in their `project` field. Every targeting tool takes a `file://` absolute-path URI; the legacy positional-path argument on `mcp serve` is removed.
 
 ---
 
@@ -294,11 +296,11 @@ The codebase is one node graph; the tools are 21 facets of access.
 
 ## Federated code intelligence
 
-yactt ships a multi-repo registry at `$XDG_CACHE_HOME/yactt/projects.json` (or `$HOME/.cache/yactt/projects.json` when `XDG_CACHE_HOME` is unset). The four registry tools above operate against that file; the 16 code-intelligence tools stay bound to whatever repo `yactt mcp serve <path>` loaded at startup.
+yactt ships a multi-repo registry at `$XDG_CACHE_HOME/yactt/projects.json` (or `$HOME/.cache/yactt/projects.json` when `XDG_CACHE_HOME` is unset). The four registry tools above operate against that file; the 16 code-intelligence tools resolve project URIs on every call (no in-memory repo state).
 
 Two run modes from one binary:
 
-- `yactt mcp serve <path>` — single-repo mode. Loads `<path>`, exposes all 21 tools (16 code-intel + 4 registry + `persisted_query`).
+- `yactt mcp serve` — registry mode. Boots without loading any repo; agents pick projects via `index_repository` and pass `file://` URIs to code-intel tools. Exposes all 21 tools (16 code-intel + 4 registry + `persisted_query`). The legacy `mcp serve <path>` form is removed.
 - `yactt mcp serve` (no path) — registry mode. Exposes the 4 registry tools + `persisted_query`. Use this to discover or manage which repos are indexed before drilling into one.
 
 Indexing is decoupled from serving: an agent in registry mode can call `index_repository` to prime a repo's cache, then a separate `yactt mcp serve <that-path>` can serve it with warm caches and zero re-parse.

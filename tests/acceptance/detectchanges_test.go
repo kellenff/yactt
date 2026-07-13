@@ -73,6 +73,7 @@ func freshGitRepo(t *testing.T, v1, v2 map[string]string) *store.Repo {
 	if err != nil {
 		t.Fatalf("store.Load: %v", err)
 	}
+	reg := seedRegForProject(t, r.Root())
 	t.Cleanup(func() { _ = r.Close() })
 	return r
 }
@@ -94,7 +95,7 @@ func writeFiles(t *testing.T, root string, files map[string]string) {
 // acceptance_test.go but returns the typed DetectChangesResult.
 func callDC(t *testing.T, repo *store.Repo, argsJSON string) *tool.DetectChangesResult {
 	t.Helper()
-	out, err := tool.DetectChanges(repo)(context.Background(), json.RawMessage(argsJSON))
+	out, err := tool.DetectChanges(reg)(context.Background(), json.RawMessage(argsJSON))
 	if err != nil {
 		t.Fatalf("handler: %v (args=%s)", err, argsJSON)
 	}
