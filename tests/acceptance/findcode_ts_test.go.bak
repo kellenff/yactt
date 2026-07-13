@@ -21,7 +21,7 @@ import (
 // The fixture is Go-only, so cross-language coverage lives in the
 // collaboration tests under internal/tool/findcode_tree_sitter_test.go.
 func TestFindCodeAcceptance_TreeSitter(t *testing.T) {
-	loadRepo(t)
+	repo := loadRepo(t)
 	reg := fixtureRegCache
 	out := callJSON(t, tool.FindCode(reg), `{"pattern":"(call_expression) @c","pattern_kind":"tree_sitter","limit":50}`)
 	env, ok := out.(map[string]any)

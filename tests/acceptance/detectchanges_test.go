@@ -73,7 +73,7 @@ func freshGitRepo(t *testing.T, v1, v2 map[string]string) *store.Repo {
 	if err != nil {
 		t.Fatalf("store.Load: %v", err)
 	}
-	reg := seedRegForProject(t, r.Root())
+	_ = seedRegForProject(t, r.Root())
 	t.Cleanup(func() { _ = r.Close() })
 	return r
 }
@@ -95,7 +95,7 @@ func writeFiles(t *testing.T, root string, files map[string]string) {
 // acceptance_test.go but returns the typed DetectChangesResult.
 func callDC(t *testing.T, repo *store.Repo, argsJSON string) *tool.DetectChangesResult {
 	t.Helper()
-	out, err := tool.DetectChanges(reg)(context.Background(), json.RawMessage(argsJSON))
+	out, err := tool.DetectChanges(seedRegForProject(t, repo.Root()))(context.Background(), json.RawMessage(argsJSON))
 	if err != nil {
 		t.Fatalf("handler: %v (args=%s)", err, argsJSON)
 	}
@@ -250,7 +250,7 @@ func Use() int { return 99 }
 `}
 	r := freshGitRepo(t, v1, v2)
 
-	_, err := tool.DetectChanges(r)(context.Background(), json.RawMessage(`{}`))
+	_, err := tool.DetectChanges(seedRegForProject(t, r.Root()))(context.Background(), json.RawMessage(`{}`))
 	if err == nil {
 		t.Fatal("expected error on empty args; got nil")
 	}

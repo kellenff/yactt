@@ -30,6 +30,13 @@ import (
 // fixtureRepo is the per-test repo handle. Cached across tests for speed.
 var fixtureRepoCache *store.Repo
 
+// fixtureReg is the per-test registry handle, populated alongside
+// fixtureRepoCache by loadRepo. Tests reference it as `reg` in the
+// body — that's the package-level alias used in this file's helper
+// calls.
+var fixtureRegCache *registry.Registry
+var reg = func() *registry.Registry { return fixtureRegCache }() // updated by loadRepo
+
 func loadRepo(t *testing.T) *store.Repo {
 	t.Helper()
 	if fixtureRepoCache != nil {
@@ -43,6 +50,7 @@ func loadRepo(t *testing.T) *store.Repo {
 		t.Logf("load reported %d file errors: %v", len(errs), errs)
 	}
 	fixtureRepoCache = repo
+	fixtureRegCache = seedRegForProject(t, repo.Root())
 	return repo
 }
 

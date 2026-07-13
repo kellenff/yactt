@@ -70,9 +70,7 @@ type Session struct {
 
 	// Empty Limit + empty Kinds: defaults must kick in. We expect at
 	// least one callee edge (payments.Charge from Login).
-	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
-		`{"id":"fn:auth.Login"}`,
-	))
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), `{"id":"fn:auth.Login"}`)))
 	if err != nil {
 		t.Fatalf("NodeEdges: %v", err)
 	}
@@ -100,9 +98,7 @@ func TestNodeEdges_RejectsEmptyID(t *testing.T) {
 	}
 	defer func() { _ = r.Close() }()
 
-	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
-		`{"id":""}`,
-	))
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), `{"id":""}`)))
 	if err == nil {
 		t.Fatalf("expected error for empty id, got nil; out=%v", out)
 	}
@@ -119,9 +115,7 @@ func TestNodeEdges_RejectsMalformedID(t *testing.T) {
 	}
 	defer func() { _ = r.Close() }()
 
-	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
-		`{"id":"notanid"}`,
-	))
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), `{"id":"notanid"}`)))
 	if err == nil {
 		t.Fatalf("expected error for malformed id, got nil; out=%v", out)
 	}
@@ -137,9 +131,7 @@ func TestNodeEdges_UnknownID(t *testing.T) {
 	}
 	defer func() { _ = r.Close() }()
 
-	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
-		`{"id":"fn:auth.NoSuchFunc"}`,
-	))
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), `{"id":"fn:auth.NoSuchFunc"}`)))
 	if err == nil {
 		t.Fatalf("expected error for unknown id, got nil; out=%v", out)
 	}
@@ -259,9 +251,7 @@ func TestSmoke(t *testing.T) {
 	// Drive NodeEdges with kinds=["tests"] on fn:auth.Login. The test
 	// file declares TestSmoke; scanTests must surface it as a TESTS
 	// edge for the symbol we're asking about.
-	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
-		`{"id":"fn:auth.Login","kinds":["tests"],"limit":50}`,
-	))
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), `{"id":"fn:auth.Login","kinds":["tests"],"limit":50}`)))
 	if err != nil {
 		t.Fatalf("NodeEdges: %v", err)
 	}
@@ -330,9 +320,7 @@ export class UseUser {
 	// Drive scanImports on the Go file via its declared function. The
 	// `file`, not `sym`, is what scanImports reads, so the choice of
 	// symbol is incidental — UseFmt lives in the same file.
-	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
-		`{"id":"fn:auth.UseFmt","kinds":["imports"],"limit":50}`,
-	))
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), `{"id":"fn:auth.UseFmt","kinds":["imports"],"limit":50}`)))
 	if err != nil {
 		t.Fatalf("NodeEdges: %v", err)
 	}
@@ -370,9 +358,7 @@ export class UseUser {
 	// TS file: a separate query on the TS-declared class surfaces the
 	// TS-only import. Confirms the dispatch and walker cover both
 	// import_declaration (Go) and import_statement (TS/JS).
-	out2, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
-		`{"id":"class:auth.UseUser","kinds":["imports"],"limit":50}`,
-	))
+	out2, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), `{"id":"class:auth.UseUser","kinds":["imports"],"limit":50}`)))
 	if err != nil {
 		t.Fatalf("NodeEdges (TS): %v", err)
 	}
@@ -388,9 +374,7 @@ export class UseUser {
 	}
 
 	// Sanity: a file with no imports returns zero IMPORTS edges.
-	out3, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
-		`{"id":"fn:auth.Login","kinds":["imports"],"limit":50}`,
-	))
+	out3, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), `{"id":"fn:auth.Login","kinds":["imports"],"limit":50}`)))
 	if err != nil {
 		t.Fatalf("NodeEdges (no imports): %v", err)
 	}
@@ -445,9 +429,7 @@ export class Child extends Parent {
 
 	// Child.greet overrides Parent.greet — must surface one OVERRIDES
 	// edge. Child.fetch has no parent counterpart — zero edges.
-	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
-		`{"id":"meth:auth.Child.greet","kinds":["overrides"],"limit":50}`,
-	))
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), `{"id":"meth:auth.Child.greet","kinds":["overrides"],"limit":50}`)))
 	if err != nil {
 		t.Fatalf("NodeEdges: %v", err)
 	}
@@ -476,9 +458,7 @@ export class Child extends Parent {
 	}
 
 	// Child.fetch has no parent counterpart — zero edges.
-	out2, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
-		`{"id":"meth:auth.Child.fetch","kinds":["overrides"],"limit":50}`,
-	))
+	out2, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), `{"id":"meth:auth.Child.fetch","kinds":["overrides"],"limit":50}`)))
 	if err != nil {
 		t.Fatalf("NodeEdges (fetch): %v", err)
 	}
@@ -562,9 +542,7 @@ func TestNodeEdges_RespectsLimit(t *testing.T) {
 	r.DetachLSPForTest()
 
 	// Ask for everything with limit=1. We expect at most 1 edge.
-	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
-		`{"id":"fn:auth.Login","limit":1}`,
-	))
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), `{"id":"fn:auth.Login","limit":1}`)))
 	if err != nil {
 		t.Fatalf("NodeEdges: %v", err)
 	}
