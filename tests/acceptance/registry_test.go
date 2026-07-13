@@ -126,7 +126,7 @@ func TestTool_IndexRepository(t *testing.T) {
 	})
 
 	t.Run("custom_name", func(t *testing.T) {
-		out := callRegistry(t, h, map[string]any{"path": fx.Root, "name": "billing-svc"}).(*tool.IndexRepositoryResult)
+		out := callRegistry(t, h, map[string]any{"project": "file://" + fx.Root, "name": "billing-svc"}).(*tool.IndexRepositoryResult)
 		if out.Entry.Name != "billing-svc" {
 			t.Errorf("Entry.Name = %q, want billing-svc", out.Entry.Name)
 		}

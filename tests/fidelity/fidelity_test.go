@@ -21,60 +21,44 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/registry"
+	"github.com/kellenff/yactt/internal/registry/registrytest"
 	"github.com/kellenff/yactt/internal/store"
+	"github.com/kellenff/yactt/internal/store/repofixture"
 	"github.com/kellenff/yactt/internal/tool"
 )
 
 // seedRegForFidelity creates a fresh *registry.Registry with one
-// entry for the given root. Used by every tool factory call in
-// this file; the handler resolves the project URI via project.Resolve.
+// entry for the given root. Thin wrapper around registrytest.Seed
+// kept for backward compatibility with the existing test bodies.
 func seedRegForFidelity(t *testing.T, root string) *registry.Registry {
 	t.Helper()
-	dir := t.TempDir()
-	reg := registry.New(filepath.Join(dir, "projects.json"))
-	if err := reg.Upsert(registry.Entry{
-		Name:      filepath.Base(root),
-		Path:      root,
-		IndexedAt: time.Now().UTC(),
-		Files:     0,
-	}); err != nil {
-		t.Fatalf("seedRegForFidelity: %v", err)
-	}
-	return reg
+	return registrytest.Seed(t, root)
 }
 
-// drive invokes a handler and fails the test on error. Returns the
-// decoded JSON shape (everything goes through map[string]any to make
-// per-step assertions ergonomic).
 // driveWithProject prepends a `project` (file:// URI) field to the
-// args JSON if the field is missing. The fixture root is read from
-// the test's repo variable via seedRegForFidelity; the helper just
-// constructs the URI from the test's repo reference.
-//
-// Used by drive and driveRaw: every per-tool args JSON in this file
-// stays compact (no "project" field needed).
+// args JSON if the field is missing. Thin wrapper around
+// repofixture.WithProject so the on-wire shape lives in one place.
 func driveWithProject(t *testing.T, repoRoot, argsJSON string) string {
-	if strings.Contains(argsJSON, `"project"`) {
-		return argsJSON
-	}
-	if argsJSON == "{}" {
-		return `{"project":"file://` + repoRoot + `"}`
-	}
-	return `{"project":"file://` + repoRoot + `",` + argsJSON[1:]
+	t.Helper()
+	return repofixture.WithProject(repoRoot, argsJSON)
 }
 
-func drive(t *testing.T, h func(ctx context.Context, args json.RawMessage) (any, error), argsJSON string) map[string]any {
+// drive invokes a handler with `repoRoot`'s project URI injected
+// into the args JSON and fails the test on error. Returns the
+// decoded JSON shape (everything goes through map[string]any to
+// make per-step assertions ergonomic). The repoRoot parameter is
+// required because every code-intel tool now resolves its project
+// via a file:// URI; passing it through here keeps the per-tool
+// args JSON in the test bodies compact.
+func drive(t *testing.T, repoRoot string, h func(ctx context.Context, args json.RawMessage) (any, error), argsJSON string) map[string]any {
 	t.Helper()
-	// drive callers don't have direct access to the project URI here;
-	// they assume the test's repo variable provides it. The fix is to
-	// wrap args at the call site. Kept as a no-op here.
+	argsJSON = driveWithProject(t, repoRoot, argsJSON)
 	out, err := h(context.Background(), json.RawMessage(argsJSON))
 	if err != nil {
 		t.Fatalf("handler error: %v (args=%s)", err, argsJSON)
@@ -92,9 +76,11 @@ func drive(t *testing.T, h func(ctx context.Context, args json.RawMessage) (any,
 
 // driveRaw returns the raw `any` so tests can cast to typed results
 // where the envelope shape matters. Used by tests that need access to
-// typed fields like TreeOverviewResult nodes.
-func driveRaw(t *testing.T, h func(ctx context.Context, args json.RawMessage) (any, error), argsJSON string) any {
+// typed fields like TreeOverviewResult nodes. repoRoot has the same
+// thread-the-project semantics as drive.
+func driveRaw(t *testing.T, repoRoot string, h func(ctx context.Context, args json.RawMessage) (any, error), argsJSON string) any {
 	t.Helper()
+	argsJSON = driveWithProject(t, repoRoot, argsJSON)
 	out, err := h(context.Background(), json.RawMessage(argsJSON))
 	if err != nil {
 		t.Fatalf("handler error: %v (args=%s)", err, argsJSON)
@@ -132,7 +118,7 @@ func TestFidelity_Task1_CodeNavigation_LocateAndCaller(t *testing.T) {
 	// Step 1: tree_overview — orient. The handler returns the root
 	// TreeOverviewResult directly (not wrapped in `{tree: …}`), so the
 	// shape we expect is {id, kind, summary, children}.
-	overview := drive(t, tool.TreeOverview(reg), `{"depth":1}`)
+	overview := drive(t, repo.Root(), tool.TreeOverview(reg), `{"depth":1}`)
 	if _, ok := overview["id"]; !ok {
 		t.Fatalf("step 1 tree_overview: missing 'id' field; got %v", overview)
 	}
@@ -144,14 +130,14 @@ func TestFidelity_Task1_CodeNavigation_LocateAndCaller(t *testing.T) {
 	// Step 2: find_symbol("auth/Login") — locate. Both the slash and
 	// the dotted form resolve to the same node (issue #28 fixed the
 	// dotted miss).
-	symStep := drive(t, tool.FindSymbol(reg), `{"name_path":"auth/Login"}`)
+	symStep := drive(t, repo.Root(), tool.FindSymbol(reg), `{"name_path":"auth/Login"}`)
 	syms, ok := symStep["symbols"].([]any)
 	if !ok || len(syms) == 0 {
 		t.Fatalf("step 2 find_symbol: expected non-empty symbols; got %v", symStep)
 	}
 
 	// Step 2b: dotted form must agree (issue #28 regression pin).
-	symDotted := drive(t, tool.FindSymbol(reg), `{"name_path":"auth.Login"}`)
+	symDotted := drive(t, repo.Root(), tool.FindSymbol(reg), `{"name_path":"auth.Login"}`)
 	dottedSyms, ok := symDotted["symbols"].([]any)
 	if !ok || len(dottedSyms) == 0 {
 		t.Fatalf("step 2b find_symbol: dotted form returned no symbols; got %v", symDotted)
@@ -160,7 +146,7 @@ func TestFidelity_Task1_CodeNavigation_LocateAndCaller(t *testing.T) {
 	// Step 3: find_referencing_symbols("fn:auth.Login") — one caller.
 	// ponytail: this tool's arg is a node ID, not a name_path, so the
 	// `fn:` prefix is required.
-	refStep := drive(t, tool.FindReferencingSymbols(reg), `{"symbol":"fn:auth.Login"}`)
+	refStep := drive(t, repo.Root(), tool.FindReferencingSymbols(reg), `{"symbol":"fn:auth.Login"}`)
 	refs, ok := refStep["references"].([]any)
 	if !ok {
 		t.Fatalf("step 3 find_referencing_symbols: missing 'references' field; got %v", refStep)
@@ -186,13 +172,13 @@ func TestFidelity_Task2_CodeNavigation_CallChain(t *testing.T) {
 	reg := seedRegForFidelity(t, repo.Root())
 
 	// Step 1: find_symbol — locate Login.
-	symStep := drive(t, tool.FindSymbol(reg), `{"name_path":"auth/Login"}`)
+	symStep := drive(t, repo.Root(), tool.FindSymbol(reg), `{"name_path":"auth/Login"}`)
 	if syms, _ := symStep["symbols"].([]any); len(syms) == 0 {
 		t.Fatalf("step 1: expected to locate Login; got %v", symStep)
 	}
 
 	// Step 2: node_edges(callees) — first hop.
-	edges1 := drive(t, tool.NodeEdges(reg), `{"id":"fn:auth.Login","kinds":["callees"]}`)
+	edges1 := drive(t, repo.Root(), tool.NodeEdges(reg), `{"id":"fn:auth.Login","kinds":["callees"]}`)
 	e1, _ := edges1["edges"].([]any)
 	if len(e1) == 0 {
 		t.Fatalf("step 2: expected Login to have callees; got 0")
@@ -215,7 +201,7 @@ func TestFidelity_Task2_CodeNavigation_CallChain(t *testing.T) {
 			continue
 		}
 		seen[id] = true
-		edges2 := drive(t, tool.NodeEdges(reg), `{"id":"`+id+`","kinds":["callees"]}`)
+		edges2 := drive(t, repo.Root(), tool.NodeEdges(reg), `{"id":"`+id+`","kinds":["callees"]}`)
 		if _, ok := edges2["edges"].([]any); ok {
 			navigated++
 		}
@@ -233,7 +219,7 @@ func TestFidelity_Task3_RepoOrientation_TopLevelStructure(t *testing.T) {
 	repo := loadFixtureRepo(t)
 	reg := seedRegForFidelity(t, repo.Root())
 
-	out := driveRaw(t, tool.TreeOverview(reg), `{"depth":2}`)
+	out := driveRaw(t, repo.Root(), tool.TreeOverview(reg), `{"depth":2}`)
 	tree, ok := out.(tool.TreeOverviewResult)
 	if !ok {
 		t.Fatalf("unexpected TreeOverview type: %T", out)
@@ -365,7 +351,7 @@ func (e strErr) Error() string { return string(e) }
 	reg := seedRegForFidelity(t, repo.Root())
 
 	// Step 1: detect_changes against HEAD~1 for auth/login.go.
-	dc := drive(t, tool.DetectChanges(reg),
+	dc := drive(t, repo.Root(), tool.DetectChanges(reg),
 		`{"project":"file://` + repo.Root() + `","base":"HEAD~1","scope":["auth/login.go"]}`)
 
 	// Final assertions:
@@ -448,7 +434,7 @@ func TestFidelity_KindMapping_RoundTrips(t *testing.T) {
 	_ = seedRegForFidelity(t, repo.Root())
 
 	// Step 1: get_graph_schema surfaces kindMap.
-	schema := drive(t, tool.GetGraphSchema(), `{}`)
+	schema := drive(t, repo.Root(), tool.GetGraphSchema(), `{}`)
 	kindMapRaw, ok := schema["kindMap"].(map[string]any)
 	if !ok || len(kindMapRaw) == 0 {
 		t.Fatalf("step 1 get_graph_schema: missing or empty kindMap; got %v", schema["kindMap"])
@@ -584,7 +570,7 @@ func TestFidelity_AgentFlow_TransitiveCallers(t *testing.T) {
 	countingDrive := func(argsJSON string) map[string]any {
 		t.Helper()
 		calls++
-		return drive(t, tool.FindSymbol(reg), argsJSON)
+		return drive(t, repo.Root(), tool.FindSymbol(reg), argsJSON)
 	}
 
 	// Step 1: locate Login (1 call).
@@ -616,7 +602,8 @@ func TestFidelity_AgentFlow_TransitiveCallers(t *testing.T) {
 	// Step 2: transitive callers via query_graph (1 call).
 	calls++
 	raw, err := tool.QueryGraph(reg)(context.Background(),
-		json.RawMessage(fmt.Sprintf(`{"from":%q,"follow":["callers"],"depth":3,"limit":50}`, loginIDStr)))
+		json.RawMessage(driveWithProject(t, repo.Root(),
+			fmt.Sprintf(`{"from":%q,"follow":["callers"],"depth":3,"limit":50}`, loginIDStr))))
 	if err != nil {
 		t.Fatalf("step 2 query_graph: %v", err)
 	}

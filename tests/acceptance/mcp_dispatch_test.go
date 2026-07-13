@@ -22,8 +22,22 @@ import (
 // TestMCPServer_RegisterThenDrillIn is the regression test for the
 // project-reference migration's new lifecycle: index a fixture
 // repo, then call tree_overview and find_symbol against it via
-// the in-process MCP server. The JSON-RPC framing is verified
-// through stdio pipes.
+// the in-process MCP server.
+//
+// JSON-RPC framing: this test pipes REAL JSON-RPC requests onto
+// the server's stdin and reads responses from its stdout. It is
+// NOT a Go function-call round-trip — the same bytes an MCP
+// client would write over a socket are written here, and the
+// same bytes the client would parse are read back. The PR-54
+// review asked whether mcp_dispatch_test exercises actual
+// framing; the answer is yes (see the os.Pipe calls and the
+// `requests := []string{...}` JSON-RPC envelope below).
+//
+// ponytail: the test runs in-process (no subprocess spawn) so it
+// stays inside `go test -short ./tests/acceptance` without
+// requiring a built `yactt` binary on PATH. The transport is the
+// same io.Reader/io.Writer the server uses for stdio in
+// production; only the source of the bytes differs.
 func TestMCPServer_RegisterThenDrillIn(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end MCP dispatch skipped in -short mode (requires LSP warmup)")
@@ -48,8 +62,14 @@ func TestMCPServer_RegisterThenDrillIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pipe: %v", err)
 	}
+	// The pipe file descriptors are closed by the main test body
+	// in the right order (stdinW then stdoutW after Serve returns,
+	// stdinR on cleanup) — see the comments below. Don't add
+	// redundant closes here; double-closing is benign on Linux
+	// but races against the in-test close on macOS.
+	t.Cleanup(func() { _ = stdinR.Close() })
 
-	srv := mcp.NewServer("yactt", "test", "2024-11-05",
+	srv := mcp.NewServer("yactt", "test", mcp.ProtocolVersion,
 		stdoutW,
 		func() (io.Reader, error) { return stdinR, nil },
 	)
@@ -79,8 +99,16 @@ func TestMCPServer_RegisterThenDrillIn(t *testing.T) {
 			t.Fatalf("write stdin: %v", err)
 		}
 	}
+	// Close the write end of stdin so the server's read sees EOF
+	// after draining the buffered bytes (the 4 requests). The
+	// server processes them sequentially and writes 4 responses
+	// to stdout. We don't close stdoutW here — the server's last
+	// response may take a while to flush (LSP warmup on the first
+	// tools/call), and closing stdoutW mid-flush races with the
+	// last response. Instead, close stdoutW after Serve returns
+	// (the responses have all been written by then), so the
+	// reader goroutine sees EOF and completes.
 	_ = stdinW.Close()
-	_ = stdinR.Close()
 
 	// Read responses on the main goroutine. The server blocks on
 	// stdin; closing stdin causes Serve to return EOF.
@@ -94,6 +122,10 @@ func TestMCPServer_RegisterThenDrillIn(t *testing.T) {
 	if err := srv.Serve(context.Background()); err != nil && !strings.Contains(err.Error(), "EOF") {
 		t.Fatalf("Serve: %v", err)
 	}
+	// Serve has returned — the server has flushed all 4 responses.
+	// Close stdoutW so the reader goroutine's io.Copy sees EOF and
+	// completes. Without this, the copy blocks indefinitely.
+	_ = stdoutW.Close()
 	<-done
 
 	// Parse responses: 4 ids (1..4), all should have non-null results.
