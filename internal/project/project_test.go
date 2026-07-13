@@ -2,7 +2,6 @@ package project_test
 
 import (
 	"context"
-	_ "encoding/json" // reserved for future tests
 	"os"
 	"path/filepath"
 	"strings"
