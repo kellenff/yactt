@@ -21,53 +21,32 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/registry"
+	"github.com/kellenff/yactt/internal/registry/registrytest"
 	"github.com/kellenff/yactt/internal/store"
+	"github.com/kellenff/yactt/internal/store/repofixture"
 	"github.com/kellenff/yactt/internal/tool"
 )
 
 // seedRegForFidelity creates a fresh *registry.Registry with one
-// entry for the given root. Used by every tool factory call in
-// this file; the handler resolves the project URI via project.Resolve.
+// entry for the given root. Thin wrapper around registrytest.Seed
+// kept for backward compatibility with the existing test bodies.
 func seedRegForFidelity(t *testing.T, root string) *registry.Registry {
 	t.Helper()
-	dir := t.TempDir()
-	reg := registry.New(filepath.Join(dir, "projects.json"))
-	if err := reg.Upsert(registry.Entry{
-		Name:      filepath.Base(root),
-		Path:      root,
-		IndexedAt: time.Now().UTC(),
-		Files:     0,
-	}); err != nil {
-		t.Fatalf("seedRegForFidelity: %v", err)
-	}
-	return reg
+	return registrytest.Seed(t, root)
 }
 
-// drive invokes a handler and fails the test on error. Returns the
-// decoded JSON shape (everything goes through map[string]any to make
-// per-step assertions ergonomic).
 // driveWithProject prepends a `project` (file:// URI) field to the
-// args JSON if the field is missing. The fixture root is read from
-// the test's repo variable via seedRegForFidelity; the helper just
-// constructs the URI from the test's repo reference.
-//
-// Used by drive and driveRaw: every per-tool args JSON in this file
-// stays compact (no "project" field needed).
+// args JSON if the field is missing. Thin wrapper around
+// repofixture.WithProject so the on-wire shape lives in one place.
 func driveWithProject(t *testing.T, repoRoot, argsJSON string) string {
-	if strings.Contains(argsJSON, `"project"`) {
-		return argsJSON
-	}
-	if argsJSON == "{}" {
-		return `{"project":"file://` + repoRoot + `"}`
-	}
-	return `{"project":"file://` + repoRoot + `",` + argsJSON[1:]
+	t.Helper()
+	return repofixture.WithProject(repoRoot, argsJSON)
 }
 
 // drive invokes a handler with `repoRoot`'s project URI injected

@@ -15,15 +15,15 @@ package acceptance_test
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/registry"
+	"github.com/kellenff/yactt/internal/registry/registrytest"
 	"github.com/kellenff/yactt/internal/search"
 	"github.com/kellenff/yactt/internal/store"
+	"github.com/kellenff/yactt/internal/store/repofixture"
 	"github.com/kellenff/yactt/internal/tool"
 )
 
@@ -58,35 +58,18 @@ func loadRepo(t *testing.T) *store.Repo {
 // to the args JSON if the field is missing. The fixture root is
 // read from fixtureRepoCache.Root() (populated by loadRepo).
 // Used by callJSON and callAsMap to keep per-test args JSON
-// compact.
+// compact. Thin wrapper around repofixture.WithProject.
 func withAcceptanceProject(t *testing.T, args string) string {
-	if strings.Contains(args, `"project"`) {
-		return args
-	}
-	root := fixtureRepoCache.Root()
-	if args == "{}" {
-		return `{"project":"file://` + root + `"}`
-	}
-	return `{"project":"file://` + root + `",` + args[1:]
+	t.Helper()
+	return repofixture.WithProject(fixtureRepoCache.Root(), args)
 }
 
 // seedRegForProject creates a fresh *registry.Registry containing one
-// entry for `root`. Used by every test that needs to call a
-// registry-bound tool factory. The handler resolves the project
-// URI via project.Resolve; the registry is just the lookup map.
+// entry for `root`. Thin wrapper around registrytest.Seed kept for
+// backward compatibility with the existing test bodies.
 func seedRegForProject(t *testing.T, root string) *registry.Registry {
 	t.Helper()
-	dir := t.TempDir()
-	reg := registry.New(filepath.Join(dir, "projects.json"))
-	if err := reg.Upsert(registry.Entry{
-		Name:      filepath.Base(root),
-		Path:      root,
-		IndexedAt: time.Now().UTC(),
-		Files:     0,
-	}); err != nil {
-		t.Fatalf("seedRegForProject: %v", err)
-	}
-	return reg
+	return registrytest.Seed(t, root)
 }
 
 // call runs the handler with `argsJSON` and returns the raw result. Concrete
