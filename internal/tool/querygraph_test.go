@@ -25,9 +25,13 @@ func loadQueryGraphRepo(t *testing.T) *store.Repo {
 }
 
 // runQueryGraph drives the handler with raw JSON and type-asserts.
+// Wraps `args` with a project (file:// URI) field so the handler
+// can resolve the repo — the project-reference migration made every
+// code-intel tool require `project`. Callers that already include
+// `project` in their JSON pass through unchanged.
 func runQueryGraph(t *testing.T, repo *store.Repo, args string) *QueryGraphResult {
 	t.Helper()
-	out, err := QueryGraph(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(args))
+	out, err := QueryGraph(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(withProject(repo.Root(), args)))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -173,7 +177,7 @@ func TestQueryGraph_DefaultsAndValidation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := QueryGraph(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(tc.args))
+			_, err := QueryGraph(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), tc.args)))
 			if tc.wantErr == "" {
 				// Just exercise the call — bad-from-id may resolve to
 				// "cannot locate" or a parse error; both are valid.
@@ -189,18 +193,18 @@ func TestQueryGraph_DefaultsAndValidation(t *testing.T) {
 	}
 
 	t.Run("depth 0 uses default", func(t *testing.T) {
-		_, err := QueryGraph(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{
+		_, err := QueryGraph(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), `{
 			"from":"meth:auth.Alpha.Ping","follow":["callees"],"depth":0
-		}`))
+		}`)))
 		if err != nil {
 			t.Fatalf("depth:0 should default to 2, got error: %v", err)
 		}
 	})
 
 	t.Run("limit 0 uses default", func(t *testing.T) {
-		_, err := QueryGraph(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{
+		_, err := QueryGraph(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), `{
 			"from":"meth:auth.Alpha.Ping","follow":["callees"],"limit":0
-		}`))
+		}`)))
 		if err != nil {
 			t.Fatalf("limit:0 should default to 100, got error: %v", err)
 		}
@@ -213,7 +217,7 @@ func TestQueryGraph_DefaultsAndValidation(t *testing.T) {
 			seedJSON[i] = fmt.Sprintf(`"fn:auth.Fn%d"`, i)
 		}
 		args := `{"seeds":[` + strings.Join(seedJSON, ",") + `],"follow":["callers"]}`
-		_, err := QueryGraph(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(args))
+		_, err := QueryGraph(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(withProject(r.Root(), args)))
 		if err == nil {
 			t.Fatalf("expected cap error, got nil")
 		}

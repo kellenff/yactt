@@ -194,6 +194,22 @@ func TestTreeOverview_DeprecatedRepoAlias(t *testing.T) {
 	}
 }
 
+// TestTreeOverview_DeprecatedRepoAlias_AcceptsAlreadyURI pins the
+// shape the PR-54 review caught: when the deprecated `repo` field
+// already carries a file:// URI (because an older client upgraded
+// its serializer first), the handler must pass it through verbatim
+// instead of wrapping it a second time. Without the pass-through
+// the value becomes "file://file:///abs/path" which project.ParseRef
+// rejects with ErrUnsupportedScheme.
+func TestTreeOverview_DeprecatedRepoAlias_AcceptsAlreadyURI(t *testing.T) {
+	fx := loadFixtureReg(t)
+	handler := TreeOverview(fx.reg)
+	if _, err := handler(context.Background(),
+		json.RawMessage(`{"repo":"`+fx.projectURI+`","depth":1}`)); err != nil {
+		t.Fatalf("tree_overview with already-URI repo: %v", err)
+	}
+}
+
 // countNodes walks the whole tree. Used to compare truncated vs full outputs.
 func countNodes(n TreeOverviewResult) int {
 	total := 1

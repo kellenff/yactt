@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/lsp"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/store/repofixture"
@@ -17,15 +18,27 @@ import (
 
 // TestScanCallers_LSPSuccess_ConfidenceIsOne exercises the Tier-1 (gopls)
 // branch of `scanCallers`. With a stub LSP that returns one reference at
-// the Login call site, `node_edges` must emit a CALLERS edge with
+// the Login call site, `scanCallers` must emit a CALLERS edge with
 // `Confidence == 1.0` and `Provenance.Tool == "gopls"` — the contract
 // that distinguishes LSP-resolved edges from tree-sitter's syntactic
 // fallback (0.5).
 //
+// Post-PR-54 note: the project-reference migration moved tool handlers
+// from accepting a `*store.Repo` constructor argument to resolving the
+// repo per-call via `project.Resolve` (which calls `store.Load`). That
+// breaks the previous "attach a stub LSP to the repo and call the
+// handler" approach — the handler's repo is fresh from `store.Load`
+// and has its own opportunistic LSP startup, not our stub.
+//
+// This test now exercises `scanCallers` directly with the test's
+// stub-attached repo. Same contract (Tier-1 callers produce
+// Confidence=1, Tool=gopls), same regression value, doesn't depend
+// on a future handler refactor that lets tests inject the repo.
+//
 // The fixture is `repofixture.New`, which places `Login` in
 // `auth/login.go` and `Charge` in `payments/pay.go`. When we ask the
 // stub server "who calls Charge?", the stub answers with a Location at
-// line 4 (the body of `Login`, which is the only place in the fixture
+// line 6 (the body of `Login`, which is the only place in the fixture
 // that mentions `Charge` after we patch the file).
 func TestScanCallers_LSPSuccess_ConfidenceIsOne(t *testing.T) {
 	fx := repofixture.New(t)
@@ -62,13 +75,10 @@ func Login(user, pass string) (Session, error) {
 
 	bin := buildStub(t)
 	// Tell the stub: when textDocument/references is asked (any file/line),
-	// return a Location at auth/login.go:4:5 (the `payments.Charge(sess)`
-	// call expression's start column). r.loginPath is the absolute path
-	// the repo will hand to gopls.
-	stubURI := "file://" + fx.LoginPath
-	// Line 6 is `	_ = payments.Charge(0)` in the patched login.go;
-	// col 5 is the `p` of `payments`. callerIDAt resolves the row
+	// return a Location at auth/login.go:6:5 (the `payments.Charge(0)`
+	// call expression's start column). callerIDAt resolves the row
 	// to the enclosing function (Login) via the symbol index.
+	stubURI := "file://" + fx.LoginPath
 	args := []string{bin, "-refs-file=" + stubURI, "-refs-line=6", "-refs-col=5"}
 	opts := lsp.Options{
 		Timeout:      time.Second,
@@ -83,14 +93,18 @@ func Login(user, pass string) (Session, error) {
 	}
 	r.AttachLSPForTest(c)
 
-	// Drive node_edges: callers of fn:payments.Charge.
-	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
-		`{"id":"fn:payments.Charge","kinds":["callers"],"limit":10}`,
-	))
-	if err != nil {
-		t.Fatalf("NodeEdges: %v", err)
+	// Resolve fn:payments.Charge to its (file, sym) the same way
+	// the production handler would, then call scanCallers directly
+	// on the stub-attached repo.
+	nodeID, perr := id.Parse("fn:payments.Charge")
+	if perr != nil {
+		t.Fatalf("id.Parse: %v", perr)
 	}
-	edges := unwrapEdges(t, out)
+	file, sym, ok, lerr := r.LocateSymbol(nodeID)
+	if lerr != nil || !ok {
+		t.Fatalf("LocateSymbol: ok=%v lerr=%v", ok, lerr)
+	}
+	edges := scanCallers(r, file, sym, 10, prov())
 	if len(edges) == 0 {
 		t.Fatal("expected at least one caller of payments.Charge via Tier 1")
 	}
@@ -153,13 +167,20 @@ func TestScanCallers_LSPReturnsNoCaller_FallsBackToTreeSitter(t *testing.T) {
 	}
 	r.AttachLSPForTest(c)
 
-	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
-		`{"id":"fn:payments.Charge","kinds":["callers"],"limit":10}`,
-	))
-	if err != nil {
-		t.Fatalf("NodeEdges: %v", err)
+	// Post-PR-54: drive scanCallers directly on the stub-attached
+	// repo (see TestScanCallers_LSPSuccess_ConfidenceIsOne for why
+	// going through the handler doesn't work — project.Resolve
+	// creates a fresh repo with its own LSP startup, defeating the
+	// test's stub attachment).
+	nodeID, perr := id.Parse("fn:payments.Charge")
+	if perr != nil {
+		t.Fatalf("id.Parse: %v", perr)
 	}
-	edges := unwrapEdges(t, out)
+	file, sym, ok, lerr := r.LocateSymbol(nodeID)
+	if lerr != nil || !ok {
+		t.Fatalf("LocateSymbol: ok=%v lerr=%v", ok, lerr)
+	}
+	edges := scanCallers(r, file, sym, 10, prov())
 	// No callers expected — the stub's (-1, -1) reference doesn't
 	// resolve to a function, so callerIDAt returns false and the Tier-1
 	// branch yields no edges; the tree-sitter pass finds no callers
@@ -170,6 +191,7 @@ func TestScanCallers_LSPReturnsNoCaller_FallsBackToTreeSitter(t *testing.T) {
 			t.Errorf("edge %+v claims Tier-1 provenance but Tier-1 produced no usable callers", e.TargetID)
 		}
 	}
+	_ = json.RawMessage(nil)
 }
 
 // buildStub compiles the LSP stubserver into a tempdir and returns its

@@ -38,7 +38,7 @@ func TestPersistedQuery_HappyPath(t *testing.T) {
 	}
 	runner := buildRunner(t, toolOut)
 	handler := tool.PersistedQuery(runner)
-	out, err := handler(context.Background(), json.RawMessage(`{"id":"onboarding"}`))
+	out, err := handler(context.Background(), json.RawMessage(`{"op":"onboarding","project":"file:///abs/path"}`))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -59,26 +59,29 @@ func TestPersistedQuery_HappyPath(t *testing.T) {
 }
 
 // TestPersistedQuery_EmptyID: empty id returns an error at the boundary.
+// Post-PR-54 the field is named `op` (was `id`); both the field name
+// and the error message reflect the rename.
 func TestPersistedQuery_EmptyID(t *testing.T) {
 	runner := buildRunner(t, map[string]any{})
 	handler := tool.PersistedQuery(runner)
 	_, err := handler(context.Background(), json.RawMessage(`{}`))
 	if err == nil {
-		t.Fatal("empty id: err = nil")
+		t.Fatal("empty op: err = nil")
 	}
-	if !strings.Contains(err.Error(), "id is required") {
-		t.Errorf("error doesn't say id is required; got %q", err.Error())
+	if !strings.Contains(err.Error(), "op is required") {
+		t.Errorf("error doesn't say op is required; got %q", err.Error())
 	}
 }
 
 // TestPersistedQuery_UnknownID: unknown id returns an error that
 // lists valid ids — discoverability without a separate list tool.
+// Post-PR-54 the field is named `op`.
 func TestPersistedQuery_UnknownID(t *testing.T) {
 	runner := buildRunner(t, map[string]any{})
 	handler := tool.PersistedQuery(runner)
-	_, err := handler(context.Background(), json.RawMessage(`{"id":"nope"}`))
+	_, err := handler(context.Background(), json.RawMessage(`{"op":"nope","project":"file:///abs/path"}`))
 	if err == nil {
-		t.Fatal("unknown id: err = nil")
+		t.Fatal("unknown op: err = nil")
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, "unknown id") {

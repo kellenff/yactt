@@ -484,9 +484,9 @@ export class Child extends Parent {
 	}
 	defer func() { _ = r2.Close() }()
 
-	out3, err := NodeEdges(seedRegFromRepo(t, r2))(context.Background(), json.RawMessage(
+	out3, err := NodeEdges(seedRegFromRepo(t, r2))(context.Background(), json.RawMessage(withProject(r2.Root(),
 		`{"id":"meth:auth.Standalone.method","kinds":["overrides"],"limit":50}`,
-	))
+	)))
 	if err != nil {
 		t.Fatalf("NodeEdges (standalone): %v", err)
 	}
@@ -500,9 +500,9 @@ export class Child extends Parent {
 	// Go method returns nil — Go has no override semantics. Refresh
 	// is a method on User; no OVERRIDES edges even if the user happens
 	// to have a method of the same name elsewhere.
-	out4, err := NodeEdges(seedRegFromRepo(t, r2))(context.Background(), json.RawMessage(
+	out4, err := NodeEdges(seedRegFromRepo(t, r2))(context.Background(), json.RawMessage(withProject(r2.Root(),
 		`{"id":"meth:auth.User.Refresh","kinds":["overrides"],"limit":50}`,
-	))
+	)))
 	if err != nil {
 		t.Fatalf("NodeEdges (Go): %v", err)
 	}
@@ -515,9 +515,9 @@ export class Child extends Parent {
 
 	// A function (no Receiver) emits nil — guard against the dispatch
 	// confusing top-level functions with class methods.
-	out5, err := NodeEdges(seedRegFromRepo(t, r2))(context.Background(), json.RawMessage(
+	out5, err := NodeEdges(seedRegFromRepo(t, r2))(context.Background(), json.RawMessage(withProject(r2.Root(),
 		`{"id":"fn:auth.Login","kinds":["overrides"],"limit":50}`,
-	))
+	)))
 	if err != nil {
 		t.Fatalf("NodeEdges (fn): %v", err)
 	}

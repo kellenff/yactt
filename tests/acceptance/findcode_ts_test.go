@@ -21,8 +21,8 @@ import (
 // The fixture is Go-only, so cross-language coverage lives in the
 // collaboration tests under internal/tool/findcode_tree_sitter_test.go.
 func TestFindCodeAcceptance_TreeSitter(t *testing.T) {
-	loadRepo(t)
-	reg := fixtureRegCache
+	repo := loadRepo(t)
+	reg := seedRegForProject(t, repo.Root())
 	out := callJSON(t, tool.FindCode(reg), `{"pattern":"(call_expression) @c","pattern_kind":"tree_sitter","limit":50}`)
 	env, ok := out.(map[string]any)
 	if !ok {
@@ -55,9 +55,9 @@ func TestFindCodeAcceptance_TreeSitter(t *testing.T) {
 // production handler surfaces a compile failure as a user-readable
 // error rather than a panic or empty result.
 func TestFindCodeAcceptance_TreeSitter_CompileError(t *testing.T) {
-	loadRepo(t)
-	reg := fixtureRegCache
-	_, err := tool.FindCode(reg)(context.Background(), json.RawMessage(`{"project":"file://`+fixtureRepoCache.Root()+`","pattern":"(function_declaration","pattern_kind":"tree_sitter","limit":10}`))
+	repo := loadRepo(t)
+	reg := seedRegForProject(t, repo.Root())
+	_, err := tool.FindCode(reg)(context.Background(), json.RawMessage(`{"project":"file://`+repo.Root()+`","pattern":"(function_declaration","pattern_kind":"tree_sitter","limit":10}`))
 	if err == nil {
 		t.Fatal("expected compile error; got nil")
 	}

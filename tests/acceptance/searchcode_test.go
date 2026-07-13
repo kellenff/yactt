@@ -26,8 +26,8 @@ import (
 // keyed by the enclosing function's NodeID, with matchCount=3 and
 // len(matches)=3.
 func TestSearchCodeAcceptance_Dedup(t *testing.T) {
-	loadRepo(t)
-	reg := fixtureRegCache
+	repo := loadRepo(t)
+	reg := seedRegForProject(t, repo.Root())
 	out := callJSON(t, tool.SearchCode(reg), `{"pattern":"err","pattern_kind":"regex","limit":50}`)
 	env, ok := out.(map[string]any)
 	if !ok {
@@ -75,8 +75,8 @@ func TestSearchCodeAcceptance_Dedup(t *testing.T) {
 // matching anything in that file must surface a group in the `test`
 // bucket — never in `definition`.
 func TestSearchCodeAcceptance_Bucket_Test(t *testing.T) {
-	loadRepo(t)
-	reg := fixtureRegCache
+	repo := loadRepo(t)
+	reg := seedRegForProject(t, repo.Root())
 	// `Login` is referenced inside login_test.go; the group keyed by
 	// the enclosing TestLogin function in that file must land in `test`.
 	out := callJSON(t, tool.SearchCode(reg), `{"pattern":"Login","pattern_kind":"regex","limit":50}`)
@@ -108,8 +108,8 @@ func TestSearchCodeAcceptance_Bucket_Test(t *testing.T) {
 // every answer stamps `Provenance.Tool`. Round-trips through JSON so
 // the assertion matches what MCP clients actually see on the wire.
 func TestSearchCodeAcceptance_Provenance(t *testing.T) {
-	loadRepo(t)
-	reg := fixtureRegCache
+	repo := loadRepo(t)
+	reg := seedRegForProject(t, repo.Root())
 	out := callAsMap(t, tool.SearchCode(reg), `{"pattern":"Login","pattern_kind":"regex","limit":10}`)
 	m, ok := out.(map[string]any)
 	if !ok {

@@ -1,12 +1,11 @@
 package tool
 
 import (
-	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/kellenff/yactt/internal/registry"
+	"github.com/kellenff/yactt/internal/registry/registrytest"
+	"github.com/kellenff/yactt/internal/store/repofixture"
 )
 
 // TestJoinDotted covers the four-cell truth table of joinDotted:
@@ -61,52 +60,30 @@ func TestBaseName_LastSegment(t *testing.T) {
 
 // TestRelPath_TrimsRootPrefix mirrors the relPath helper: it strips the
 // root prefix and the leading separator.
+
 // seedRegForRoot creates a fresh registry containing one entry for the
-// given absolute root path. Used by per-tool unit tests that load a
-// repo via store.Load and then need a *registry.Registry to call the
-// migrated tool factories with. The tool factory takes the registry
-// (not the repo); the resolved repo is loaded by project.Resolve
-// inside the handler.
-//
-// Ponytail: live in helpers_test.go so wire_shape_test.go,
-// wire_shape_bench_test.go, and the per-tool test files can all
-// share one definition.
+// given absolute root path. Thin wrapper around registrytest.Seed
+// kept here for backward compatibility with the dozen-plus tool
+// test files that already call it.
 func seedRegForRoot(tb testing.TB, root string) *registry.Registry {
 	tb.Helper()
-	dir := tb.TempDir()
-	reg := registry.New(filepath.Join(dir, "projects.json"))
-	if err := reg.Upsert(registry.Entry{
-		Name:      filepath.Base(root),
-		Path:      root,
-		IndexedAt: time.Now().UTC(),
-		Files:     0,
-	}); err != nil {
-		tb.Fatalf("seedRegForRoot: %v", err)
-	}
-	return reg
+	return registrytest.Seed(tb, root)
 }
 
 // seedRegFromRepo is the convenience wrapper that takes a loaded
-// *store.Repo. Use it right after a `r, _, err := store.Load(...)`
-// call in tests.
+// *store.Repo. Thin wrapper around registrytest.SeedFromRepo.
 func seedRegFromRepo(tb testing.TB, repo interface{ Root() string }) *registry.Registry {
-	return seedRegForRoot(tb, repo.Root())
+	tb.Helper()
+	return registrytest.SeedFromRepo(tb, repo)
 }
 
 // withProject prepends a `project` (file:// URI) field to the args
-// JSON if the field is missing. Mirrors what every per-tool handler
-// does at the start of a request: ensure `project` is set. Used by
-// the test helpers (callSnippet, findSymbols, etc.) so the per-tool
-// args JSON in the test bodies doesn't have to know the tempdir
-// path up front.
-//
-// Args are expected to be a JSON object literal starting with `{`.
-// The returned string is also a JSON object literal.
+// JSON if the field is missing. Thin wrapper around
+// repofixture.WithProject — the canonical implementation lives
+// next to the Fixture type so test code that has a Fixture handle
+// can also use fx.WithProject(args) if it wants to.
 func withProject(root, args string) string {
-	if strings.Contains(args, `"project"`) {
-		return args
-	}
-	return `{"project":"file://` + root + `",` + args[1:]
+	return repofixture.WithProject(root, args)
 }
 
 func TestRelPath_TrimsRootPrefix(t *testing.T) {
