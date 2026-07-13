@@ -27,7 +27,7 @@ func loadQueryGraphRepo(t *testing.T) *store.Repo {
 // runQueryGraph drives the handler with raw JSON and type-asserts.
 func runQueryGraph(t *testing.T, repo *store.Repo, args string) *QueryGraphResult {
 	t.Helper()
-	out, err := QueryGraph(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(args))
+	out, err := QueryGraph(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(args))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}

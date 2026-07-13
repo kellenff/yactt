@@ -392,6 +392,7 @@ func Use() int { return 99 }
 `,
 		},
 	)
+	reg := seededReg(t, r.Root())
 
 	runOne := func(t *testing.T, args string) {
 		t.Helper()
@@ -483,7 +484,7 @@ func TestWireShape_RegistryTools(t *testing.T) {
 
 	tools := []mcp.ToolDef{
 		{Name: "list_projects", InputSchema: ListProjectsSchema, OutputSchema: ListProjectsOutputSchema, Handler: ListProjects(reg)},
-		{Name: "index_repository", InputSchema: IndexRepositorySchema, OutputSchema: IndexRepositoryOutputSchema, Handler: IndexRepository(reg)},
+		{Name: "index_repository", InputSchema: IndexRepositorySchema, OutputSchema: IndexRepositoryOutputSchema, Handler: IndexRepository(reg, nil, nil)},
 		{Name: "index_status", InputSchema: IndexStatusSchema, OutputSchema: IndexStatusOutputSchema, Handler: IndexStatus(reg)},
 		{Name: "delete_project", InputSchema: DeleteProjectSchema, OutputSchema: DeleteProjectOutputSchema, Handler: DeleteProject(reg)},
 	}

@@ -83,12 +83,21 @@ func writeFiles(t *testing.T, root string, files map[string]string) {
 
 // callDC is the typed-call helper for detect_changes. Mirrors callSnippet
 // in getcodesnippet_test.go — drives the handler in-process so the test
-// fails fast on handler errors and gives a typed result.
+// fails fast on handler errors and gives a typed result. The `project`
+// field is prepended to whatever args the caller passes; callers that
+// already include a `"project"` field are passed through unchanged
+// (the caller's project URI wins).
 func callDC(t *testing.T, repo *store.Repo, args string) *DetectChangesResult {
 	t.Helper()
-	out, err := DetectChanges(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(args))
+	var fullArgs string
+	if strings.Contains(args, `"project"`) {
+		fullArgs = args
+	} else {
+		fullArgs = `{"project":"file://` + repo.Root() + `",` + args[1:]
+	}
+	out, err := DetectChanges(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(fullArgs))
 	if err != nil {
-		t.Fatalf("handler: %v (args=%s)", err, args)
+		t.Fatalf("handler: %v (args=%s)", err, fullArgs)
 	}
 	r, ok := out.(*DetectChangesResult)
 	if !ok {
@@ -137,7 +146,7 @@ func Charge(amount int) error {
 	}
 	r := writeGitRepo(t, v1, v2)
 
-	out := callDC(t, r, `{"base":"HEAD~1","head":"HEAD"}`)
+	out := callDC(t, r, `{"project":"file://`+r.Root()+`","base":"HEAD~1","head":"HEAD"}`)
 
 	if out.Base != "HEAD~1" || out.Head != "HEAD" {
 		t.Errorf("refs: base=%q head=%q, want HEAD~1/HEAD", out.Base, out.Head)
@@ -201,7 +210,7 @@ func Use() {
 	}
 	r := writeGitRepo(t, v1, v2)
 
-	out := callDC(t, r, `{"base":"HEAD~1","head":"HEAD"}`)
+	out := callDC(t, r, `{"project":"file://`+r.Root()+`","base":"HEAD~1","head":"HEAD"}`)
 
 	// Expect two changes: one file-only (the import block) and one
 	// for the function body.
@@ -271,7 +280,7 @@ func Use() int { return 2 }
 // touching git.
 func TestDetectChanges_BaseAndSinceRejected(t *testing.T) {
 	r := loadTestRepo(t)
-	_, err := DetectChanges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"base":"HEAD~1","since":"HEAD~1"}`))
+	_, err := DetectChanges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"project":"file://`+r.Root()+`","base":"HEAD~1","since":"HEAD~1"}`))
 	if err == nil {
 		t.Fatal("expected error when both base and since are set")
 	}
@@ -285,7 +294,7 @@ func TestDetectChanges_BaseAndSinceRejected(t *testing.T) {
 // the git subprocess.
 func TestDetectChanges_RequiresRef(t *testing.T) {
 	r := loadTestRepo(t)
-	_, err := DetectChanges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{}`))
+	_, err := DetectChanges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"project":"file://`+r.Root()+`"}`))
 	if err == nil {
 		t.Fatal("expected error when neither base nor since is set")
 	}
@@ -301,7 +310,7 @@ func TestDetectChanges_RequiresRef(t *testing.T) {
 func TestDetectChanges_NotGitRepo(t *testing.T) {
 	gitAvailable(t)
 	r := loadTestRepo(t)
-	_, err := DetectChanges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"base":"HEAD~1","head":"HEAD"}`))
+	_, err := DetectChanges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"project":"file://`+r.Root()+`","base":"HEAD~1","head":"HEAD"}`))
 	if err == nil {
 		t.Fatal("expected error on non-git repo; got nil")
 	}
@@ -388,7 +397,7 @@ func NewOne() int { return 2 }
 	}
 	r := writeGitRepo(t, v1, v2)
 
-	out := callDC(t, r, `{"base":"HEAD~1","head":"HEAD"}`)
+	out := callDC(t, r, `{"project":"file://`+r.Root()+`","base":"HEAD~1","head":"HEAD"}`)
 
 	if len(out.Files) != 1 {
 		t.Fatalf("files: got %d, want 1: %+v", len(out.Files), out.Files)
@@ -668,7 +677,7 @@ func Z() int {
 	}
 	r := writeGitRepo(t, v1, v2)
 
-	out := callDC(t, r, `{"base":"HEAD~1","head":"HEAD"}`)
+	out := callDC(t, r, `{"project":"file://`+r.Root()+`","base":"HEAD~1","head":"HEAD"}`)
 	ids := []string{}
 	for _, c := range out.Changes {
 		if c.Symbol != nil {

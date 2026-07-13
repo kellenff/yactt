@@ -53,7 +53,7 @@ func callFindCode(t *testing.T, repo *store.Repo, argsJSON string) []FindCodeMat
 // TypeScript files in the fixture. Asserts ≥1 hit per expected file.
 func TestFindCode_TreeSitter_CallExpression(t *testing.T) {
 	repo := loadRepoFromFixture(t)
-	matches := callFindCode(t, repo, `{"pattern":"(call_expression) @c","pattern_kind":"tree_sitter","limit":50}`)
+	matches := callFindCode(t, repo, `{"project":"file://` + repo.Root() + `","pattern":"(call_expression) @c","pattern_kind":"tree_sitter","limit":50}`)
 
 	if len(matches) == 0 {
 		t.Fatalf("expected matches for (call_expression); got 0")
@@ -89,7 +89,7 @@ func TestFindCode_TreeSitter_CallExpression(t *testing.T) {
 // when include_context=true.
 func TestFindCode_TreeSitter_IncludeContext(t *testing.T) {
 	repo := loadRepoFromFixture(t)
-	matches := callFindCode(t, repo, `{"pattern":"(call_expression) @c","pattern_kind":"tree_sitter","include_context":true,"limit":10}`)
+	matches := callFindCode(t, repo, `{"project":"file://` + repo.Root() + `","pattern":"(call_expression) @c","pattern_kind":"tree_sitter","include_context":true,"limit":10}`)
 
 	if len(matches) == 0 {
 		t.Fatalf("expected matches; got 0")
@@ -112,7 +112,7 @@ func TestFindCode_TreeSitter_IncludeContext(t *testing.T) {
 // limit (issue #33).
 func TestFindCode_TreeSitter_Limit(t *testing.T) {
 	repo := loadRepoFromFixture(t)
-	out, err := FindCode(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(`{"pattern":"(call_expression) @c","pattern_kind":"tree_sitter","limit":2}`))
+	out, err := FindCode(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(`{"project":"file://` + repo.Root() + `","pattern":"(call_expression) @c","pattern_kind":"tree_sitter","limit":2}`))
 	if err != nil {
 		t.Fatalf("find_code: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestFindCode_TreeSitter_Limit(t *testing.T) {
 // not an error.
 func TestFindCode_TreeSitter_EmptyResult(t *testing.T) {
 	repo := loadRepoFromFixture(t)
-	matches := callFindCode(t, repo, `{"pattern":"(for_statement) @fs","pattern_kind":"tree_sitter","limit":10}`)
+	matches := callFindCode(t, repo, `{"project":"file://` + repo.Root() + `","pattern":"(for_statement) @fs","pattern_kind":"tree_sitter","limit":10}`)
 	if len(matches) != 0 {
 		t.Fatalf("expected empty matches; got %d (%+v)", len(matches), fileNames(matches))
 	}
@@ -149,7 +149,7 @@ func TestFindCode_TreeSitter_EmptyResult(t *testing.T) {
 // canonical "invalid tree-sitter query" prefix.
 func TestFindCode_TreeSitter_CompileError(t *testing.T) {
 	repo := loadRepoFromFixture(t)
-	_, err := FindCode(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(`{"pattern":"(function_declaration","pattern_kind":"tree_sitter","limit":10}`))
+	_, err := FindCode(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(`{"project":"file://` + repo.Root() + `","pattern":"(function_declaration","pattern_kind":"tree_sitter","limit":10}`))
 	if err == nil {
 		t.Fatalf("expected compile error; got nil")
 	}
@@ -169,7 +169,7 @@ func TestFindCode_TreeSitter_CompileError(t *testing.T) {
 // Both must surface.
 func TestFindCode_TreeSitter_CrossLanguage(t *testing.T) {
 	repo := loadRepoFromFixture(t)
-	matches := callFindCode(t, repo, `{"pattern":"(call_expression) @c","pattern_kind":"tree_sitter","limit":50}`)
+	matches := callFindCode(t, repo, `{"project":"file://` + repo.Root() + `","pattern":"(call_expression) @c","pattern_kind":"tree_sitter","limit":50}`)
 	var seenGo, seenTS bool
 	for _, m := range matches {
 		switch {
@@ -201,7 +201,7 @@ func TestFindCode_TreeSitter_CrossLanguage(t *testing.T) {
 // (the structural one) without predicates — empirically observed.
 func TestFindCode_TreeSitter_PredicateEq_Match(t *testing.T) {
 	repo := loadRepoFromFixture(t)
-	matches := callFindCode(t, repo, `{"pattern":"(call_expression function: (identifier) @n (#eq? @n \"Charge\"))","pattern_kind":"tree_sitter","limit":50}`)
+	matches := callFindCode(t, repo, `{"project":"file://` + repo.Root() + `","pattern":"(call_expression function: (identifier) @n (#eq? @n \"Charge\"))","pattern_kind":"tree_sitter","limit":50}`)
 	if len(matches) == 0 {
 		t.Fatalf("expected Charge call sites; got 0")
 	}
@@ -218,7 +218,7 @@ func TestFindCode_TreeSitter_PredicateEq_Match(t *testing.T) {
 // node type, valid capture) but the predicate excludes every site.
 func TestFindCode_TreeSitter_PredicateEq_NoMatch(t *testing.T) {
 	repo := loadRepoFromFixture(t)
-	matches := callFindCode(t, repo, `{"pattern":"(call_expression function: (identifier) @n (#eq? @n \"DoesNotExistAnywhere\"))","pattern_kind":"tree_sitter","limit":50}`)
+	matches := callFindCode(t, repo, `{"project":"file://` + repo.Root() + `","pattern":"(call_expression function: (identifier) @n (#eq? @n \"DoesNotExistAnywhere\"))","pattern_kind":"tree_sitter","limit":50}`)
 	if len(matches) != 0 {
 		t.Fatalf("expected predicate to filter every match; got %d (%+v)", len(matches), fileNames(matches))
 	}
@@ -230,7 +230,7 @@ func TestFindCode_TreeSitter_PredicateEq_NoMatch(t *testing.T) {
 // Beta.Ping; the Charge calls in the fixture must be filtered out.
 func TestFindCode_TreeSitter_PredicateEq_PartialFilter(t *testing.T) {
 	repo := loadRepoFromFixture(t)
-	matches := callFindCode(t, repo, `{"pattern":"(call_expression function: (identifier) @n (#eq? @n \"Refund\"))","pattern_kind":"tree_sitter","limit":50}`)
+	matches := callFindCode(t, repo, `{"project":"file://` + repo.Root() + `","pattern":"(call_expression function: (identifier) @n (#eq? @n \"Refund\"))","pattern_kind":"tree_sitter","limit":50}`)
 	if len(matches) == 0 {
 		t.Fatalf("expected at least one Refund call site; got 0")
 	}
@@ -247,7 +247,7 @@ func TestFindCode_TreeSitter_PredicateEq_PartialFilter(t *testing.T) {
 // reject Refund.
 func TestFindCode_TreeSitter_PredicateMatch(t *testing.T) {
 	repo := loadRepoFromFixture(t)
-	matches := callFindCode(t, repo, `{"pattern":"(call_expression function: (identifier) @n (#match? @n \"^Ch\"))","pattern_kind":"tree_sitter","limit":50}`)
+	matches := callFindCode(t, repo, `{"project":"file://` + repo.Root() + `","pattern":"(call_expression function: (identifier) @n (#match? @n \"^Ch\"))","pattern_kind":"tree_sitter","limit":50}`)
 	if len(matches) == 0 {
 		t.Fatalf("expected at least one Ch-prefixed call site; got 0")
 	}

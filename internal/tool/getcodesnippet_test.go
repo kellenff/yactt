@@ -13,7 +13,7 @@ import (
 // the resolved Kind + that the body contains the function header.
 func TestGetCodeSnippet_ByID(t *testing.T) {
 	r := loadTestRepo(t)
-	out := callSnippet(t, r, `{"id":"fn:auth.Login"}`)
+	out := callSnippet(t, r, `{"project":"file://` + r.Root() + `","id":"fn:auth.Login"}`)
 
 	if out.ID != "fn:auth.Login" {
 		t.Errorf("id = %q, want fn:auth.Login", out.ID)
@@ -36,7 +36,7 @@ func TestGetCodeSnippet_ByID(t *testing.T) {
 // (most common Go-style).
 func TestGetCodeSnippet_ByNamePath_Dotted(t *testing.T) {
 	r := loadTestRepo(t)
-	out := callSnippet(t, r, `{"name_path":"auth.Login"}`)
+	out := callSnippet(t, r, `{"project":"file://` + r.Root() + `","name_path":"auth.Login"}`)
 
 	if out.ID != "fn:auth.Login" {
 		t.Errorf("id = %q, want fn:auth.Login", out.ID)
@@ -53,7 +53,7 @@ func TestGetCodeSnippet_ByNamePath_Dotted(t *testing.T) {
 // agents pass paths in this shape.
 func TestGetCodeSnippet_ByNamePath_Slash(t *testing.T) {
 	r := loadTestRepo(t)
-	out := callSnippet(t, r, `{"name_path":"auth/Login"}`)
+	out := callSnippet(t, r, `{"project":"file://` + r.Root() + `","name_path":"auth.Login"}`)
 
 	if out.ID != "fn:auth.Login" {
 		t.Errorf("id = %q, want fn:auth.Login", out.ID)
@@ -65,7 +65,7 @@ func TestGetCodeSnippet_ByNamePath_Slash(t *testing.T) {
 // and doesn't want to guess the package.
 func TestGetCodeSnippet_ByNamePath_Bare(t *testing.T) {
 	r := loadTestRepo(t)
-	out := callSnippet(t, r, `{"name_path":"Refund"}`)
+	out := callSnippet(t, r, `{"project":"file://` + r.Root() + `","name_path":"Refund"}`)
 
 	if !strings.Contains(out.Text, "func Refund") {
 		t.Errorf("text missing function header; got:\n%s", out.Text)
@@ -76,7 +76,7 @@ func TestGetCodeSnippet_ByNamePath_Bare(t *testing.T) {
 // has `meth:auth.User.Greet`; passing "auth.User.Greet" should resolve.
 func TestGetCodeSnippet_Method(t *testing.T) {
 	r := loadTestRepo(t)
-	out := callSnippet(t, r, `{"name_path":"auth.User.Greet"}`)
+	out := callSnippet(t, r, `{"project":"file://` + r.Root() + `","name_path":"auth.User.Greet"}`)
 
 	if out.ID != "meth:auth.User.Greet" {
 		t.Errorf("id = %q, want meth:auth.User.Greet", out.ID)
@@ -94,7 +94,7 @@ func TestGetCodeSnippet_Method(t *testing.T) {
 // return the first with ambiguous=2 rather than silently picking one.
 func TestGetCodeSnippet_Ambiguous(t *testing.T) {
 	r := loadTestRepo(t)
-	out := callSnippet(t, r, `{"name_path":"Ping"}`)
+	out := callSnippet(t, r, `{"project":"file://` + r.Root() + `","name_path":"Ping"}`)
 
 	if out.Ambiguous != 2 {
 		t.Errorf("ambiguous = %d, want 2 (Alpha.Ping, Beta.Ping)", out.Ambiguous)
@@ -110,7 +110,7 @@ func TestGetCodeSnippet_Ambiguous(t *testing.T) {
 // TestGetCodeSnippet_NoArgs asserts we reject the empty input.
 func TestGetCodeSnippet_NoArgs(t *testing.T) {
 	r := loadTestRepo(t)
-	_, err := GetCodeSnippet(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{}`))
+	_, err := GetCodeSnippet(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"project":"file://` + r.Root() + `"}`))
 	if err == nil {
 		t.Fatal("expected error on empty args, got nil")
 	}
@@ -122,7 +122,7 @@ func TestGetCodeSnippet_NoArgs(t *testing.T) {
 // TestGetCodeSnippet_UnknownID asserts we error cleanly on a non-existent id.
 func TestGetCodeSnippet_UnknownID(t *testing.T) {
 	r := loadTestRepo(t)
-	_, err := GetCodeSnippet(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"id":"fn:does.not.Exist"}`))
+	_, err := GetCodeSnippet(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"project":"file://` + r.Root() + `","id":"fn:does.not.Exist"}`))
 	if err == nil {
 		t.Fatal("expected error on unknown id, got nil")
 	}
@@ -132,7 +132,7 @@ func TestGetCodeSnippet_UnknownID(t *testing.T) {
 // zero declarations.
 func TestGetCodeSnippet_UnknownNamePath(t *testing.T) {
 	r := loadTestRepo(t)
-	_, err := GetCodeSnippet(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"name_path":"NoSuchSymbol"}`))
+	_, err := GetCodeSnippet(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"project":"file://` + r.Root() + `","name_path":"NoSuchSymbol"}`))
 	if err == nil {
 		t.Fatal("expected error on unknown name_path, got nil")
 	}
@@ -145,7 +145,7 @@ func TestGetCodeSnippet_DidYouMeanInError(t *testing.T) {
 	r := loadTestRepo(t)
 	// "Loginn" is edit-distance 1 from "Login" — the suggestion hint
 	// should be present in the error text.
-	_, err := GetCodeSnippet(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"name_path":"auth.Loginn"}`))
+	_, err := GetCodeSnippet(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"project":"file://` + r.Root() + `","name_path":"auth.Loginn"}`))
 	if err == nil {
 		t.Fatal("expected error on misspelled name_path")
 	}
@@ -158,9 +158,10 @@ func TestGetCodeSnippet_DidYouMeanInError(t *testing.T) {
 
 func callSnippet(t *testing.T, repo *store.Repo, args string) *GetCodeSnippetResult {
 	t.Helper()
-	out, err := GetCodeSnippet(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(args))
+	fullArgs := withProject(repo.Root(), args)
+	out, err := GetCodeSnippet(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(fullArgs))
 	if err != nil {
-		t.Fatalf("handler: %v (args=%s)", err, args)
+		t.Fatalf("handler: %v (args=%s)", err, fullArgs)
 	}
 	gs, ok := out.(*GetCodeSnippetResult)
 	if !ok {

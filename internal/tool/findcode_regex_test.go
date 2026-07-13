@@ -23,7 +23,7 @@ func TestFindCode_Regex_PatternLengthCap(t *testing.T) {
 
 	// 8 KB of `a` — well past the 4 KB cap.
 	huge := strings.Repeat("a", 8*1024)
-	args := `{"pattern":"` + huge + `","pattern_kind":"regex","limit":1}`
+	args := `{"project":"file://` + r.Root() + `","pattern":"` + huge + `","pattern_kind":"regex","limit":1}`
 	out, err := FindCode(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(args))
 	if err == nil {
 		t.Fatalf("expected error on %d-byte pattern, got %v", len(huge), out)
@@ -40,7 +40,7 @@ func TestFindCode_Regex_PatternAtCap(t *testing.T) {
 
 	// maxRegexPatternBytes-1 alphanumerics: compiles, runs, finds nothing.
 	at := strings.Repeat("a", maxRegexPatternBytes-1)
-	args := `{"pattern":"` + at + `","pattern_kind":"regex","limit":1}`
+	args := `{"project":"file://` + r.Root() + `","pattern":"` + at + `","pattern_kind":"regex","limit":1}`
 	if _, err := FindCode(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(args)); err != nil {
 		// The repo's on-disk corpus is small enough that the long
 		// pattern returns zero matches without error. If we ever break
