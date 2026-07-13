@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/tool"
 )
@@ -88,9 +90,10 @@ func dispatch(b *testing.B, h func(ctx context.Context, args json.RawMessage) (a
 // BenchmarkToolTreeOverview — the orientation ask. Depth 2 is what a
 // real "what's in this repo" prompt requests.
 func BenchmarkToolTreeOverview(b *testing.B) {
-	root, repo := inlineFixtureRepo(b)
-	h := tool.TreeOverview(repo)
-	args := `{"repo":"` + root + `","depth":2}`
+	root, _ := inlineFixtureRepo(b)
+	reg := seedInlineReg(b, root)
+	h := tool.TreeOverview(reg)
+	args := `{"project":"file://` + root + `","depth":2}`
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dispatch(b, h, args)
@@ -180,4 +183,23 @@ func BenchmarkToolFindReferencingSymbols(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		dispatch(b, h, args)
 	}
+}
+
+// seedInlineReg creates a temp registry containing one entry for the
+// given absolute root. Used by benchmarks for migrated tools that
+// now resolve project URIs via project.Resolve instead of taking a
+// closure *store.Repo.
+func seedInlineReg(b *testing.B, root string) *registry.Registry {
+	b.Helper()
+	dir := b.TempDir()
+	reg := registry.New(filepath.Join(dir, "projects.json"))
+	if err := reg.Upsert(registry.Entry{
+		Name:      filepath.Base(root),
+		Path:      root,
+		IndexedAt: time.Now().UTC(),
+		Files:     0,
+	}); err != nil {
+		b.Fatalf("seedInlineReg: %v", err)
+	}
+	return reg
 }

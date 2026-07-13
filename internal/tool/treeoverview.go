@@ -16,16 +16,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/entity"
+	"github.com/kellenff/yactt/internal/project"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 )
 
 // TreeOverviewArgs is the typed boundary input for tree_overview.
+// Project is the new file:// URI; Repo is a deprecated raw-path
+// alias retained for one release.
 type TreeOverviewArgs struct {
+	Project       string   `json:"project"`
 	Repo          string   `json:"repo"`
 	Scope         string   `json:"scope"`
 	Depth         int      `json:"depth"`
@@ -63,13 +69,16 @@ var maxResponseBytes = 16 * 1024
 // budget causes the tree to be cut short. Constant so tests can match exactly.
 const truncatedWarning = "tree_overview: response truncated at 16KB budget; reduce depth or scope to see more"
 
-// TreeOverviewSchema is the JSON Schema for tree_overview. Mirrors the
-// design's spec in §4.1.
+// TreeOverviewSchema is the JSON Schema for tree_overview.
+// `project` is the new required file:// URI; the legacy `repo`
+// field is accepted as a deprecated alias for one release and
+// will be removed in the next release.
 var TreeOverviewSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "repo":           { "type": "string", "description": "Absolute path or repo alias" },
+    "project":        { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path). Must be in the registry; call index_repository first." },
+    "repo":           { "type": "string", "description": "DEPRECATED alias for ` + "`project`" + ` (file:// URI). Will be removed in the next release." },
     "scope":          { "type": "string", "description": "Optional absolute path under repo root; narrows the walk to a package or subdirectory. Mirrors search.Search's q.Scope." },
     "depth":          { "type": "integer", "default": 2, "minimum": 1, "maximum": 6 },
     "include_layers": {
@@ -78,7 +87,7 @@ var TreeOverviewSchema = json.RawMessage(`{
       "default": ["summary", "structure"]
     }
   },
-  "required": ["repo"],
+  "required": ["project"],
   "additionalProperties": false
 }`)
 
@@ -102,20 +111,28 @@ var TreeOverviewOutputSchema = json.RawMessage(`{
 }`)
 
 // TreeOverview returns a Handler that produces the top-N levels of the tree
-// rooted at `repo`, with only the requested layer set populated.
-func TreeOverview(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
+// rooted at `args.Project`, with only the requested layer set populated.
+// The `reg` argument is used to resolve the `project` (file:// URI) to a
+// loaded *store.Repo via project.Resolve.
+func TreeOverview(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a TreeOverviewArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid tree_overview args: %w", err)
 		}
-		// Empty `repo` is treated as "use the server's rooted repo" — the CLI
-		// already opened one, so the field is more of a label than a path.
-		// We still call it out if the design requires a literal repo: a
-		// contract test elsewhere asserts the schema lists `repo` as required.
-		if repo == nil {
-			return nil, fmt.Errorf("tree_overview: no repo bound to handler")
+		// Deprecated alias: if Project is empty and Repo is set,
+		// wrap Repo as a file:// URI and emit a stderr notice.
+		// Project wins when both are present.
+		if a.Project == "" && a.Repo != "" {
+			fmt.Fprintf(os.Stderr,
+				"deprecation: tree_overview's 'repo' field is renamed to 'project' (file:// URI); will be removed in the next release\n")
+			a.Project = "file://" + a.Repo
 		}
+		repo, err := project.Resolve(reg, a.Project)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = repo.Close() }()
 		if a.Depth <= 0 {
 			a.Depth = 2
 		}

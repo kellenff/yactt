@@ -216,14 +216,19 @@ func perToolArgBoundary(t *testing.T, name string, h func(ctx context.Context, a
 
 func TestTreeOverviewBoundary(t *testing.T) {
 	perToolArgBoundary(t, "tree_overview", tool.TreeOverview(nil), []boundaryTest{
-		{name: "no_repo_bound", args: `{}`, want: "no repo bound"},
-		{name: "empty_repo_string", args: `{"repo":""}`, want: "no repo bound"},
+		// After the project-reference migration, tree_overview takes a
+		// *registry.Registry (nil here) and resolves args.Project via
+		// project.ParseRef. Empty project → ErrEmpty before the registry
+		// is touched, so the boundary error is "project: empty reference"
+		// rather than the legacy "no repo bound". Legacy `repo` field
+		// is also rejected for the same reason (empty → empty reference).
+		{name: "no_project", args: `{}`, want: "project: empty reference"},
+		{name: "empty_project", args: `{"project":""}`, want: "project: empty reference"},
+		{name: "legacy_empty_repo", args: `{"repo":""}`, want: "project: empty reference"},
 	})
 	// ponytail: scope validation lives behind a real repo, so it's covered
 	// by TestBuildOverviewTree_ScopeOutsideRepoErrors in treeoverview_test.go
-	// rather than this nil-repo boundary suite. Adding a scope case here
-	// would just hit the no-repo-bound guard first and never reach the
-	// scope check.
+	// rather than this nil-repo boundary suite.
 }
 
 func TestGetNodeBoundary(t *testing.T) {

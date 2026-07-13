@@ -1,11 +1,16 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 )
 
@@ -19,20 +24,58 @@ func withBudget(t *testing.T, n int) {
 	t.Cleanup(func() { maxResponseBytes = prev })
 }
 
-// loadFixtureRepo returns the shared acceptance fixture, cached.
-func loadFixtureRepo(t *testing.T) *store.Repo {
+// fixtureCtx holds everything tree_overview tests need from the
+// shared acceptance fixture: the registry the handler is bound to,
+// the project URI to pass in args, and the absolute root path the
+// resolver will load.
+type fixtureCtx struct {
+	reg        *registry.Registry
+	projectURI string
+	rootPath   string
+}
+
+// loadFixtureReg seeds a fresh registry with the shared acceptance
+// fixture and returns it together with the project URI and absolute
+// root path. Tree_overview handlers now take a *registry.Registry
+// and resolve the project URI on every call, so this helper is the
+// new entry point for tests that used to call loadFixtureRepo.
+func loadFixtureReg(t *testing.T) fixtureCtx {
 	t.Helper()
-	repo, _, err := store.Load("../../tests/fixtures/sample-go")
+	rootPath, err := filepath.Abs("../../tests/fixtures/sample-go")
+	if err != nil {
+		t.Fatalf("abs fixture: %v", err)
+	}
+	// One Load just to walk the tree; we close it before seeding
+	// the registry because the handler will Load again on its own
+	// (the resolver doesn't cache repos in memory).
+	walkRepo, _, err := store.Load(rootPath)
 	if err != nil {
 		t.Fatalf("loading fixture: %v", err)
 	}
-	return repo
+	_ = walkRepo.Close()
+
+	dir := t.TempDir()
+	reg := registry.New(filepath.Join(dir, "projects.json"))
+	if err := reg.Upsert(registry.Entry{
+		Name:      filepath.Base(rootPath),
+		Path:      rootPath,
+		IndexedAt: time.Now().UTC(),
+		Files:     0, // count not asserted by these tests
+	}); err != nil {
+		t.Fatalf("seed registry: %v", err)
+	}
+	return fixtureCtx{
+		reg:        reg,
+		projectURI: "file://" + rootPath,
+		rootPath:   rootPath,
+	}
 }
 
 func TestBuildOverviewTree_NoWarningUnderBudget(t *testing.T) {
-	repo := loadFixtureRepo(t)
-	handler := TreeOverview(repo)
-	out, err := handler(context.Background(), json.RawMessage(`{"repo":"","depth":6}`))
+	fx := loadFixtureReg(t)
+	handler := TreeOverview(fx.reg)
+	out, err := handler(context.Background(),
+		json.RawMessage(`{"project":"`+fx.projectURI+`","depth":6}`))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -58,9 +101,10 @@ func TestBuildOverviewTree_NoWarningUnderBudget(t *testing.T) {
 
 func TestBuildOverviewTree_TruncatesAtBudget(t *testing.T) {
 	withBudget(t, 256)
-	repo := loadFixtureRepo(t)
-	handler := TreeOverview(repo)
-	out, err := handler(context.Background(), json.RawMessage(`{"repo":"","depth":6}`))
+	fx := loadFixtureReg(t)
+	handler := TreeOverview(fx.reg)
+	out, err := handler(context.Background(),
+		json.RawMessage(`{"project":"`+fx.projectURI+`","depth":6}`))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -91,9 +135,10 @@ func TestBuildOverviewTree_TruncatesAtBudget(t *testing.T) {
 }
 
 func TestBuildOverviewTree_WarningFieldHiddenWhenEmpty(t *testing.T) {
-	repo := loadFixtureRepo(t)
-	handler := TreeOverview(repo)
-	out, err := handler(context.Background(), json.RawMessage(`{"repo":"","depth":2}`))
+	fx := loadFixtureReg(t)
+	handler := TreeOverview(fx.reg)
+	out, err := handler(context.Background(),
+		json.RawMessage(`{"project":"`+fx.projectURI+`","depth":2}`))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -103,6 +148,49 @@ func TestBuildOverviewTree_WarningFieldHiddenWhenEmpty(t *testing.T) {
 	}
 	if strings.Contains(string(b), `"warning"`) {
 		t.Fatalf("expected omitempty to hide warning when empty; got: %s", b)
+	}
+}
+
+// TestTreeOverview_RequiresProject pins the new contract: an empty
+// `project` returns ErrEmpty from project.ParseRef. This is the
+// regression guard for the tool's required-field behaviour.
+func TestTreeOverview_RequiresProject(t *testing.T) {
+	fx := loadFixtureReg(t)
+	handler := TreeOverview(fx.reg)
+	_, err := handler(context.Background(), json.RawMessage(`{"depth":1}`))
+	if err == nil {
+		t.Fatal("expected error when project missing")
+	}
+}
+
+// TestTreeOverview_DeprecatedRepoAlias confirms the one-release
+// alias still works and emits the stderr deprecation notice.
+func TestTreeOverview_DeprecatedRepoAlias(t *testing.T) {
+	fx := loadFixtureReg(t)
+	// Capture stderr.
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = origStderr
+		_ = r.Close()
+		_ = w.Close()
+	})
+
+	handler := TreeOverview(fx.reg)
+	if _, err := handler(context.Background(),
+		json.RawMessage(`{"repo":"`+fx.rootPath+`","depth":1}`)); err != nil {
+		t.Fatalf("tree_overview with deprecated repo: %v", err)
+	}
+	_ = w.Close()
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	out := buf.String()
+	if !strings.Contains(out, "deprecation") {
+		t.Errorf("expected deprecation notice on stderr, got %q", out)
 	}
 }
 
@@ -128,11 +216,11 @@ func hasChildID(n TreeOverviewResult, substr string) bool {
 }
 
 func TestBuildOverviewTree_ScopeFiltersToSubtree(t *testing.T) {
-	repo := loadFixtureRepo(t)
-	handler := TreeOverview(repo)
-	scope := repo.Root() + "/auth"
+	fx := loadFixtureReg(t)
+	handler := TreeOverview(fx.reg)
+	scope := fx.rootPath + "/auth"
 	out, err := handler(context.Background(),
-		json.RawMessage(`{"repo":"","scope":`+jsonQuote(scope)+`,"depth":3}`))
+		json.RawMessage(`{"project":"`+fx.projectURI+`","scope":`+jsonQuote(scope)+`,"depth":3}`))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -157,10 +245,10 @@ func TestBuildOverviewTree_ScopeFiltersToSubtree(t *testing.T) {
 }
 
 func TestBuildOverviewTree_ScopeOutsideRepoErrors(t *testing.T) {
-	repo := loadFixtureRepo(t)
-	handler := TreeOverview(repo)
+	fx := loadFixtureReg(t)
+	handler := TreeOverview(fx.reg)
 	_, err := handler(context.Background(),
-		json.RawMessage(`{"repo":"","scope":"/definitely/not/the/repo","depth":2}`))
+		json.RawMessage(`{"project":"`+fx.projectURI+`","scope":"/definitely/not/the/repo","depth":2}`))
 	if err == nil {
 		t.Fatalf("expected error for scope outside repo; got nil")
 	}
@@ -170,12 +258,12 @@ func TestBuildOverviewTree_ScopeOutsideRepoErrors(t *testing.T) {
 }
 
 func TestBuildOverviewTree_EmptyScopeBehavesLikeNoScope(t *testing.T) {
-	repo := loadFixtureRepo(t)
-	handler := TreeOverview(repo)
+	fx := loadFixtureReg(t)
+	handler := TreeOverview(fx.reg)
 	// Empty scope must not error and must return at least one top-level
 	// child — same shape as the no-scope happy path.
 	out, err := handler(context.Background(),
-		json.RawMessage(`{"repo":"","scope":"","depth":2}`))
+		json.RawMessage(`{"project":"`+fx.projectURI+`","scope":"","depth":2}`))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
