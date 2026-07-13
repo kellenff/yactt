@@ -3,26 +3,28 @@ package tool
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
+	"github.com/kellenff/yactt/internal/audit"
 	"github.com/kellenff/yactt/internal/parser"
+	"github.com/kellenff/yactt/internal/project"
 	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 )
 
 // IndexRepositoryArgs is the typed boundary input for
-// index_repository. `path` is required; `name` is an optional
-// display label that defaults to the basename; `mode` picks
-// which indexing strategy to run (today only "full" is wired —
-// see `mapMode`).
+// index_repository. `project` (file:// URI) is required; `name`
+// is an optional display label that defaults to the basename;
+// `mode` picks which indexing strategy to run (today only
+// "full" is wired — see `mapMode`).
 type IndexRepositoryArgs struct {
-	Path string `json:"path"`
-	Name string `json:"name"`
-	Mode string `json:"mode"`
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	Mode    string `json:"mode"`
 }
 
 // IndexRepositoryResult is the structuredContent envelope for
@@ -35,17 +37,17 @@ type IndexRepositoryResult struct {
 }
 
 // IndexRepositorySchema is the JSON Schema for index_repository.
-// `path` is required; the other two are optional. We expose
+// `project` is required; the other two are optional. We expose
 // `mode` because the issue promises the knob, even though the
 // only value honoured today is "full".
 var IndexRepositorySchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["path"],
+  "required": ["project"],
   "properties": {
-    "path": { "type": "string", "description": "Absolute or cwd-relative path to the repo root." },
-    "name": { "type": "string", "description": "Optional display label; defaults to the basename of ` + "`path`" + `." },
-    "mode": { "type": "string", "enum": ["full", "moderate", "fast", "cross-repo-intelligence"], "description": "Indexing mode (ponytail: only ` + "`full`" + ` is wired today; the string is accepted for forward compatibility)." }
+    "project": { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path)." },
+    "name":    { "type": "string", "description": "Optional display label; defaults to the basename of the project's path." },
+    "mode":    { "type": "string", "enum": ["full", "moderate", "fast", "cross-repo-intelligence"], "description": "Indexing mode (ponytail: only ` + "`full`" + ` is wired today; the string is accepted for forward compatibility)." }
   },
   "additionalProperties": false
 }`)
@@ -62,36 +64,29 @@ var IndexRepositoryOutputSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
-// IndexRepository returns a Handler that walks `args.Path`,
-// records an entry in `reg`, and returns the persisted row.
-// The handler is repo-independent at construction time so it
-// works in both single-repo and registry-only modes — the
-// handler walks its own temporary Repo just to count files and
-// detect languages; nothing about that walk is shared with
-// the MCP server's "currently loaded" repo.
+// IndexRepository returns a Handler that walks the project at
+// `args.Project` (a file:// URI), records an entry in `reg`,
+// and returns the persisted row. On the FIRST successful index
+// per process it invokes emitStartup (audit line) and warnTrust
+// (install TOFU) — both nil-safe and memoised.
 //
 // ponytail: the disk cache + per-repo subdir that store.Load
-// touches via loadOptsWithDiskCache lives in cmd/yactt/main.go.
-// We deliberately do not pass that helper down here — the
-// common path is "use the same cache scheme as everything
-// else", and pulling it into a single importable place would
-// grow that helper's surface area for one caller. The cache
-// shape this tool produces is therefore "whatever the user's
-// serve-time load would have produced", which is exactly what
-// we want.
-func IndexRepository(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
+// touches via registry.LoadOptsWithDiskCache is the same path
+// the serve command uses, so index_repository has the
+// side-effect the issue promises: "standalone indexing" actually
+// primes the per-repo cache that index_status then verifies.
+func IndexRepository(reg *registry.Registry, emitStartup func(audit.Startup) error, warnTrust func()) func(ctx context.Context, args json.RawMessage) (any, error) {
+	var once sync.Once
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a IndexRepositoryArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid index_repository args: %w", err)
 		}
-		if a.Path == "" {
-			return nil, errors.New("index_repository: path is required")
-		}
-		abs, err := filepath.Abs(a.Path)
+		ref, err := project.ParseRef(a.Project)
 		if err != nil {
-			return nil, fmt.Errorf("index_repository: resolve path: %w", err)
+			return nil, fmt.Errorf("index_repository: %w", err)
 		}
+		abs := ref.Path
 		if _, err := os.Stat(abs); err != nil {
 			return nil, fmt.Errorf("index_repository: %w", err)
 		}
@@ -107,18 +102,31 @@ func IndexRepository(reg *registry.Registry) func(ctx context.Context, args json
 		}
 
 		// One-shot store.Load to count files + detect languages.
-		// We pass the same disk-cache LoadOptions the serve
-		// command does, so index_repository has the side-effect
-		// the issue promises: "standalone indexing" actually
-		// primes the per-repo cache that index_status then
-		// verifies. Closing the returned Repo before writing
-		// the entry matters: store.Load may have spun up LSP
-		// clients which otherwise would hold the loaded tree
-		// alive past this handler's return.
 		repo, errs, lerr := store.Load(abs, registry.LoadOptsWithDiskCache(abs)...)
 		if lerr != nil {
 			return nil, fmt.Errorf("index_repository: load: %w", lerr)
 		}
+		// Audit + TOFU emit on the first successful index per
+		// process. Memoised by `once`; both closures are
+		// nil-safe so tests can pass nil and skip these
+		// side effects.
+		once.Do(func() {
+			if warnTrust != nil {
+				warnTrust()
+			}
+			if emitStartup != nil {
+				info := audit.Startup{
+					RepoRoot:     repo.Root(),
+					MaxFiles:     store.DefaultMaxFiles,
+					LoadedFiles:  len(repo.Files()),
+					Grammars:     repoGrammars(),
+					LSP:          repoLSP(repo),
+				}
+				if err := emitStartup(info); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: startup audit emit: %v\n", err)
+				}
+			}
+		})
 		_ = repo.Close()
 
 		name := a.Name
@@ -184,4 +192,31 @@ func isKnownMode(m string) bool {
 		return true
 	}
 	return false
+}
+
+// repoGrammars returns the list of grammar names supported by
+// the loader. Mirrors the field on audit.Startup; the audit
+// package can't compute this without a parser import so the
+// helper lives here.
+func repoGrammars() []string {
+	out := make([]string, 0)
+	for _, l := range parser.All() {
+		out = append(out, string(l.Name()))
+	}
+	return out
+}
+
+// repoLSP returns the per-language LSP availability for the
+// given repo. Used to populate the audit startup record.
+func repoLSP(repo *store.Repo) []audit.LSPEntry {
+	var out []audit.LSPEntry
+	for _, l := range parser.All() {
+		_, toolName, ver := repo.LSPForLang(l.Name())
+		out = append(out, audit.LSPEntry{
+			Language: string(l.Name()),
+			Tool:     toolName,
+			Version:  ver,
+		})
+	}
+	return out
 }

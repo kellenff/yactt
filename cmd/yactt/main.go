@@ -771,7 +771,7 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo, reg *registry.Registry)
 	srv.RegisterTool(mcp.ToolDef{
 		Name: "index_repository", Description: "Required first call in registry mode: walk a repo at `path`, write an entry to the registry, return the row. After this returns, the 16 repo-bound tools appear in `tools/list`. Mode knob is accepted (only `full` is wired today).",
 		InputSchema: tool.IndexRepositorySchema, OutputSchema: tool.IndexRepositoryOutputSchema,
-		Handler: tool.IndexRepository(reg),
+		Handler: tool.IndexRepository(reg, nil, nil),
 	})
 	srv.RegisterTool(mcp.ToolDef{
 		Name: "index_status", Description: "Registry row + per-repo cache freshness for `path`. Use this to check whether a repo is already indexed (`cacheFresh=true`) or whether `index_repository` needs to run first (`cacheFresh=false`).",

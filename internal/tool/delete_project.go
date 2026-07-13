@@ -3,19 +3,20 @@ package tool
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/kellenff/yactt/internal/project"
 	"github.com/kellenff/yactt/internal/registry"
 )
 
 // DeleteProjectArgs is the typed boundary input for
-// delete_project. `path` is the only knob: the tool evicts the
-// registry row and removes the per-repo cache directory.
+// delete_project. `project` (file:// URI) is the only knob:
+// the tool evicts the registry row and removes the per-repo
+// cache directory.
 type DeleteProjectArgs struct {
-	Path string `json:"path"`
+	Project string `json:"project"`
 }
 
 // DeleteProjectResult is the structuredContent envelope for
@@ -32,9 +33,9 @@ type DeleteProjectResult struct {
 var DeleteProjectSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["path"],
+  "required": ["project"],
   "properties": {
-    "path": { "type": "string", "description": "Absolute or cwd-relative path to the repo root to evict." }
+    "project": { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path)." }
   },
   "additionalProperties": false
 }`)
@@ -72,10 +73,11 @@ func DeleteProject(reg *registry.Registry) func(ctx context.Context, args json.R
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid delete_project args: %w", err)
 		}
-		if a.Path == "" {
-			return nil, errors.New("delete_project: path is required")
+		ref, err := project.ParseRef(a.Project)
+		if err != nil {
+			return nil, fmt.Errorf("delete_project: %w", err)
 		}
-		abs, err := filepath.Abs(a.Path)
+		abs, err := filepath.Abs(ref.Path)
 		if err != nil {
 			return nil, fmt.Errorf("delete_project: resolve path: %w", err)
 		}

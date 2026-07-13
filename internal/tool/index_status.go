@@ -9,15 +9,16 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/kellenff/yactt/internal/project"
 	"github.com/kellenff/yactt/internal/registry"
 )
 
 // IndexStatusArgs is the typed boundary input for index_status.
-// `path` is required; we key on absolute path on disk so two
-// callers pointing at the same repo (via different relative
-// paths) collapse onto one entry.
+// `project` (file:// URI) is required; we key on absolute path
+// on disk so two callers pointing at the same repo (via
+// different relative paths) collapse onto one entry.
 type IndexStatusArgs struct {
-	Path string `json:"path"`
+	Project string `json:"project"`
 }
 
 // IndexStatusResult is the structuredContent envelope for
@@ -49,9 +50,9 @@ type IndexStatusResult struct {
 var IndexStatusSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["path"],
+  "required": ["project"],
   "properties": {
-    "path": { "type": "string", "description": "Absolute or cwd-relative path to the repo root." }
+    "project": { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path)." }
   },
   "additionalProperties": false
 }`)
@@ -72,7 +73,7 @@ var IndexStatusOutputSchema = json.RawMessage(`{
 }`)
 
 // IndexStatus returns a Handler that reports the registry row +
-// per-repo cache freshness for `args.Path`. Does not require a
+// per-repo cache freshness for `args.Project`. Does not require a
 // *store.Repo, which is why it ships in both serve modes.
 func IndexStatus(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
@@ -80,10 +81,12 @@ func IndexStatus(reg *registry.Registry) func(ctx context.Context, args json.Raw
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid index_status args: %w", err)
 		}
-		if a.Path == "" {
-			return nil, errors.New("index_status: path is required")
+		ref, err := project.ParseRef(a.Project)
+		if err != nil {
+			return nil, fmt.Errorf("index_status: %w", err)
 		}
-		abs, err := filepath.Abs(a.Path)
+		a.Project = ref.Path
+		abs, err := filepath.Abs(a.Project)
 		if err != nil {
 			return nil, fmt.Errorf("index_status: resolve path: %w", err)
 		}

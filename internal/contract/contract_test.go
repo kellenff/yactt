@@ -22,9 +22,13 @@ package contract_test
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/tool"
 )
 
@@ -192,6 +196,47 @@ type boundaryTest struct {
 	want string // substring expected in the error message
 }
 
+// boundaryRegForTest creates a fresh *registry.Registry whose
+// single entry points at a stable per-process path under
+// os.TempDir. Boundary tests use the returned URI in the args
+// to exercise the tool's own validation guards; the reg keeps
+// project.Resolve from returning ErrNotIndexed AND the tempdir
+// keeps store.Load from failing with "no such file or directory"
+// before the tool's own id/query/symbol checks fire.
+func boundaryRegForTest(t *testing.T) (*registry.Registry, string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "boundary-repo")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	dir := t.TempDir()
+	reg := registry.New(filepath.Join(dir, "projects.json"))
+	if err := reg.Upsert(registry.Entry{
+		Name:      "repo",
+		Path:      root,
+		IndexedAt: time.Now().UTC(),
+		Files:     0,
+	}); err != nil {
+		t.Fatalf("boundaryRegForTest: %v", err)
+	}
+	return reg, "file://" + root
+}
+
+// regForBoundary is a tiny convenience wrapper that builds a fresh
+// registry+URI pair per call and registers a package-level
+// boundaryURI var so perToolArgBoundary sub-tests can build
+// their args via a closure. See TestGetNodeBoundary for the
+// canonical pattern.
+var boundaryURIJSON string
+
+func regForBoundary(t *testing.T) *registry.Registry {
+	t.Helper()
+	reg, uri := boundaryRegForTest(t)
+	b, _ := json.Marshal(uri)
+	boundaryURIJSON = string(b)
+	return reg
+}
+
 // perToolArgBoundary verifies each tool refuses bad input without crashing
 // when the repo is nil — i.e. validation happens at the boundary.
 func perToolArgBoundary(t *testing.T, name string, h func(ctx context.Context, args json.RawMessage) (any, error), tests []boundaryTest) {
@@ -232,61 +277,75 @@ func TestTreeOverviewBoundary(t *testing.T) {
 }
 
 func TestGetNodeBoundary(t *testing.T) {
-	perToolArgBoundary(t, "node_get", tool.GetNode(nil), []boundaryTest{
-		{name: "missing_id", args: `{}`, want: "id is required"},
-		{name: "empty_id", args: `{"id":""}`, want: "id is required"},
-		{name: "bad_id_kind", args: `{"id":"unknown:something"}`, want: "unknown kind"},
+	perToolArgBoundary(t, "node_get", tool.GetNode(regForBoundary(t)), []boundaryTest{
+		// After the project-reference migration, every repo-bound tool
+		// requires `project` (file:// URI) before its own required-
+		// field guards. The `empty_project` sub-test pins the boundary
+		// on the new field; the rest use a placeholder project URI to
+		// exercise the tool's own validation.
+		{name: "empty_project", args: `{}`, want: "project: empty reference"},
+		{name: "missing_id", args: `{"project":` + boundaryURIJSON + `}`, want: "id is required"},
+		{name: "empty_id", args: `{"project":` + boundaryURIJSON + `,"id":""}`, want: "id is required"},
+		{name: "bad_id_kind", args: `{"project":` + boundaryURIJSON + `,"id":"unknown:something"}`, want: "unknown kind"},
 	})
 }
 
 func TestNodeSourceBoundary(t *testing.T) {
-	perToolArgBoundary(t, "node_source", tool.NodeSource(nil), []boundaryTest{
-		{name: "missing_id", args: `{}`, want: "id is required"},
+	perToolArgBoundary(t, "node_source", tool.NodeSource(regForBoundary(t)), []boundaryTest{
+		{name: "empty_project", args: `{}`, want: "project: empty reference"},
+		{name: "missing_id", args: `{"project":` + boundaryURIJSON + `}`, want: "id is required"},
 	})
 }
 
 func TestNodeEdgesBoundary(t *testing.T) {
-	perToolArgBoundary(t, "node_edges", tool.NodeEdges(nil), []boundaryTest{
-		{name: "missing_id", args: `{}`, want: "id is required"},
+	perToolArgBoundary(t, "node_edges", tool.NodeEdges(regForBoundary(t)), []boundaryTest{
+		{name: "empty_project", args: `{}`, want: "project: empty reference"},
+		{name: "missing_id", args: `{"project":` + boundaryURIJSON + `}`, want: "id is required"},
 	})
 }
 
 func TestSearchBoundary(t *testing.T) {
-	perToolArgBoundary(t, "search", tool.Search(nil), []boundaryTest{
-		{name: "missing_query", args: `{"scope":"/"}`, want: "query is required"},
-		{name: "empty_query", args: `{"query":"","scope":"/"}`, want: "query is required"},
+	perToolArgBoundary(t, "search", tool.Search(regForBoundary(t)), []boundaryTest{
+		{name: "empty_project", args: `{}`, want: "project: empty reference"},
+		{name: "missing_query", args: `{"project":` + boundaryURIJSON + `,"scope":"/"}`, want: "query is required"},
+		{name: "empty_query", args: `{"project":` + boundaryURIJSON + `,"query":"","scope":"/"}`, want: "query is required"},
 	})
 }
 
 func TestEditImpactBoundary(t *testing.T) {
-	perToolArgBoundary(t, "edit_impact", tool.EditImpact(nil), []boundaryTest{
-		{name: "empty_renames", args: `{"renames":[]}`, want: "at least one"},
+	perToolArgBoundary(t, "edit_impact", tool.EditImpact(regForBoundary(t)), []boundaryTest{
+		{name: "empty_project", args: `{}`, want: "project: empty reference"},
+		{name: "empty_renames", args: `{"project":` + boundaryURIJSON + `,"renames":[]}`, want: "at least one"},
 	})
 }
 
 func TestFindSymbolBoundary(t *testing.T) {
-	perToolArgBoundary(t, "find_symbol", tool.FindSymbol(nil), []boundaryTest{
-		{name: "missing_name_path", args: `{}`, want: "name_path is required"},
+	perToolArgBoundary(t, "find_symbol", tool.FindSymbol(regForBoundary(t)), []boundaryTest{
+		{name: "empty_project", args: `{}`, want: "project: empty reference"},
+		{name: "missing_name_path", args: `{"project":` + boundaryURIJSON + `}`, want: "name_path is required"},
 	})
 }
 
 func TestGetSymbolsOverviewBoundary(t *testing.T) {
-	perToolArgBoundary(t, "get_symbols_overview", tool.GetSymbolsOverview(nil), []boundaryTest{
-		{name: "missing_file", args: `{}`, want: "file is required"},
+	perToolArgBoundary(t, "get_symbols_overview", tool.GetSymbolsOverview(regForBoundary(t)), []boundaryTest{
+		{name: "empty_project", args: `{}`, want: "project: empty reference"},
+		{name: "missing_file", args: `{"project":` + boundaryURIJSON + `}`, want: "file is required"},
 	})
 }
 
 func TestFindCodeBoundary(t *testing.T) {
-	perToolArgBoundary(t, "find_code", tool.FindCode(nil), []boundaryTest{
-		{name: "missing_pattern", args: `{}`, want: "pattern is required"},
-		{name: "bad_regex", args: `{"pattern":"("}`, want: "regex"},
-		{name: "tree_sitter_unsupported", args: `{"pattern":"foo","pattern_kind":"tree_sitter"}`, want: "tree-sitter"},
+	perToolArgBoundary(t, "find_code", tool.FindCode(regForBoundary(t)), []boundaryTest{
+		{name: "empty_project", args: `{}`, want: "project: empty reference"},
+		{name: "missing_pattern", args: `{"project":` + boundaryURIJSON + `}`, want: "pattern is required"},
+		{name: "bad_regex", args: `{"project":` + boundaryURIJSON + `,"pattern":"("}`, want: "regex"},
+		{name: "tree_sitter_unsupported", args: `{"project":` + boundaryURIJSON + `,"pattern":"foo","pattern_kind":"tree_sitter"}`, want: "tree-sitter"},
 	})
 }
 
 func TestFindReferencingSymbolsBoundary(t *testing.T) {
-	perToolArgBoundary(t, "find_referencing_symbols", tool.FindReferencingSymbols(nil), []boundaryTest{
-		{name: "missing_symbol", args: `{}`, want: "symbol is required"},
+	perToolArgBoundary(t, "find_referencing_symbols", tool.FindReferencingSymbols(regForBoundary(t)), []boundaryTest{
+		{name: "empty_project", args: `{}`, want: "project: empty reference"},
+		{name: "missing_symbol", args: `{"project":` + boundaryURIJSON + `}`, want: "symbol is required"},
 	})
 }
 
@@ -296,21 +355,27 @@ func TestFindReferencingSymbolsBoundary(t *testing.T) {
 // max-50 seeds, weights 1:1) is exercised here too — the goal is to
 // catch a future regression where validation drifts behind locateSeeds.
 func TestQueryGraphBoundary(t *testing.T) {
-	perToolArgBoundary(t, "query_graph", tool.QueryGraph(nil), []boundaryTest{
-		{name: "missing_from_and_seeds", args: `{"follow":["callees"]}`, want: "provide one of from or seeds"},
-		{name: "both_from_and_seeds", args: `{"from":"fn:a.Foo","seeds":["fn:a.Bar"],"follow":["callees"]}`, want: "mutually exclusive"},
-		{name: "empty_follow", args: `{"from":"fn:a.Foo","follow":[]}`, want: "follow must be a non-empty list"},
-		{name: "weights_mismatch", args: `{"seeds":["fn:a.Foo"],"weights":[0.5,0.5],"follow":["callers"]}`, want: "weights must align"},
+	perToolArgBoundary(t, "query_graph", tool.QueryGraph(regForBoundary(t)), []boundaryTest{
+		{name: "empty_project", args: `{}`, want: "project: empty reference"},
+		{name: "missing_from_and_seeds", args: `{"project":` + boundaryURIJSON + `,"follow":["callees"]}`, want: "provide one of from or seeds"},
+		{name: "both_from_and_seeds", args: `{"project":` + boundaryURIJSON + `,"from":"fn:a.Foo","seeds":["fn:a.Bar"],"follow":["callees"]}`, want: "mutually exclusive"},
+		{name: "empty_follow", args: `{"project":` + boundaryURIJSON + `,"from":"fn:a.Foo","follow":[]}`, want: "follow must be a non-empty list"},
+		{name: "weights_mismatch", args: `{"project":` + boundaryURIJSON + `,"seeds":["fn:a.Foo"],"weights":[0.5,0.5],"follow":["callers"]}`, want: "weights must align"},
 	})
 }
 
 func TestDetectChangesBoundary(t *testing.T) {
-	perToolArgBoundary(t, "detect_changes", tool.DetectChanges(nil), []boundaryTest{
-		{name: "missing_refs", args: `{}`, want: "required"},
-		{name: "both_base_and_since", args: `{"base":"HEAD~1","since":"HEAD~1"}`, want: "mutually exclusive"},
-		{name: "negative_limit", args: `{"base":"HEAD~1","limit":-1}`, want: "limit must be >= 0"},
-		{name: "base_starts_with_dash", args: `{"base":"--upload-pack=evil"}`, want: "must not start with '-'"},
-		{name: "since_starts_with_dash", args: `{"since":"-x"}`, want: "must not start with '-'"},
-		{name: "head_starts_with_dash", args: `{"base":"HEAD~1","head":"--exec=evil"}`, want: "must not start with '-'"},
+	perToolArgBoundary(t, "detect_changes", tool.DetectChanges(regForBoundary(t)), []boundaryTest{
+		// After the project-reference migration, detect_changes requires
+		// `project` (file:// URI) as well. Tests below pass a placeholder
+		// project URI to exercise the ref-validation guards; the empty-
+		// project case is covered by the next sub-test.
+		{name: "missing_refs", args: `{"project":` + boundaryURIJSON + `}`, want: "required"},
+		{name: "both_base_and_since", args: `{"project":` + boundaryURIJSON + `,"base":"HEAD~1","since":"HEAD~1"}`, want: "mutually exclusive"},
+		{name: "negative_limit", args: `{"project":` + boundaryURIJSON + `,"base":"HEAD~1","limit":-1}`, want: "limit must be >= 0"},
+		{name: "base_starts_with_dash", args: `{"project":` + boundaryURIJSON + `,"base":"--upload-pack=evil"}`, want: "must not start with '-'"},
+		{name: "since_starts_with_dash", args: `{"project":` + boundaryURIJSON + `,"since":"-x"}`, want: "must not start with '-'"},
+		{name: "head_starts_with_dash", args: `{"project":` + boundaryURIJSON + `,"base":"HEAD~1","head":"--exec=evil"}`, want: "must not start with '-'"},
+		{name: "empty_project", args: `{}`, want: "project: empty reference"},
 	})
 }

@@ -73,8 +73,8 @@ func TestTool_ListProjects(t *testing.T) {
 	}
 
 	// Index one entry — should now show up.
-	idxH := tool.IndexRepository(reg)
-	if _, err := idxH(context.Background(), json.RawMessage(`{"path":"`+fx.Root+`"}`)); err != nil {
+	idxH := tool.IndexRepository(reg, nil, nil)
+	if _, err := idxH(context.Background(), json.RawMessage(`{"project":"file://`+fx.Root+`"}`)); err != nil {
 		t.Fatalf("index_repository: %v", err)
 	}
 	one := callRegistry(t, h, map[string]any{}).(*tool.ListProjectsResult)
@@ -104,10 +104,10 @@ func TestTool_ListProjects(t *testing.T) {
 func TestTool_IndexRepository(t *testing.T) {
 	reg := isolatedRegistry(t)
 	fx := newFixture(t)
-	h := tool.IndexRepository(reg)
+	h := tool.IndexRepository(reg, nil, nil)
 
 	t.Run("happy_path", func(t *testing.T) {
-		out := callRegistry(t, h, map[string]any{"path": fx.Root}).(*tool.IndexRepositoryResult)
+		out := callRegistry(t, h, map[string]any{"project": "file://" + fx.Root}).(*tool.IndexRepositoryResult)
 		if out.Entry.Path != fx.Root {
 			t.Errorf("Entry.Path = %q, want %q", out.Entry.Path, fx.Root)
 		}
@@ -133,7 +133,7 @@ func TestTool_IndexRepository(t *testing.T) {
 	})
 
 	t.Run("rejects_unknown_mode", func(t *testing.T) {
-		_, err := h(context.Background(), json.RawMessage(`{"path":"`+fx.Root+`","mode":"nonsense"}`))
+		_, err := h(context.Background(), json.RawMessage(`{"project":"file://`+fx.Root+`","mode":"nonsense"}`))
 		if err == nil {
 			t.Fatal("index_repository with mode=nonsense: want error")
 		}
@@ -152,9 +152,9 @@ func TestTool_IndexRepository(t *testing.T) {
 	t.Run("idempotent_under_same_path", func(t *testing.T) {
 		// Reset to a fresh registry so the "before" count is zero.
 		reg2 := isolatedRegistry(t)
-		idxH := tool.IndexRepository(reg2)
+		idxH := tool.IndexRepository(reg2, nil, nil)
 		for i := 0; i < 3; i++ {
-			if _, err := idxH(context.Background(), json.RawMessage(`{"path":"`+fx.Root+`"}`)); err != nil {
+			if _, err := idxH(context.Background(), json.RawMessage(`{"project":"file://`+fx.Root+`"}`)); err != nil {
 				t.Fatalf("index #%d: %v", i, err)
 			}
 		}
@@ -175,11 +175,11 @@ func TestTool_IndexRepository(t *testing.T) {
 func TestTool_IndexStatus(t *testing.T) {
 	reg := isolatedRegistry(t)
 	fx := newFixture(t)
-	idxH := tool.IndexRepository(reg)
+	idxH := tool.IndexRepository(reg, nil, nil)
 	statusH := tool.IndexStatus(reg)
 
 	t.Run("missing_entry", func(t *testing.T) {
-		out := callRegistry(t, statusH, map[string]any{"path": fx.Root}).(*tool.IndexStatusResult)
+		out := callRegistry(t, statusH, map[string]any{"project": "file://" + fx.Root}).(*tool.IndexStatusResult)
 		if out.Entry != nil {
 			t.Errorf("Entry = %+v, want nil for unindexed path", out.Entry)
 		}
@@ -196,10 +196,10 @@ func TestTool_IndexStatus(t *testing.T) {
 	})
 
 	t.Run("fresh_after_index", func(t *testing.T) {
-		if _, err := idxH(context.Background(), json.RawMessage(`{"path":"`+fx.Root+`"}`)); err != nil {
+		if _, err := idxH(context.Background(), json.RawMessage(`{"project":"file://`+fx.Root+`"}`)); err != nil {
 			t.Fatalf("index: %v", err)
 		}
-		out := callRegistry(t, statusH, map[string]any{"path": fx.Root}).(*tool.IndexStatusResult)
+		out := callRegistry(t, statusH, map[string]any{"project": "file://" + fx.Root}).(*tool.IndexStatusResult)
 		if out.Entry == nil {
 			t.Fatal("Entry is nil after index")
 		}
@@ -232,13 +232,13 @@ func TestTool_DeleteProject(t *testing.T) {
 	fx := newFixture(t)
 
 	// Set up: index once, then we have a row + (maybe) cache bytes.
-	idxH := tool.IndexRepository(reg)
-	if _, err := idxH(context.Background(), json.RawMessage(`{"path":"`+fx.Root+`"}`)); err != nil {
+	idxH := tool.IndexRepository(reg, nil, nil)
+	if _, err := idxH(context.Background(), json.RawMessage(`{"project":"file://`+fx.Root+`"}`)); err != nil {
 		t.Fatalf("index: %v", err)
 	}
 
 	delH := tool.DeleteProject(reg)
-	out := callRegistry(t, delH, map[string]any{"path": fx.Root}).(*tool.DeleteProjectResult)
+	out := callRegistry(t, delH, map[string]any{"project": "file://" + fx.Root}).(*tool.DeleteProjectResult)
 	if !out.Deleted {
 		t.Error("Deleted = false on first call (registry had the row)")
 	}
@@ -254,7 +254,7 @@ func TestTool_DeleteProject(t *testing.T) {
 	}
 
 	// Second call: idempotent.
-	again := callRegistry(t, delH, map[string]any{"path": fx.Root}).(*tool.DeleteProjectResult)
+	again := callRegistry(t, delH, map[string]any{"project": "file://" + fx.Root}).(*tool.DeleteProjectResult)
 	if again.Deleted {
 		t.Error("Deleted = true on second call (idempotency broken)")
 	}
