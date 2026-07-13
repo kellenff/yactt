@@ -55,7 +55,7 @@ def other_helper(x):
 
 	// Step 1: search_code with regex `^def parse_` — Python-only matches
 	// because the pattern anchors on `def `, which Go doesn't have.
-	sc := drive(t, tool.SearchCode(reg),
+	sc := drive(t, repo.Root(), tool.SearchCode(reg),
 		`{"project":"file://` + dir + `","pattern":"^def parse_","pattern_kind":"regex","scope":"`+dir+`"}`)
 	groups, ok := sc["groups"].([]any)
 	if !ok {
@@ -109,7 +109,7 @@ func TestFidelity_Task6_Mixed_MultiStepRefactorSummary(t *testing.T) {
 
 	// Step 1: tree_overview scoped to the auth package.
 	scope := repo.Root() + "/auth"
-	out := driveRaw(t, tool.TreeOverview(reg),
+	out := driveRaw(t, repo.Root(), tool.TreeOverview(reg),
 		fmt.Sprintf(`{"depth":3,"scope":%q}`, scope))
 	tree, ok := out.(tool.TreeOverviewResult)
 	if !ok {
@@ -126,7 +126,7 @@ func TestFidelity_Task6_Mixed_MultiStepRefactorSummary(t *testing.T) {
 	// Assertion: at least one has a non-empty caller set.
 	anyHasCallers := false
 	for _, name := range authNames {
-		step := drive(t, tool.FindReferencingSymbols(reg), `{"symbol":"`+name+`"}`)
+		step := drive(t, repo.Root(), tool.FindReferencingSymbols(reg), `{"symbol":"`+name+`"}`)
 		if refs, ok := step["references"].([]any); ok && len(refs) > 0 {
 			anyHasCallers = true
 			break
