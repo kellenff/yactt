@@ -8,12 +8,33 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/kellenff/yactt/internal/mcp"
 	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/store/repofixture"
 )
+
+// seededReg returns a fresh registry containing one entry for the
+// given absolute root path. The wire-shape tests need both a
+// *registry.Registry (for migrated tools that resolve project URIs)
+// and a *store.Repo (for unmigrated tools that take a closure repo);
+// this helper produces the first from the same source as the second.
+func seededReg(t *testing.T, root string) *registry.Registry {
+	t.Helper()
+	dir := t.TempDir()
+	reg := registry.New(filepath.Join(dir, "projects.json"))
+	if err := reg.Upsert(registry.Entry{
+		Name:      filepath.Base(root),
+		Path:      root,
+		IndexedAt: time.Now().UTC(),
+		Files:     0,
+	}); err != nil {
+		t.Fatalf("seededReg: %v", err)
+	}
+	return reg
+}
 
 // wireShapeServer builds an MCP server pointed at in-memory buffers with
 // `tools` registered. Returns the server plus the stdout buffer for the
@@ -67,7 +88,13 @@ type wireShapeCase struct {
 
 // runWireShapeCases registers the real handler for each tool with the
 // fixture repo, drives it through the server, and asserts the wire shape.
-func runWireShapeCases(t *testing.T, repo *store.Repo, cases []wireShapeCase) {
+//
+// reg is the registry the migrated tools resolve project URIs against;
+// repo is the in-memory repo used by the unmigrated tools that still
+// take a *store.Repo closure parameter. As the migration progresses
+// (Phases 3-4 of the plan) the repo argument becomes vestigial and
+// can be removed.
+func runWireShapeCases(t *testing.T, reg *registry.Registry, repo *store.Repo, cases []wireShapeCase) {
 	t.Helper()
 	for _, tc := range cases {
 		t.Run(tc.toolName, func(t *testing.T) {
@@ -77,7 +104,9 @@ func runWireShapeCases(t *testing.T, repo *store.Repo, cases []wireShapeCase) {
 				func() (io.Reader, error) { return stdin, nil },
 			)
 			def := wireShapeDefs[tc.toolName]
-			s.RegisterTool(def(repo))
+			s.RegisterTool(def(reg, repo))
+
+			t.Logf("argsJSON for %s: %s", tc.toolName, tc.argsJSON)
 
 			req := map[string]any{
 				"jsonrpc": "2.0",
@@ -110,55 +139,62 @@ func runWireShapeCases(t *testing.T, repo *store.Repo, cases []wireShapeCase) {
 }
 
 // wireShapeDefs maps each tool name to a function that builds its ToolDef
-// from a repo. Adding a new tool means adding one row to this table —
-// the wire-shape check is then mechanical.
-var wireShapeDefs = map[string]func(*store.Repo) mcp.ToolDef{
-	"tree_overview": func(r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "tree_overview", InputSchema: TreeOverviewSchema, OutputSchema: TreeOverviewOutputSchema, Handler: TreeOverview(r)}
+// from a registry and a repo. The registry is used by the migrated
+// tools (Phase 2+: tree_overview, then the rest in Phase 3); the repo
+// is used by the unmigrated tools that still take a *store.Repo
+// closure parameter. As the migration progresses the repo argument
+// becomes vestigial and can be removed.
+//
+// ponytail: passing both is awkward but lets the wire-shape tests
+// stay green one phase at a time without forcing every tool to
+// migrate atomically.
+var wireShapeDefs = map[string]func(*registry.Registry, *store.Repo) mcp.ToolDef{
+	"tree_overview": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "tree_overview", InputSchema: TreeOverviewSchema, OutputSchema: TreeOverviewOutputSchema, Handler: TreeOverview(reg)}
 	},
-	"node_get": func(r *store.Repo) mcp.ToolDef {
+	"node_get": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "node_get", InputSchema: GetNodeSchema, OutputSchema: GetNodeOutputSchema, Handler: GetNode(r)}
 	},
-	"node_source": func(r *store.Repo) mcp.ToolDef {
+	"node_source": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "node_source", InputSchema: NodeSourceSchema, OutputSchema: NodeSourceOutputSchema, Handler: NodeSource(r)}
 	},
-	"node_edges": func(r *store.Repo) mcp.ToolDef {
+	"node_edges": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "node_edges", InputSchema: NodeEdgesSchema, OutputSchema: NodeEdgesOutputSchema, Handler: NodeEdges(r)}
 	},
-	"search": func(r *store.Repo) mcp.ToolDef {
+	"search": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "search", InputSchema: SearchSchema, OutputSchema: SearchOutputSchema, Handler: Search(r)}
 	},
-	"edit_impact": func(r *store.Repo) mcp.ToolDef {
+	"edit_impact": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "edit_impact", InputSchema: EditImpactSchema, OutputSchema: EditImpactOutputSchema, Handler: EditImpact(r)}
 	},
-	"find_symbol": func(r *store.Repo) mcp.ToolDef {
+	"find_symbol": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "find_symbol", InputSchema: FindSymbolSchema, OutputSchema: FindSymbolOutputSchema, Handler: FindSymbol(r)}
 	},
-	"get_symbols_overview": func(r *store.Repo) mcp.ToolDef {
+	"get_symbols_overview": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "get_symbols_overview", InputSchema: GetSymbolsOverviewSchema, OutputSchema: GetSymbolsOverviewOutputSchema, Handler: GetSymbolsOverview(r)}
 	},
-	"find_code": func(r *store.Repo) mcp.ToolDef {
+	"find_code": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "find_code", InputSchema: FindCodeSchema, OutputSchema: FindCodeOutputSchema, Handler: FindCode(r)}
 	},
-	"search_code": func(r *store.Repo) mcp.ToolDef {
+	"search_code": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "search_code", InputSchema: SearchCodeSchema, OutputSchema: SearchCodeOutputSchema, Handler: SearchCode(r)}
 	},
-	"find_referencing_symbols": func(r *store.Repo) mcp.ToolDef {
+	"find_referencing_symbols": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "find_referencing_symbols", InputSchema: FindReferencingSymbolsSchema, OutputSchema: FindReferencingSymbolsOutputSchema, Handler: FindReferencingSymbols(r)}
 	},
-	"get_graph_schema": func(r *store.Repo) mcp.ToolDef {
+	"get_graph_schema": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "get_graph_schema", InputSchema: GetGraphSchemaSchema, OutputSchema: GetGraphSchemaOutputSchema, Handler: GetGraphSchema(r)}
 	},
-	"get_code_snippet": func(r *store.Repo) mcp.ToolDef {
+	"get_code_snippet": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "get_code_snippet", InputSchema: GetCodeSnippetSchema, OutputSchema: GetCodeSnippetOutputSchema, Handler: GetCodeSnippet(r)}
 	},
-	"get_architecture": func(r *store.Repo) mcp.ToolDef {
+	"get_architecture": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "get_architecture", InputSchema: GetArchitectureSchema, OutputSchema: GetArchitectureOutputSchema, Handler: GetArchitecture(r)}
 	},
-	"query_graph": func(r *store.Repo) mcp.ToolDef {
+	"query_graph": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "query_graph", InputSchema: QueryGraphSchema, OutputSchema: QueryGraphOutputSchema, Handler: QueryGraph(r)}
 	},
-	"detect_changes": func(r *store.Repo) mcp.ToolDef {
+	"detect_changes": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "detect_changes", InputSchema: DetectChangesSchema, OutputSchema: DetectChangesOutputSchema, Handler: DetectChanges(r)}
 	},
 }
@@ -177,7 +213,7 @@ func TestWireShape_AllTools(t *testing.T) {
 	defer func() { _ = r.Close() }()
 
 	cases := []wireShapeCase{
-		{toolName: "tree_overview", argsJSON: `{"repo":"","depth":2}`},
+		{toolName: "tree_overview", argsJSON: `{"project":"file://` + fx.Root + `","depth":2}`},
 		{toolName: "node_get", argsJSON: `{"id":"fn:auth.Login","layers":["signature"]}`},
 		{toolName: "node_source", argsJSON: `{"id":"fn:auth.Login"}`},
 		{toolName: "node_edges", argsJSON: `{"id":"fn:auth.Login","kinds":["callees"],"limit":10}`, wantKey: "edges"},
@@ -193,7 +229,8 @@ func TestWireShape_AllTools(t *testing.T) {
 		{toolName: "get_architecture", argsJSON: `{}`},
 		{toolName: "query_graph", argsJSON: `{"from":"meth:auth.Alpha.Ping","follow":["callees","callers"],"depth":2,"limit":10}`, wantKey: "rows"},
 	}
-	runWireShapeCases(t, r, cases)
+	reg := seededReg(t, fx.Root)
+	runWireShapeCases(t, reg, r, cases)
 }
 
 // TestWireShape_QueryGraphSeeds mirrors TestWireShape_DetectChanges: the
@@ -217,7 +254,7 @@ func TestWireShape_QueryGraphSeeds(t *testing.T) {
 		s := mcp.NewServer("wire-shape-query-graph-seeds", "0.0.0-test", "2024-11-05", stdout,
 			func() (io.Reader, error) { return stdin, nil },
 		)
-		s.RegisterTool(wireShapeDefs["query_graph"](r))
+		s.RegisterTool(wireShapeDefs["query_graph"](nil, r))
 
 		req := map[string]any{
 			"jsonrpc": "2.0",
@@ -251,7 +288,7 @@ func TestWireShape_QueryGraphSeeds(t *testing.T) {
 		s := mcp.NewServer("wire-shape-query-graph-seeds", "0.0.0-test", "2024-11-05", stdout,
 			func() (io.Reader, error) { return stdin, nil },
 		)
-		s.RegisterTool(wireShapeDefs["query_graph"](r))
+		s.RegisterTool(wireShapeDefs["query_graph"](nil, r))
 		req := map[string]any{
 			"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 			"params": map[string]any{
@@ -302,7 +339,8 @@ func TestWireShape_EmptyResults(t *testing.T) {
 		// node_edges with kinds that produce no edges.
 		{toolName: "node_edges", argsJSON: `{"id":"fn:auth.Login","kinds":["tests"],"limit":10}`, wantKey: "edges"},
 	}
-	runWireShapeCases(t, r, cases)
+	reg := seededReg(t, fx.Root)
+	runWireShapeCases(t, reg, r, cases)
 }
 
 // TestWireShape_ToolsListExposesOutputSchema confirms each registered
@@ -362,7 +400,7 @@ func Use() int { return 99 }
 		s := mcp.NewServer("wire-shape-detect", "0.0.0-test", "2024-11-05", stdout,
 			func() (io.Reader, error) { return stdin, nil },
 		)
-		s.RegisterTool(wireShapeDefs["detect_changes"](r))
+		s.RegisterTool(wireShapeDefs["detect_changes"](nil, r))
 
 		req := map[string]any{
 			"jsonrpc": "2.0",

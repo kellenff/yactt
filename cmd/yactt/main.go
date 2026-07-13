@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/kellenff/yactt/internal/audit"
 	"github.com/kellenff/yactt/internal/mcp"
@@ -118,12 +119,32 @@ func runOverview(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load: %w", err)
 	}
-	defer func() { _ = repo.Close() }()
 	if len(errs) > 0 {
 		fmt.Fprintf(os.Stderr, "load: %d file errors\n", len(errs))
 	}
-	handler := tool.TreeOverview(repo)
-	out, herr := handler(context.Background(), json.RawMessage(fmt.Sprintf(`{"repo":%q,"depth":2}`, repo.Root())))
+	// The tree_overview tool now takes a *registry.Registry and a
+	// project (file:// URI) in args. The CLI seeds an ephemeral
+	// registry so the handler can resolve the project the same way
+	// it does in the MCP server. Future cleanup: route this
+	// through `yactt overview` as a thin wrapper around the MCP
+	// `index_repository` + `tree_overview` chain.
+	regPath := filepath.Join(os.TempDir(), "yactt-overview-registry.json")
+	reg := registry.New(regPath)
+	if err := reg.Upsert(registry.Entry{
+		Name:      filepath.Base(abs),
+		Path:      abs,
+		IndexedAt: time.Now().UTC(),
+		Files:     len(repo.Files()),
+	}); err != nil {
+		_ = repo.Close()
+		return fmt.Errorf("overview: seed registry: %w", err)
+	}
+	handler := tool.TreeOverview(reg)
+	out, herr := handler(context.Background(), json.RawMessage(fmt.Sprintf(`{"project":%q,"depth":2}`, "file://"+abs)))
+	_ = repo.Close()
+	if herr != nil {
+		return herr
+	}
 	if herr != nil {
 		return herr
 	}
@@ -773,7 +794,7 @@ func registerAllTools(srv *mcp.Server, repo *store.Repo, reg *registry.Registry)
 		return
 	}
 
-	treeOverview := tool.TreeOverview(repo)
+	treeOverview := tool.TreeOverview(reg)
 	nodeGet := tool.GetNode(repo)
 	nodeSource := tool.NodeSource(repo)
 	nodeEdges := tool.NodeEdges(repo)
