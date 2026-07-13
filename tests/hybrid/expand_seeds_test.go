@@ -24,14 +24,35 @@ package hybrid_test
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kellenff/yactt/internal/hybrid"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/tool"
 	"github.com/kellenff/yactt/tests/chunking/genfixture"
 )
+
+// seedRegForHybrid creates a fresh *registry.Registry with one entry
+// for the given root. Used by every QueryGraph call in this file;
+// the handler resolves the project URI via project.Resolve.
+func seedRegForHybrid(t *testing.T, root string) *registry.Registry {
+	t.Helper()
+	dir := t.TempDir()
+	reg := registry.New(filepath.Join(dir, "projects.json"))
+	if err := reg.Upsert(registry.Entry{
+		Name:      filepath.Base(root),
+		Path:      root,
+		IndexedAt: time.Now().UTC(),
+		Files:     0,
+	}); err != nil {
+		t.Fatalf("seedRegForHybrid: %v", err)
+	}
+	return reg
+}
 
 // TestExpandSeeds_Pipeline pins the GraphRAG round-trip on the 100-file
 // genfixture. The pipeline: hybrid retrieval (default channels) → take
@@ -96,12 +117,13 @@ func TestExpandSeeds_Pipeline(t *testing.T) {
 		t.Fatalf("marshal seeds: %v", err)
 	}
 	args := `{
+		"project":"file://` + r.Root() + `",
 		"seeds": ` + string(seedsJSON) + `,
 		"follow": ["callers", "callees"],
 		"depth": 3,
 		"limit": 100
 	}`
-	out, err := tool.QueryGraph(r)(context.Background(), json.RawMessage(args))
+	out, err := tool.QueryGraph(seedRegForHybrid(t, r.Root()))(context.Background(), json.RawMessage(args))
 	if err != nil {
 		t.Fatalf("QueryGraph: %v", err)
 	}
@@ -213,9 +235,9 @@ func TestExpandSeeds_PipelineWithWeights(t *testing.T) {
 		t.Fatalf("marshal weights: %v", err)
 	}
 	seedsJSON, _ := json.Marshal(seeds)
-	args := `{"seeds":` + string(seedsJSON) + `,"weights":` + string(weightsJSON) + `,"follow":["callers"],"depth":2,"limit":50}`
+	args := `{"project":"file://` + r.Root() + `","seeds":` + string(seedsJSON) + `,"weights":` + string(weightsJSON) + `,"follow":["callers"],"depth":2,"limit":50}`
 
-	out, err := tool.QueryGraph(r)(context.Background(), json.RawMessage(args))
+	out, err := tool.QueryGraph(seedRegForHybrid(t, r.Root()))(context.Background(), json.RawMessage(args))
 	if err != nil {
 		t.Fatalf("QueryGraph: %v", err)
 	}
