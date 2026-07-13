@@ -152,11 +152,11 @@ var wireShapeDefs = map[string]func(*registry.Registry, *store.Repo) mcp.ToolDef
 	"tree_overview": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "tree_overview", InputSchema: TreeOverviewSchema, OutputSchema: TreeOverviewOutputSchema, Handler: TreeOverview(reg)}
 	},
-	"node_get": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "node_get", InputSchema: GetNodeSchema, OutputSchema: GetNodeOutputSchema, Handler: GetNode(r)}
+	"node_get": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "node_get", InputSchema: GetNodeSchema, OutputSchema: GetNodeOutputSchema, Handler: GetNode(reg)}
 	},
-	"node_source": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "node_source", InputSchema: NodeSourceSchema, OutputSchema: NodeSourceOutputSchema, Handler: NodeSource(r)}
+	"node_source": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "node_source", InputSchema: NodeSourceSchema, OutputSchema: NodeSourceOutputSchema, Handler: NodeSource(reg)}
 	},
 	"node_edges": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "node_edges", InputSchema: NodeEdgesSchema, OutputSchema: NodeEdgesOutputSchema, Handler: NodeEdges(r)}
@@ -214,8 +214,8 @@ func TestWireShape_AllTools(t *testing.T) {
 
 	cases := []wireShapeCase{
 		{toolName: "tree_overview", argsJSON: `{"project":"file://` + fx.Root + `","depth":2}`},
-		{toolName: "node_get", argsJSON: `{"id":"fn:auth.Login","layers":["signature"]}`},
-		{toolName: "node_source", argsJSON: `{"id":"fn:auth.Login"}`},
+		{toolName: "node_get", argsJSON: `{"project":"file://` + fx.Root + `","id":"fn:auth.Login","layers":["signature"]}`},
+		{toolName: "node_source", argsJSON: `{"project":"file://` + fx.Root + `","id":"fn:auth.Login"}`},
 		{toolName: "node_edges", argsJSON: `{"id":"fn:auth.Login","kinds":["callees"],"limit":10}`, wantKey: "edges"},
 		{toolName: "search", argsJSON: `{"query":"Login","scope":""}`, wantKey: "results"},
 		{toolName: "edit_impact", argsJSON: `{"renames":[{"id":"fn:auth.Login","new_name":"SignIn"}]}`, wantKey: "renames"},

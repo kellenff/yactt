@@ -138,9 +138,10 @@ func BenchmarkToolNodeEdges(b *testing.B) {
 
 // BenchmarkToolNodeGet_signature — cheap layer. baseline.
 func BenchmarkToolNodeGet_signature(b *testing.B) {
-	_, repo := inlineFixtureRepo(b)
-	h := tool.GetNode(repo)
-	args := `{"id":"fn:auth.Login","layers":["signature"]}`
+	root, _ := inlineFixtureRepo(b)
+	reg := seedInlineReg(b, root)
+	h := tool.GetNode(reg)
+	args := `{"project":"file://` + root + `","id":"fn:auth.Login","layers":["signature"]}`
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dispatch(b, h, args)
@@ -150,9 +151,10 @@ func BenchmarkToolNodeGet_signature(b *testing.B) {
 // BenchmarkToolNodeGet_body — moderate layer. Should be slower than
 // signature because body materialisation re-reads + parses the file.
 func BenchmarkToolNodeGet_body(b *testing.B) {
-	_, repo := inlineFixtureRepo(b)
-	h := tool.GetNode(repo)
-	args := `{"id":"fn:auth.Login","layers":["body"]}`
+	root, _ := inlineFixtureRepo(b)
+	reg := seedInlineReg(b, root)
+	h := tool.GetNode(reg)
+	args := `{"project":"file://` + root + `","id":"fn:auth.Login","layers":["body"]}`
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dispatch(b, h, args)
@@ -163,9 +165,10 @@ func BenchmarkToolNodeGet_body(b *testing.B) {
 // Most expensive of the three — confirms the bench is exercising the
 // right axis (signature < body < source).
 func BenchmarkToolNodeGet_source(b *testing.B) {
-	_, repo := inlineFixtureRepo(b)
-	h := tool.GetNode(repo)
-	args := `{"id":"fn:auth.Login","layers":["source"]}`
+	root, _ := inlineFixtureRepo(b)
+	reg := seedInlineReg(b, root)
+	h := tool.GetNode(reg)
+	args := `{"project":"file://` + root + `","id":"fn:auth.Login","layers":["source"]}`
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dispatch(b, h, args)

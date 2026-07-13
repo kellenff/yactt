@@ -7,11 +7,13 @@ import (
 
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/id"
-	"github.com/kellenff/yactt/internal/store"
+	"github.com/kellenff/yactt/internal/project"
+	"github.com/kellenff/yactt/internal/registry"
 )
 
 // NodeSourceArgs is the typed boundary input for node_source.
 type NodeSourceArgs struct {
+	Project       string `json:"project"`
 	ID            string `json:"id"`
 	Range         []int  `json:"range"`
 	IncludeTrivia bool   `json:"include_trivia"`
@@ -31,6 +33,7 @@ var NodeSourceSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "project": { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path). Must be in the registry; call index_repository first." },
     "id": { "type": "string" },
     "range": {
       "type": "array",
@@ -39,7 +42,7 @@ var NodeSourceSchema = json.RawMessage(`{
     },
     "include_trivia": { "type": "boolean", "default": false }
   },
-  "required": ["id"],
+  "required": ["project", "id"],
   "additionalProperties": false
 }`)
 
@@ -59,12 +62,17 @@ var NodeSourceOutputSchema = json.RawMessage(`{
 
 // NodeSource returns a Handler that emits the lossless source slice for an
 // ID. Falls back to file content when the ID is `file:<path>`.
-func NodeSource(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
+func NodeSource(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a NodeSourceArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid node_source args: %w", err)
 		}
+		repo, err := project.Resolve(reg, a.Project)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = repo.Close() }()
 		if a.ID == "" {
 			return nil, fmt.Errorf("node_source: id is required")
 		}
