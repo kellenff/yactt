@@ -342,3 +342,13 @@ Code security and analysis) remains enabled as a second layer.
 | LSP subprocess               | No auto-install; trust-on-PATH         | `internal/lsp/client.go`      |
 | Doc-comment / name injection | Summary-fallback default; `LayerDocs` opt-in; `SanitizeName` egress | `internal/store/node.go` · `internal/domain/sanitize.go` (Issue #2) |
 | Application-level audit (governance) | stderr startup line; opt-in `--audit-log=<file>` per-tool line; install-hook TOFU check | `internal/audit/audit.go` · `cmd/yactt/main.go` (Issue #3) |
+## HTTP transport auth posture (added 2026-07-13)
+
+`yactt mcp serve-http` defaults to `127.0.0.1` with no authentication. The local-first default mirrors the stdio transport (process ownership is the trust boundary). Operators opting in to non-loopback binding must set `--auth-token`; otherwise the daemon returns `403 Forbidden` for every request.
+
+- Tokens are compared in constant time (`crypto/subtle.ConstantTimeCompare`).
+- The token never appears in audit logs (the audit path is request-shape only).
+- The startup line on stderr carries the bind address, port, protocol version, registry path, and config — operators can paste it into a runbook to reproduce the daemon's exact configuration.
+- TLS is not terminated by the daemon — operators front it with a reverse proxy (Caddy, nginx, Cloudflare Tunnel).
+
+Audit log shape (HTTP sessions): `session_id` and `client_addr` fields are populated for every `tools/call`. Stdio sessions omit both. The shape is backward-compatible — existing parsers see the same fields plus optional new ones.

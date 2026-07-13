@@ -76,8 +76,12 @@ type Server struct {
 // the server package drags into its build graph; main.go's wiring
 // passes the concrete audit.Logger via the package-private
 // WithAudit option.
+//
+// The HTTP transport attaches a HTTPMeta on the dispatch context;
+// stdio passes context.Background(). The logger reads HTTPMeta
+// from the context to populate session_id + client_addr.
 type auditLogger interface {
-	LogToolCall(tool string, inputPaths []string, outputBytes int, duration time.Duration, isError bool)
+	LogToolCall(ctx context.Context, tool string, inputPaths []string, outputBytes int, duration time.Duration, isError bool)
 }
 
 // auditPathExtractor is the unexported contract for path extraction.
@@ -125,7 +129,7 @@ type attachedAudit struct {
 	extract auditPathExtractor
 }
 
-func (a *attachedAudit) log(name string, args json.RawMessage, out any, duration time.Duration, isError bool) {
+func (a *attachedAudit) log(ctx context.Context, name string, args json.RawMessage, out any, duration time.Duration, isError bool) {
 	paths := a.extract(args)
 	var size int
 	if out != nil {
@@ -138,7 +142,7 @@ func (a *attachedAudit) log(name string, args json.RawMessage, out any, duration
 			size = len(b)
 		}
 	}
-	a.logger.LogToolCall(name, paths, size, duration, isError)
+	a.logger.LogToolCall(ctx, name, paths, size, duration, isError)
 }
 
 // RegisterTool attaches a tool definition. Replacement panics — registration
@@ -227,6 +231,15 @@ func (s *Server) Serve(ctx context.Context) error {
 	return sc.Err()
 }
 
+// Dispatch is the public alias for the unexported dispatch.
+// The HTTP transport calls this from a goroutine per request;
+// the method is safe for concurrent use (the tools map is
+// read-only after registration, and per-request state lives in
+// `req` / `ctx`).
+func (s *Server) Dispatch(ctx context.Context, req Request) Response {
+	return s.dispatch(ctx, req)
+}
+
 func (s *Server) dispatch(ctx context.Context, req Request) Response {
 	switch req.Method {
 	case "initialize":
@@ -289,7 +302,7 @@ func (s *Server) dispatch(ctx context.Context, req Request) Response {
 		result, herr := t.Handler(ctx, params.Arguments)
 		elapsed := time.Since(start)
 		if s.audit != nil {
-			s.audit.log(params.Name, params.Arguments, result, elapsed, herr != nil)
+			s.audit.log(ctx, params.Name, params.Arguments, result, elapsed, herr != nil)
 		}
 		if herr != nil {
 			return Response{JSONRPC: "2.0", ID: req.ID, Result: CallToolResult{
