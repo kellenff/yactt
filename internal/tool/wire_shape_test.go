@@ -43,7 +43,7 @@ func wireShapeServer(t *testing.T, tools ...mcp.ToolDef) (*mcp.Server, *bytes.Bu
 	t.Helper()
 	stdin := &bytes.Buffer{}
 	stdout := &bytes.Buffer{}
-	s := mcp.NewServer("wire-shape-test", "0.0.0-test", "2024-11-05", stdout,
+	s := mcp.NewServer("wire-shape-test", "0.0.0-test", mcp.ProtocolVersion, stdout,
 		func() (io.Reader, error) { return stdin, nil },
 	)
 	for _, tc := range tools {
@@ -100,7 +100,7 @@ func runWireShapeCases(t *testing.T, reg *registry.Registry, repo *store.Repo, c
 		t.Run(tc.toolName, func(t *testing.T) {
 			stdin := &bytes.Buffer{}
 			stdout := &bytes.Buffer{}
-			s := mcp.NewServer("wire-shape-test", "0.0.0-test", "2024-11-05", stdout,
+			s := mcp.NewServer("wire-shape-test", "0.0.0-test", mcp.ProtocolVersion, stdout,
 				func() (io.Reader, error) { return stdin, nil },
 			)
 			def := wireShapeDefs[tc.toolName]
@@ -251,7 +251,7 @@ func TestWireShape_QueryGraphSeeds(t *testing.T) {
 		t.Helper()
 		stdin := &bytes.Buffer{}
 		stdout := &bytes.Buffer{}
-		s := mcp.NewServer("wire-shape-query-graph-seeds", "0.0.0-test", "2024-11-05", stdout,
+		s := mcp.NewServer("wire-shape-query-graph-seeds", "0.0.0-test", mcp.ProtocolVersion, stdout,
 			func() (io.Reader, error) { return stdin, nil },
 		)
 		s.RegisterTool(wireShapeDefs["query_graph"](reg, r))
@@ -285,7 +285,7 @@ func TestWireShape_QueryGraphSeeds(t *testing.T) {
 		// all present in the structuredContent.
 		stdin := &bytes.Buffer{}
 		stdout := &bytes.Buffer{}
-		s := mcp.NewServer("wire-shape-query-graph-seeds", "0.0.0-test", "2024-11-05", stdout,
+		s := mcp.NewServer("wire-shape-query-graph-seeds", "0.0.0-test", mcp.ProtocolVersion, stdout,
 			func() (io.Reader, error) { return stdin, nil },
 		)
 		s.RegisterTool(wireShapeDefs["query_graph"](reg, r))
@@ -398,7 +398,7 @@ func Use() int { return 99 }
 		t.Helper()
 		stdin := &bytes.Buffer{}
 		stdout := &bytes.Buffer{}
-		s := mcp.NewServer("wire-shape-detect", "0.0.0-test", "2024-11-05", stdout,
+		s := mcp.NewServer("wire-shape-detect", "0.0.0-test", mcp.ProtocolVersion, stdout,
 			func() (io.Reader, error) { return stdin, nil },
 		)
 		s.RegisterTool(wireShapeDefs["detect_changes"](reg, r))
@@ -458,7 +458,7 @@ func TestWireShape_RegistryTools(t *testing.T) {
 		t.Helper()
 		stdin := &bytes.Buffer{}
 		stdout := &bytes.Buffer{}
-		s := mcp.NewServer("wire-shape-registry", "0.0.0-test", "2024-11-05", stdout,
+		s := mcp.NewServer("wire-shape-registry", "0.0.0-test", mcp.ProtocolVersion, stdout,
 			func() (io.Reader, error) { return stdin, nil },
 		)
 		s.RegisterTool(def)

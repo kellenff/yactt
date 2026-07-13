@@ -22,8 +22,22 @@ import (
 // TestMCPServer_RegisterThenDrillIn is the regression test for the
 // project-reference migration's new lifecycle: index a fixture
 // repo, then call tree_overview and find_symbol against it via
-// the in-process MCP server. The JSON-RPC framing is verified
-// through stdio pipes.
+// the in-process MCP server.
+//
+// JSON-RPC framing: this test pipes REAL JSON-RPC requests onto
+// the server's stdin and reads responses from its stdout. It is
+// NOT a Go function-call round-trip — the same bytes an MCP
+// client would write over a socket are written here, and the
+// same bytes the client would parse are read back. The PR-54
+// review asked whether mcp_dispatch_test exercises actual
+// framing; the answer is yes (see the os.Pipe calls and the
+// `requests := []string{...}` JSON-RPC envelope below).
+//
+// ponytail: the test runs in-process (no subprocess spawn) so it
+// stays inside `go test -short ./tests/acceptance` without
+// requiring a built `yactt` binary on PATH. The transport is the
+// same io.Reader/io.Writer the server uses for stdio in
+// production; only the source of the bytes differs.
 func TestMCPServer_RegisterThenDrillIn(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end MCP dispatch skipped in -short mode (requires LSP warmup)")
@@ -49,7 +63,7 @@ func TestMCPServer_RegisterThenDrillIn(t *testing.T) {
 		t.Fatalf("pipe: %v", err)
 	}
 
-	srv := mcp.NewServer("yactt", "test", "2024-11-05",
+	srv := mcp.NewServer("yactt", "test", mcp.ProtocolVersion,
 		stdoutW,
 		func() (io.Reader, error) { return stdinR, nil },
 	)

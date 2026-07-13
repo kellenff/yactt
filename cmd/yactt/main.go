@@ -39,10 +39,14 @@ const usage = `yactt — federated code intelligence for AI agents
 
 Usage:
   yactt overview <path>                   Print the top of the tree for a repo.
-  yactt mcp serve [path] [--audit-log=F]  Run the MCP server on stdio.
-                                          With a path: serves that repo's tools.
-                                          Without: serves the registry (list_projects,
-                                          index_repository, index_status, delete_project).
+  yactt mcp serve [--audit-log=F]         Run the MCP server on stdio.
+                                          The server is stateless across tool calls; tools
+                                          identify their target project by a file:// URI
+                                          passed in each tool's args (e.g. "file:///abs/path").
+                                          Call list_projects to discover indexed repos,
+                                          index_repository ({"project": "file:///abs/path"})
+                                          to load a new one, then any code-intel tool
+                                          with {"project": "file:///abs/path", ...}.
                                           --audit-log=F writes one JSON line per tool call to F.
   yactt chunk --repo <path> [options]     Emit AST-bounded NDJSON chunks to stdout.
                                           See "yactt chunk --help" for options.
@@ -51,9 +55,21 @@ Usage:
   yactt version                           Print version info.
   yactt help                              Show this message.
 
-When path is omitted from "mcp serve", the server runs in registry mode
-- useful for agents that need to discover or manage which repos are
-indexed before drilling into one.
+Project references on the wire
+------------------------------
+Every targeting tool (tree_overview, node_get, find_symbol,
+search_code, query_graph, detect_changes, etc.) requires a
+` + "`project`" + ` field shaped as a file:// URI:
+
+  {"project": "file:///abs/path", ...}
+
+The URI must be absolute and must point at a directory that has
+been registered via index_repository. Relative paths and
+schemes other than file:// are rejected with a clear error.
+
+tree_overview retains a deprecated ` + "`repo`" + ` field as an alias
+for ` + "`project`" + ` (a one-release grace period). Stderr emits a
+deprecation notice every time it fires; remove it before v0.2.0.
 `
 
 // version is stamped onto the binary at build time via
@@ -578,7 +594,7 @@ func runMCPServe(args []string) error {
 	srv := mcp.NewServer(
 		"yactt",
 		version,
-		"2024-11-05",
+		mcp.ProtocolVersion,
 		os.Stdout,
 		func() (io.Reader, error) { return os.Stdin, nil },
 	)
