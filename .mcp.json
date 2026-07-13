@@ -3,7 +3,7 @@
     "yactt": {
       "type": "stdio",
       "command": "yactt",
-      "args": ["mcp", "serve", "${CLAUDE_PROJECT_DIR}"]
+      "args": ["mcp", "serve"]
     }
   }
 }

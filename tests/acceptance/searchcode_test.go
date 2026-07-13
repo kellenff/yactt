@@ -27,7 +27,7 @@ import (
 // len(matches)=3.
 func TestSearchCodeAcceptance_Dedup(t *testing.T) {
 	repo := loadRepo(t)
-	out := callJSON(t, tool.SearchCode(repo), `{"pattern":"err","pattern_kind":"regex","limit":50}`)
+	out := callJSON(t, tool.SearchCode(reg), `{"pattern":"err","pattern_kind":"regex","limit":50}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("search_code envelope type: got %T", out)
@@ -77,7 +77,7 @@ func TestSearchCodeAcceptance_Bucket_Test(t *testing.T) {
 	repo := loadRepo(t)
 	// `Login` is referenced inside login_test.go; the group keyed by
 	// the enclosing TestLogin function in that file must land in `test`.
-	out := callJSON(t, tool.SearchCode(repo), `{"pattern":"Login","pattern_kind":"regex","limit":50}`)
+	out := callJSON(t, tool.SearchCode(reg), `{"pattern":"Login","pattern_kind":"regex","limit":50}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("search_code envelope type: got %T", out)
@@ -107,7 +107,7 @@ func TestSearchCodeAcceptance_Bucket_Test(t *testing.T) {
 // the assertion matches what MCP clients actually see on the wire.
 func TestSearchCodeAcceptance_Provenance(t *testing.T) {
 	repo := loadRepo(t)
-	out := callAsMap(t, tool.SearchCode(repo), `{"pattern":"Login","pattern_kind":"regex","limit":10}`)
+	out := callAsMap(t, tool.SearchCode(reg), `{"pattern":"Login","pattern_kind":"regex","limit":10}`)
 	m, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("envelope type: got %T", out)

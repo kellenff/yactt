@@ -15,10 +15,13 @@ package acceptance_test
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/search"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/tool"
@@ -41,6 +44,25 @@ func loadRepo(t *testing.T) *store.Repo {
 	}
 	fixtureRepoCache = repo
 	return repo
+}
+
+// seedRegForProject creates a fresh *registry.Registry containing one
+// entry for `root`. Used by every test that needs to call a
+// registry-bound tool factory. The handler resolves the project
+// URI via project.Resolve; the registry is just the lookup map.
+func seedRegForProject(t *testing.T, root string) *registry.Registry {
+	t.Helper()
+	dir := t.TempDir()
+	reg := registry.New(filepath.Join(dir, "projects.json"))
+	if err := reg.Upsert(registry.Entry{
+		Name:      filepath.Base(root),
+		Path:      root,
+		IndexedAt: time.Now().UTC(),
+		Files:     0,
+	}); err != nil {
+		t.Fatalf("seedRegForProject: %v", err)
+	}
+	return reg
 }
 
 // call runs the handler with `argsJSON` and returns the raw result. Concrete
@@ -91,7 +113,8 @@ func treeLeaves(tree any) int {
 
 func TestTreeOverviewAcceptance(t *testing.T) {
 	repo := loadRepo(t)
-	out := callJSON(t, tool.TreeOverview(repo), `{"repo":"","depth":2}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callJSON(t, tool.TreeOverview(reg), `{"repo":"","depth":2}`)
 	root, ok := out.(tool.TreeOverviewResult)
 	if !ok {
 		t.Fatalf("root type: got %T", out)
@@ -117,7 +140,8 @@ func TestTreeOverviewAcceptance(t *testing.T) {
 
 func TestNodeGetAcceptance(t *testing.T) {
 	repo := loadRepo(t)
-	out := callJSON(t, tool.GetNode(repo), `{"id":"fn:auth.Login","layers":["summary","signature","body"]}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callJSON(t, tool.GetNode(reg), `{"id":"fn:auth.Login","layers":["summary","signature","body"]}`)
 	n, ok := out.(*domain.Node)
 	if !ok {
 		t.Fatalf("node type: got %T", out)
@@ -144,7 +168,8 @@ func TestNodeGetAcceptance(t *testing.T) {
 
 func TestNodeSourceAcceptance(t *testing.T) {
 	repo := loadRepo(t)
-	out := callJSON(t, tool.NodeSource(repo), `{"id":"fn:auth.ValidateToken"}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callJSON(t, tool.NodeSource(reg), `{"id":"fn:auth.ValidateToken"}`)
 	r, ok := out.(*tool.NodeSourceResult)
 	if !ok {
 		t.Fatalf("source type: got %T", out)
@@ -159,7 +184,8 @@ func TestNodeSourceAcceptance(t *testing.T) {
 
 func TestSearchAcceptance(t *testing.T) {
 	repo := loadRepo(t)
-	out := callJSON(t, tool.Search(repo), `{"query":"ValidateToken","scope":""}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callJSON(t, tool.Search(reg), `{"query":"ValidateToken","scope":""}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("search envelope type: got %T", out)
@@ -178,7 +204,8 @@ func TestSearchAcceptance(t *testing.T) {
 
 func TestGetSymbolsOverviewAcceptance(t *testing.T) {
 	repo := loadRepo(t)
-	out := callAsMap(t, tool.GetSymbolsOverview(repo), `{"file":"auth/login.go","depth":1}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callAsMap(t, tool.GetSymbolsOverview(reg), `{"file":"auth/login.go","depth":1}`)
 	m, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("overview type: got %T", out)
@@ -208,7 +235,8 @@ func TestGetSymbolsOverviewAcceptance(t *testing.T) {
 
 func TestFindCodeAcceptance(t *testing.T) {
 	repo := loadRepo(t)
-	out := callJSON(t, tool.FindCode(repo), `{"pattern":"ValidateToken","pattern_kind":"regex","limit":20}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callJSON(t, tool.FindCode(reg), `{"pattern":"ValidateToken","pattern_kind":"regex","limit":20}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("find_code envelope type: got %T", out)
@@ -227,7 +255,8 @@ func TestFindCodeAcceptance(t *testing.T) {
 // stamp must be set — Issue #7 acceptance criterion.
 func TestGetGraphSchemaAcceptance(t *testing.T) {
 	repo := loadRepo(t)
-	out := callAsMap(t, tool.GetGraphSchema(repo), `{}`)
+	_ = seedRegForProject(t, repo.Root()) // confirm the helper compiles; the test below doesn't bind a reg since GetGraphSchema is repo-independent
+out := callAsMap(t, tool.GetGraphSchema(), `{}`)
 	m, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("graph schema type: got %T", out)
@@ -256,9 +285,10 @@ func TestGetGraphSchemaAcceptance(t *testing.T) {
 // used to require find_symbol + node_source.
 func TestGetCodeSnippetAcceptance(t *testing.T) {
 	repo := loadRepo(t)
+	reg := seedRegForProject(t, repo.Root())
 
 	// By id
-	out := callAsMap(t, tool.GetCodeSnippet(repo), `{"id":"fn:auth.Login"}`)
+	out := callAsMap(t, tool.GetCodeSnippet(reg), `{"id":"fn:auth.Login"}`)
 	m := out.(map[string]any)
 	if id, _ := m["id"].(string); id != "fn:auth.Login" {
 		t.Errorf("by-id id = %q, want fn:auth.Login", id)
@@ -269,7 +299,7 @@ func TestGetCodeSnippetAcceptance(t *testing.T) {
 	}
 
 	// By name_path
-	out = callAsMap(t, tool.GetCodeSnippet(repo), `{"name_path":"auth.ValidateToken"}`)
+	out = callAsMap(t, tool.GetCodeSnippet(reg), `{"name_path":"auth.ValidateToken"}`)
 	m = out.(map[string]any)
 	if id, _ := m["id"].(string); id != "fn:auth.ValidateToken" {
 		t.Errorf("by-name id = %q, want fn:auth.ValidateToken", id)
@@ -281,7 +311,8 @@ func TestGetCodeSnippetAcceptance(t *testing.T) {
 // fixture's language mix includes Go.
 func TestGetArchitectureAcceptance(t *testing.T) {
 	repo := loadRepo(t)
-	out := callAsMap(t, tool.GetArchitecture(repo), `{}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callAsMap(t, tool.GetArchitecture(reg), `{}`)
 	m, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("architecture type: got %T", out)
@@ -313,7 +344,8 @@ func TestGetArchitectureAcceptance(t *testing.T) {
 
 func TestFindSymbolAcceptance(t *testing.T) {
 	repo := loadRepo(t)
-	out := callJSON(t, tool.FindSymbol(repo), `{"name_path":"auth/Login*","limit":10,"include_body":true}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callJSON(t, tool.FindSymbol(reg), `{"name_path":"auth/Login*","limit":10,"include_body":true}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("find_symbol envelope type: got %T", out)
@@ -329,7 +361,8 @@ func TestFindSymbolAcceptance(t *testing.T) {
 
 func TestFindReferencingSymbolsAcceptance(t *testing.T) {
 	repo := loadRepo(t)
-	out := callAsMap(t, tool.FindReferencingSymbols(repo), `{"symbol":"fn:auth.ValidateToken","kinds":["tests","calls"]}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callAsMap(t, tool.FindReferencingSymbols(reg), `{"symbol":"fn:auth.ValidateToken","kinds":["tests","calls"]}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("find_referencing_symbols envelope type: got %T", out)
@@ -345,7 +378,8 @@ func TestFindReferencingSymbolsAcceptance(t *testing.T) {
 
 func TestEditImpactAcceptance(t *testing.T) {
 	repo := loadRepo(t)
-	out := callAsMap(t, tool.EditImpact(repo), `{"renames":[{"id":"fn:auth.SetSession","new_name":"OpenSession"}]}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callAsMap(t, tool.EditImpact(reg), `{"renames":[{"id":"fn:auth.SetSession","new_name":"OpenSession"}]}`)
 	r, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("edit_impact type: got %T", out)
@@ -362,7 +396,8 @@ func TestEditImpactAcceptance(t *testing.T) {
 
 func TestNodeEdgesAcceptance(t *testing.T) {
 	repo := loadRepo(t)
-	out := callAsMap(t, tool.NodeEdges(repo), `{"id":"fn:auth.Login","kinds":["callees"],"limit":10}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callAsMap(t, tool.NodeEdges(reg), `{"id":"fn:auth.Login","kinds":["callees"],"limit":10}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("node_edges envelope type: got %T", out)
@@ -383,7 +418,8 @@ func TestNodeEdgesAcceptance(t *testing.T) {
 // the tree-sitter pass.
 func TestNodeGet_CrossPackage_Charge(t *testing.T) {
 	repo := loadRepo(t)
-	out := callJSON(t, tool.GetNode(repo), `{"id":"fn:payments.Charge","layers":["signature","body"]}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callJSON(t, tool.GetNode(reg), `{"id":"fn:payments.Charge","layers":["signature","body"]}`)
 	n, ok := out.(*domain.Node)
 	if !ok {
 		t.Fatalf("node_get type: got %T", out)
@@ -410,7 +446,8 @@ func TestNodeGet_CrossPackage_Charge(t *testing.T) {
 // body layer is *not* accidentally empty for cross-package callers.
 func TestNodeGet_CrossPackage_Login_BodyMentionsCharge(t *testing.T) {
 	repo := loadRepo(t)
-	out := callJSON(t, tool.GetNode(repo), `{"id":"fn:auth.Login","layers":["body"]}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callJSON(t, tool.GetNode(reg), `{"id":"fn:auth.Login","layers":["body"]}`)
 	n, ok := out.(*domain.Node)
 	if !ok {
 		t.Fatalf("node_get type: got %T", out)
@@ -437,7 +474,8 @@ func TestNodeGet_CrossPackage_Login_BodyMentionsCharge(t *testing.T) {
 // in the segment-splitting logic of findsymbol.go.
 func TestFindSymbol_ExactNamePath(t *testing.T) {
 	repo := loadRepo(t)
-	out := callJSON(t, tool.FindSymbol(repo), `{"name_path":"auth/Login","limit":5,"include_body":false}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callJSON(t, tool.FindSymbol(reg), `{"name_path":"auth/Login","limit":5,"include_body":false}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("find_symbol envelope type: got %T", out)
@@ -460,7 +498,8 @@ func TestFindSymbol_ExactNamePath(t *testing.T) {
 // `symbols: []`.
 func TestFindSymbol_DottedNamePath_Login(t *testing.T) {
 	repo := loadRepo(t)
-	out := callJSON(t, tool.FindSymbol(repo), `{"name_path":"auth.Login","limit":5,"include_body":false}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callJSON(t, tool.FindSymbol(reg), `{"name_path":"auth.Login","limit":5,"include_body":false}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("find_symbol envelope type: got %T", out)
@@ -484,7 +523,8 @@ func TestFindSymbol_DottedNamePath_Login(t *testing.T) {
 // the smoke test relied on.
 func TestFindSymbol_PrefixGlob_Login(t *testing.T) {
 	repo := loadRepo(t)
-	out := callJSON(t, tool.FindSymbol(repo), `{"name_path":"auth/Login*","limit":10,"include_body":false}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callJSON(t, tool.FindSymbol(reg), `{"name_path":"auth/Login*","limit":10,"include_body":false}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("find_symbol envelope type: got %T", out)
@@ -515,7 +555,8 @@ func TestFindSymbol_PrefixGlob_Login(t *testing.T) {
 // returns the cross-package call site (auth/login.go: `payments.Charge(sess)`).
 func TestFindCode_RegexPattern_Charge(t *testing.T) {
 	repo := loadRepo(t)
-	out := callJSON(t, tool.FindCode(repo), `{"pattern":"payments\\.Charge","pattern_kind":"regex","limit":20}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callJSON(t, tool.FindCode(reg), `{"pattern":"payments\\.Charge","pattern_kind":"regex","limit":20}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("find_code envelope type: got %T", out)
@@ -546,7 +587,8 @@ func TestFindCode_RegexPattern_Charge(t *testing.T) {
 // machines without gopls).
 func TestFindReferencingSymbols_CrossPackage_Charge(t *testing.T) {
 	repo := loadRepo(t)
-	out := callAsMap(t, tool.FindReferencingSymbols(repo), `{"symbol":"fn:payments.Charge","kinds":["callers"]}`)
+	reg := seedRegForProject(t, repo.Root())
+out := callAsMap(t, tool.FindReferencingSymbols(reg), `{"symbol":"fn:payments.Charge","kinds":["callers"]}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("find_referencing_symbols envelope type: got %T", out)

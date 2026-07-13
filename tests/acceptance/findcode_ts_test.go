@@ -22,7 +22,7 @@ import (
 // collaboration tests under internal/tool/findcode_tree_sitter_test.go.
 func TestFindCodeAcceptance_TreeSitter(t *testing.T) {
 	repo := loadRepo(t)
-	out := callJSON(t, tool.FindCode(repo), `{"pattern":"(call_expression) @c","pattern_kind":"tree_sitter","limit":50}`)
+	out := callJSON(t, tool.FindCode(reg), `{"pattern":"(call_expression) @c","pattern_kind":"tree_sitter","limit":50}`)
 	env, ok := out.(map[string]any)
 	if !ok {
 		t.Fatalf("find_code envelope type: got %T", out)
@@ -55,7 +55,7 @@ func TestFindCodeAcceptance_TreeSitter(t *testing.T) {
 // error rather than a panic or empty result.
 func TestFindCodeAcceptance_TreeSitter_CompileError(t *testing.T) {
 	repo := loadRepo(t)
-	_, err := tool.FindCode(repo)(context.Background(), json.RawMessage(`{"pattern":"(function_declaration","pattern_kind":"tree_sitter","limit":10}`))
+	_, err := tool.FindCode(reg)(context.Background(), json.RawMessage(`{"pattern":"(function_declaration","pattern_kind":"tree_sitter","limit":10}`))
 	if err == nil {
 		t.Fatal("expected compile error; got nil")
 	}
