@@ -10,13 +10,16 @@ import (
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/parser"
+	"github.com/kellenff/yactt/internal/project"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 )
 
 // GetSymbolsOverviewArgs is the typed input for get_symbols_overview.
 // Mirrors design §4.8.
 type GetSymbolsOverviewArgs struct {
-	File string `json:"file"`
+	Project string `json:"project"`
+	File    string `json:"file"`
 }
 
 // SymbolsOverviewNode is one symbol entry.
@@ -33,9 +36,10 @@ var GetSymbolsOverviewSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "project": { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path). Must be in the registry; call index_repository first." },
     "file": { "type": "string" }
   },
-  "required": ["file"],
+  "required": ["project", "file"],
   "additionalProperties": false
 }`)
 
@@ -68,12 +72,17 @@ var GetSymbolsOverviewOutputSchema = json.RawMessage(`{
 
 // GetSymbolsOverview returns a Handler that emits the top-N structural
 // outline of a file.
-func GetSymbolsOverview(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
+func GetSymbolsOverview(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a GetSymbolsOverviewArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid get_symbols_overview args: %w", err)
 		}
+		repo, err := project.Resolve(reg, a.Project)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = repo.Close() }()
 		if a.File == "" {
 			return nil, fmt.Errorf("get_symbols_overview: file is required")
 		}

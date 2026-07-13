@@ -10,6 +10,8 @@ import (
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/parser"
+	"github.com/kellenff/yactt/internal/project"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 )
 
@@ -56,6 +58,7 @@ var validFollowKinds = map[string]struct{}{
 // list comes from a vector retriever and the weights carry the
 // per-seed similarity score (or 1.0 for uniform).
 type QueryGraphArgs struct {
+	Project string    `json:"project"`
 	From    string    `json:"from"`
 	Seeds   []string  `json:"seeds"`
 	Weights []float64 `json:"weights"`
@@ -116,10 +119,11 @@ var QueryGraphSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "anyOf": [
-    { "required": ["from", "follow"] },
-    { "required": ["seeds", "follow"] }
+    { "required": ["project", "from", "follow"] },
+    { "required": ["project", "seeds", "follow"] }
   ],
   "properties": {
+    "project": { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path). Must be in the registry; call index_repository first." },
     "from":    { "type": "string" },
     "seeds":   {
       "type": "array",
@@ -225,12 +229,17 @@ type frontierNode struct {
 // no new graph API is introduced. Depth, result count, total visited
 // nodes, and wallclock are all bounded so a misbehaving query can't OOM
 // the process.
-func QueryGraph(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
+func QueryGraph(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a QueryGraphArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid query_graph args: %w", err)
 		}
+		repo, err := project.Resolve(reg, a.Project)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = repo.Close() }()
 		follow, err := normaliseFollow(a.Follow)
 		if err != nil {
 			return nil, fmt.Errorf("query_graph: %w", err)

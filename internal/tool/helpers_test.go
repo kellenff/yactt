@@ -1,6 +1,12 @@
 package tool
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/kellenff/yactt/internal/registry"
+)
 
 // TestJoinDotted covers the four-cell truth table of joinDotted:
 //
@@ -54,6 +60,38 @@ func TestBaseName_LastSegment(t *testing.T) {
 
 // TestRelPath_TrimsRootPrefix mirrors the relPath helper: it strips the
 // root prefix and the leading separator.
+// seedRegForRoot creates a fresh registry containing one entry for the
+// given absolute root path. Used by per-tool unit tests that load a
+// repo via store.Load and then need a *registry.Registry to call the
+// migrated tool factories with. The tool factory takes the registry
+// (not the repo); the resolved repo is loaded by project.Resolve
+// inside the handler.
+//
+// Ponytail: live in helpers_test.go so wire_shape_test.go,
+// wire_shape_bench_test.go, and the per-tool test files can all
+// share one definition.
+func seedRegForRoot(tb testing.TB, root string) *registry.Registry {
+	tb.Helper()
+	dir := tb.TempDir()
+	reg := registry.New(filepath.Join(dir, "projects.json"))
+	if err := reg.Upsert(registry.Entry{
+		Name:      filepath.Base(root),
+		Path:      root,
+		IndexedAt: time.Now().UTC(),
+		Files:     0,
+	}); err != nil {
+		tb.Fatalf("seedRegForRoot: %v", err)
+	}
+	return reg
+}
+
+// seedRegFromRepo is the convenience wrapper that takes a loaded
+// *store.Repo. Use it right after a `r, _, err := store.Load(...)`
+// call in tests.
+func seedRegFromRepo(tb testing.TB, repo interface{ Root() string }) *registry.Registry {
+	return seedRegForRoot(tb, repo.Root())
+}
+
 func TestRelPath_TrimsRootPrefix(t *testing.T) {
 	cases := []struct {
 		root, in, want string

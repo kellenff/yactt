@@ -8,6 +8,8 @@ import (
 
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/id"
+	"github.com/kellenff/yactt/internal/project"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 )
 
@@ -16,6 +18,7 @@ import (
 // or "auth/Login") must be supplied. When both are set, `id` wins; when an
 // id-shaped string is passed as `name_path`, it's parsed as an id directly.
 type GetCodeSnippetArgs struct {
+	Project       string `json:"project"`
 	ID            string `json:"id"`
 	NamePath      string `json:"name_path"`
 	Range         []int  `json:"range"`
@@ -43,6 +46,7 @@ var GetCodeSnippetSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "project": { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path). Must be in the registry; call index_repository first." },
     "id": {
       "type": "string",
       "description": "Stable node id, e.g. fn:auth.Login or meth:auth.Session.Attempt."
@@ -58,6 +62,7 @@ var GetCodeSnippetSchema = json.RawMessage(`{
     },
     "include_trivia": { "type": "boolean", "default": false }
   },
+  "required": ["project"],
   "anyOf": [
     { "required": ["id"] },
     { "required": ["name_path"] }
@@ -85,12 +90,17 @@ var GetCodeSnippetOutputSchema = json.RawMessage(`{
 // resolved either by stable `id` or by qualified `name_path`. The
 // combined-input affordance halves the find_symbol+node_source dance for
 // the common "show me the code for X" question.
-func GetCodeSnippet(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
+func GetCodeSnippet(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a GetCodeSnippetArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid get_code_snippet args: %w", err)
 		}
+		repo, err := project.Resolve(reg, a.Project)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = repo.Close() }()
 		if a.ID == "" && a.NamePath == "" {
 			return nil, fmt.Errorf("get_code_snippet: id or name_path is required")
 		}

@@ -18,6 +18,8 @@ import (
 	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/parser"
+	"github.com/kellenff/yactt/internal/project"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 )
 
@@ -35,10 +37,11 @@ const (
 // head="HEAD"). Both base and since are mutually exclusive — the handler
 // rejects if both are passed.
 type DetectChangesArgs struct {
-	Base  string `json:"base"`
-	Head  string `json:"head"`
-	Since string `json:"since"`
-	Limit int    `json:"limit"`
+	Project string `json:"project"`
+	Base    string `json:"base"`
+	Head    string `json:"head"`
+	Since   string `json:"since"`
+	Limit   int    `json:"limit"`
 }
 
 // SymbolRef is a minimal pointer to the symbol affected by a hunk. Mirrors
@@ -93,11 +96,13 @@ var DetectChangesSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "project": { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path). Must be in the registry; call index_repository first." },
     "base":  { "type": "string", "description": "Base ref (branch, tag, SHA). Use 'since' instead for a one-sided diff." },
     "head":  { "type": "string", "description": "Head ref. Defaults to HEAD." },
     "since": { "type": "string", "description": "Shortcut for {base: <since>, head: HEAD}. Mutually exclusive with 'base'." },
     "limit": { "type": "integer", "description": "Per-symbol callers/tests/overrides cap. Default 20, max 100." }
   },
+  "required": ["project"],
   "anyOf": [
     { "required": ["base"] },
     { "required": ["since"] }
@@ -147,12 +152,17 @@ var DetectChangesOutputSchema = json.RawMessage(`{
 // scanOverrides' own comment). The git-diff subprocess is the only
 // shell-out in the tool — bounded by a 10 s wallclock and the per-tool
 // result cap.
-func DetectChanges(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
+func DetectChanges(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a DetectChangesArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid detect_changes args: %w", err)
 		}
+		repo, err := project.Resolve(reg, a.Project)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = repo.Close() }()
 		base, head, err := normaliseRefs(a.Base, a.Since, a.Head)
 		if err != nil {
 			return nil, fmt.Errorf("detect_changes: %w", err)

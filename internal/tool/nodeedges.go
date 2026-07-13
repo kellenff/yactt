@@ -14,14 +14,17 @@ import (
 	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/lsp"
 	"github.com/kellenff/yactt/internal/parser"
+	"github.com/kellenff/yactt/internal/project"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 )
 
 // NodeEdgesArgs is the typed input for node_edges.
 type NodeEdgesArgs struct {
-	ID    string   `json:"id"`
-	Kinds []string `json:"kinds"`
-	Limit int      `json:"limit"`
+	Project string   `json:"project"`
+	ID      string   `json:"id"`
+	Kinds   []string `json:"kinds"`
+	Limit   int      `json:"limit"`
 }
 
 // NodeEdgesResult is one or more typed edges. Confidence is in [0, 1].
@@ -40,6 +43,7 @@ var NodeEdgesSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "project": { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path). Must be in the registry; call index_repository first." },
     "id": { "type": "string" },
     "kinds": {
       "type": "array",
@@ -48,7 +52,7 @@ var NodeEdgesSchema = json.RawMessage(`{
     },
     "limit": { "type": "integer", "default": 50 }
   },
-  "required": ["id"],
+  "required": ["project", "id"],
   "additionalProperties": false
 }`)
 
@@ -89,12 +93,17 @@ var NodeEdgesOutputSchema = json.RawMessage(`{
 // MVP backend: tree-sitter pass for syntactic call detection. Confidence is
 // flagged 0.5 per design §4.4 ("syntactic — no cross-file resolution").
 // LSP/SCIP resolution would raise confidence to 1.0 once wired.
-func NodeEdges(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
+func NodeEdges(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a NodeEdgesArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid node_edges args: %w", err)
 		}
+		repo, err := project.Resolve(reg, a.Project)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = repo.Close() }()
 		if a.ID == "" {
 			return nil, fmt.Errorf("node_edges: id is required")
 		}

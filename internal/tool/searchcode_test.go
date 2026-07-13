@@ -31,7 +31,7 @@ func loadSearchCodeRepo(t *testing.T) *store.Repo {
 // find_code helpers' callX pattern. Returns the raw handler envelope.
 func callSearchCode(t *testing.T, r *store.Repo, args string) map[string]any {
 	t.Helper()
-	out, err := SearchCode(r)(context.Background(), json.RawMessage(args))
+	out, err := SearchCode(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(args))
 	if err != nil {
 		t.Fatalf("SearchCode: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestSearchCode_ProvenanceStamp(t *testing.T) {
 // matching find_code test.
 func TestSearchCode_RejectsEmptyPattern(t *testing.T) {
 	r := loadSearchCodeRepo(t)
-	_, err := SearchCode(r)(context.Background(), json.RawMessage(`{"pattern":""}`))
+	_, err := SearchCode(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(`{"pattern":""}`))
 	if err == nil {
 		t.Fatalf("expected error on empty pattern")
 	}
@@ -203,7 +203,7 @@ func TestSearchCode_RejectsEmptyPattern(t *testing.T) {
 // the same `invalid regex:` error shape.
 func TestSearchCode_RejectsBadRegex(t *testing.T) {
 	r := loadSearchCodeRepo(t)
-	_, err := SearchCode(r)(context.Background(), json.RawMessage(`{"pattern":"[","pattern_kind":"regex"}`))
+	_, err := SearchCode(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(`{"pattern":"[","pattern_kind":"regex"}`))
 	if err == nil {
 		t.Fatalf("expected error on bad regex")
 	}
@@ -219,7 +219,7 @@ func TestSearchCode_RejectsPatternLengthCap(t *testing.T) {
 	r := loadSearchCodeRepo(t)
 	huge := strings.Repeat("a", maxRegexPatternBytes+1)
 	args := `{"pattern":"` + huge + `","pattern_kind":"regex","limit":1}`
-	_, err := SearchCode(r)(context.Background(), json.RawMessage(args))
+	_, err := SearchCode(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(args))
 	if err == nil {
 		t.Fatalf("expected error on %d-byte pattern", len(huge))
 	}

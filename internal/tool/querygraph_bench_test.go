@@ -36,7 +36,7 @@ func BenchmarkQueryGraph_5HopCallers(b *testing.B) {
 	}
 	b.Cleanup(func() { _ = r.Close() })
 
-	handler := QueryGraph(r)
+	handler := QueryGraph(seedRegFromRepo(b, r))
 
 	cases := []struct {
 		name string

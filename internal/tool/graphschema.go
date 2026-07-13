@@ -7,7 +7,6 @@ import (
 
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/entity"
-	"github.com/kellenff/yactt/internal/store"
 )
 
 // GetGraphSchemaArgs is the typed boundary input for get_graph_schema. The
@@ -118,11 +117,10 @@ func buildKindMap() map[domain.NodeKind]entity.KindMapping {
 	return out
 }
 
-// GetGraphSchema returns a Handler that emits the graph schema. The
-// constructor takes *store.Repo to keep the wire-shape-test registration
-// uniform across tools, even though the answer is repo-independent.
-func GetGraphSchema(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
-	_ = repo // explicitly unused; reserved for future per-repo schema diffs.
+// GetGraphSchema returns a Handler that emits the graph schema.
+// Repo-independent (the answer is constants today); the constructor
+// takes no arguments so registration stays uniform across tools.
+func GetGraphSchema() func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a GetGraphSchemaArgs
 		if err := json.Unmarshal(args, &a); err != nil {
