@@ -138,16 +138,15 @@ func runWireShapeCases(t *testing.T, reg *registry.Registry, repo *store.Repo, c
 	}
 }
 
-// wireShapeDefs maps each tool name to a function that builds its ToolDef
-// from a registry and a repo. The registry is used by the migrated
-// tools (Phase 2+: tree_overview, then the rest in Phase 3); the repo
-// is used by the unmigrated tools that still take a *store.Repo
-// closure parameter. As the migration progresses the repo argument
-// becomes vestigial and can be removed.
+// wireShapeDefs maps each tool name to a function that builds its
+// ToolDef from a registry (and an unused repo for legacy wire-shape
+// cases — every repo-bound tool now resolves project URIs via the
+// registry). After Phase 4 the repo parameter can be removed; until
+// then it is accepted but unused.
 //
-// ponytail: passing both is awkward but lets the wire-shape tests
-// stay green one phase at a time without forcing every tool to
-// migrate atomically.
+// ponytail: kept the (reg, repo) signature for the same reason as
+// runWireShapeCases — it lets the wire-shape test stay green while
+// individual tool migrations land, without a coordinated flag day.
 var wireShapeDefs = map[string]func(*registry.Registry, *store.Repo) mcp.ToolDef{
 	"tree_overview": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "tree_overview", InputSchema: TreeOverviewSchema, OutputSchema: TreeOverviewOutputSchema, Handler: TreeOverview(reg)}
@@ -158,44 +157,44 @@ var wireShapeDefs = map[string]func(*registry.Registry, *store.Repo) mcp.ToolDef
 	"node_source": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
 		return mcp.ToolDef{Name: "node_source", InputSchema: NodeSourceSchema, OutputSchema: NodeSourceOutputSchema, Handler: NodeSource(reg)}
 	},
-	"node_edges": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "node_edges", InputSchema: NodeEdgesSchema, OutputSchema: NodeEdgesOutputSchema, Handler: NodeEdges(r)}
+	"node_edges": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "node_edges", InputSchema: NodeEdgesSchema, OutputSchema: NodeEdgesOutputSchema, Handler: NodeEdges(reg)}
 	},
-	"search": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "search", InputSchema: SearchSchema, OutputSchema: SearchOutputSchema, Handler: Search(r)}
+	"search": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "search", InputSchema: SearchSchema, OutputSchema: SearchOutputSchema, Handler: Search(reg)}
 	},
-	"edit_impact": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "edit_impact", InputSchema: EditImpactSchema, OutputSchema: EditImpactOutputSchema, Handler: EditImpact(r)}
+	"edit_impact": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "edit_impact", InputSchema: EditImpactSchema, OutputSchema: EditImpactOutputSchema, Handler: EditImpact(reg)}
 	},
-	"find_symbol": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "find_symbol", InputSchema: FindSymbolSchema, OutputSchema: FindSymbolOutputSchema, Handler: FindSymbol(r)}
+	"find_symbol": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "find_symbol", InputSchema: FindSymbolSchema, OutputSchema: FindSymbolOutputSchema, Handler: FindSymbol(reg)}
 	},
-	"get_symbols_overview": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "get_symbols_overview", InputSchema: GetSymbolsOverviewSchema, OutputSchema: GetSymbolsOverviewOutputSchema, Handler: GetSymbolsOverview(r)}
+	"get_symbols_overview": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "get_symbols_overview", InputSchema: GetSymbolsOverviewSchema, OutputSchema: GetSymbolsOverviewOutputSchema, Handler: GetSymbolsOverview(reg)}
 	},
-	"find_code": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "find_code", InputSchema: FindCodeSchema, OutputSchema: FindCodeOutputSchema, Handler: FindCode(r)}
+	"find_code": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "find_code", InputSchema: FindCodeSchema, OutputSchema: FindCodeOutputSchema, Handler: FindCode(reg)}
 	},
-	"search_code": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "search_code", InputSchema: SearchCodeSchema, OutputSchema: SearchCodeOutputSchema, Handler: SearchCode(r)}
+	"search_code": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "search_code", InputSchema: SearchCodeSchema, OutputSchema: SearchCodeOutputSchema, Handler: SearchCode(reg)}
 	},
-	"find_referencing_symbols": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "find_referencing_symbols", InputSchema: FindReferencingSymbolsSchema, OutputSchema: FindReferencingSymbolsOutputSchema, Handler: FindReferencingSymbols(r)}
+	"find_referencing_symbols": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "find_referencing_symbols", InputSchema: FindReferencingSymbolsSchema, OutputSchema: FindReferencingSymbolsOutputSchema, Handler: FindReferencingSymbols(reg)}
 	},
-	"get_graph_schema": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "get_graph_schema", InputSchema: GetGraphSchemaSchema, OutputSchema: GetGraphSchemaOutputSchema, Handler: GetGraphSchema(r)}
+	"get_graph_schema": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "get_graph_schema", InputSchema: GetGraphSchemaSchema, OutputSchema: GetGraphSchemaOutputSchema, Handler: GetGraphSchema()}
 	},
-	"get_code_snippet": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "get_code_snippet", InputSchema: GetCodeSnippetSchema, OutputSchema: GetCodeSnippetOutputSchema, Handler: GetCodeSnippet(r)}
+	"get_code_snippet": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "get_code_snippet", InputSchema: GetCodeSnippetSchema, OutputSchema: GetCodeSnippetOutputSchema, Handler: GetCodeSnippet(reg)}
 	},
-	"get_architecture": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "get_architecture", InputSchema: GetArchitectureSchema, OutputSchema: GetArchitectureOutputSchema, Handler: GetArchitecture(r)}
+	"get_architecture": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "get_architecture", InputSchema: GetArchitectureSchema, OutputSchema: GetArchitectureOutputSchema, Handler: GetArchitecture(reg)}
 	},
-	"query_graph": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "query_graph", InputSchema: QueryGraphSchema, OutputSchema: QueryGraphOutputSchema, Handler: QueryGraph(r)}
+	"query_graph": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "query_graph", InputSchema: QueryGraphSchema, OutputSchema: QueryGraphOutputSchema, Handler: QueryGraph(reg)}
 	},
-	"detect_changes": func(_ *registry.Registry, r *store.Repo) mcp.ToolDef {
-		return mcp.ToolDef{Name: "detect_changes", InputSchema: DetectChangesSchema, OutputSchema: DetectChangesOutputSchema, Handler: DetectChanges(r)}
+	"detect_changes": func(reg *registry.Registry, _ *store.Repo) mcp.ToolDef {
+		return mcp.ToolDef{Name: "detect_changes", InputSchema: DetectChangesSchema, OutputSchema: DetectChangesOutputSchema, Handler: DetectChanges(reg)}
 	},
 }
 
@@ -216,18 +215,18 @@ func TestWireShape_AllTools(t *testing.T) {
 		{toolName: "tree_overview", argsJSON: `{"project":"file://` + fx.Root + `","depth":2}`},
 		{toolName: "node_get", argsJSON: `{"project":"file://` + fx.Root + `","id":"fn:auth.Login","layers":["signature"]}`},
 		{toolName: "node_source", argsJSON: `{"project":"file://` + fx.Root + `","id":"fn:auth.Login"}`},
-		{toolName: "node_edges", argsJSON: `{"id":"fn:auth.Login","kinds":["callees"],"limit":10}`, wantKey: "edges"},
-		{toolName: "search", argsJSON: `{"query":"Login","scope":""}`, wantKey: "results"},
-		{toolName: "edit_impact", argsJSON: `{"renames":[{"id":"fn:auth.Login","new_name":"SignIn"}]}`, wantKey: "renames"},
-		{toolName: "find_symbol", argsJSON: `{"name_path":"auth/Login","limit":5}`, wantKey: "symbols"},
-		{toolName: "get_symbols_overview", argsJSON: `{"file":"auth/login.go"}`, wantKey: "symbols"},
-		{toolName: "find_code", argsJSON: `{"pattern":"Login","pattern_kind":"regex","limit":10}`, wantKey: "matches"},
-		{toolName: "search_code", argsJSON: `{"pattern":"Login","pattern_kind":"regex","limit":10}`, wantKey: "groups"},
-		{toolName: "find_referencing_symbols", argsJSON: `{"symbol":"fn:auth.Login","kinds":["tests"]}`, wantKey: "references"},
+		{toolName: "node_edges", argsJSON: `{"project":"file://` + fx.Root + `","id":"fn:auth.Login","kinds":["callees"],"limit":10}`, wantKey: "edges"},
+		{toolName: "search", argsJSON: `{"project":"file://` + fx.Root + `","query":"Login","scope":""}`, wantKey: "results"},
+		{toolName: "edit_impact", argsJSON: `{"project":"file://` + fx.Root + `","renames":[{"id":"fn:auth.Login","new_name":"SignIn"}]}`, wantKey: "renames"},
+		{toolName: "find_symbol", argsJSON: `{"project":"file://` + fx.Root + `","name_path":"auth/Login","limit":5}`, wantKey: "symbols"},
+		{toolName: "get_symbols_overview", argsJSON: `{"project":"file://` + fx.Root + `","file":"auth/login.go"}`, wantKey: "symbols"},
+		{toolName: "find_code", argsJSON: `{"project":"file://` + fx.Root + `","pattern":"Login","pattern_kind":"regex","limit":10}`, wantKey: "matches"},
+		{toolName: "search_code", argsJSON: `{"project":"file://` + fx.Root + `","pattern":"Login","pattern_kind":"regex","limit":10}`, wantKey: "groups"},
+		{toolName: "find_referencing_symbols", argsJSON: `{"project":"file://` + fx.Root + `","symbol":"fn:auth.Login","kinds":["tests"]}`, wantKey: "references"},
 		{toolName: "get_graph_schema", argsJSON: `{}`},
-		{toolName: "get_code_snippet", argsJSON: `{"name_path":"auth.Login"}`},
-		{toolName: "get_architecture", argsJSON: `{}`},
-		{toolName: "query_graph", argsJSON: `{"from":"meth:auth.Alpha.Ping","follow":["callees","callers"],"depth":2,"limit":10}`, wantKey: "rows"},
+		{toolName: "get_code_snippet", argsJSON: `{"project":"file://` + fx.Root + `","name_path":"auth.Login"}`},
+		{toolName: "get_architecture", argsJSON: `{"project":"file://` + fx.Root + `"}`},
+		{toolName: "query_graph", argsJSON: `{"project":"file://` + fx.Root + `","from":"meth:auth.Alpha.Ping","follow":["callees","callers"],"depth":2,"limit":10}`, wantKey: "rows"},
 	}
 	reg := seededReg(t, fx.Root)
 	runWireShapeCases(t, reg, r, cases)
@@ -246,6 +245,7 @@ func TestWireShape_QueryGraphSeeds(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	defer func() { _ = r.Close() }()
+	reg := seededReg(t, fx.Root)
 
 	runOne := func(t *testing.T, args string) {
 		t.Helper()
@@ -254,7 +254,7 @@ func TestWireShape_QueryGraphSeeds(t *testing.T) {
 		s := mcp.NewServer("wire-shape-query-graph-seeds", "0.0.0-test", "2024-11-05", stdout,
 			func() (io.Reader, error) { return stdin, nil },
 		)
-		s.RegisterTool(wireShapeDefs["query_graph"](nil, r))
+		s.RegisterTool(wireShapeDefs["query_graph"](reg, r))
 
 		req := map[string]any{
 			"jsonrpc": "2.0",
@@ -288,12 +288,12 @@ func TestWireShape_QueryGraphSeeds(t *testing.T) {
 		s := mcp.NewServer("wire-shape-query-graph-seeds", "0.0.0-test", "2024-11-05", stdout,
 			func() (io.Reader, error) { return stdin, nil },
 		)
-		s.RegisterTool(wireShapeDefs["query_graph"](nil, r))
+		s.RegisterTool(wireShapeDefs["query_graph"](reg, r))
 		req := map[string]any{
 			"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 			"params": map[string]any{
 				"name": "query_graph",
-				"arguments": json.RawMessage(`{"seeds":["meth:auth.Alpha.Ping","fn:auth.Authenticate"],"follow":["callees","callers"],"depth":2,"limit":10}`),
+				"arguments": json.RawMessage(`{"project":"file://` + fx.Root + `","seeds":["meth:auth.Alpha.Ping","fn:auth.Authenticate"],"follow":["callees","callers"],"depth":2,"limit":10}`),
 			},
 		}
 		reqBytes, _ := json.Marshal(req)
@@ -311,7 +311,7 @@ func TestWireShape_QueryGraphSeeds(t *testing.T) {
 	})
 
 	t.Run("multi_seed_with_weights", func(t *testing.T) {
-		runOne(t, `{"seeds":["fn:auth.Login","fn:auth.Authenticate"],"weights":[0.8,0.2],"follow":["callees"],"depth":2,"limit":5}`)
+		runOne(t, `{"project":"file://`+fx.Root+`","seeds":["fn:auth.Login","fn:auth.Authenticate"],"weights":[0.8,0.2],"follow":["callees"],"depth":2,"limit":5}`)
 	})
 }
 
@@ -331,13 +331,13 @@ func TestWireShape_EmptyResults(t *testing.T) {
 
 	cases := []wireShapeCase{
 		// Pattern that matches nothing in the fixture.
-		{toolName: "find_code", argsJSON: `{"pattern":"ZZZQQQ_no_such_thing","pattern_kind":"regex","limit":10}`, wantKey: "matches"},
+		{toolName: "find_code", argsJSON: `{"project":"file://` + fx.Root + `","pattern":"ZZZQQQ_no_such_thing","pattern_kind":"regex","limit":10}`, wantKey: "matches"},
 		// Symbol that matches nothing.
-		{toolName: "find_symbol", argsJSON: `{"name_path":"ZZZQQQ_no_such_thing","limit":5}`, wantKey: "symbols"},
+		{toolName: "find_symbol", argsJSON: `{"project":"file://` + fx.Root + `","name_path":"ZZZQQQ_no_such_thing","limit":5}`, wantKey: "symbols"},
 		// Search with no hits.
-		{toolName: "search", argsJSON: `{"query":"ZZZQQQ_no_such_thing","scope":""}`, wantKey: "results"},
+		{toolName: "search", argsJSON: `{"project":"file://` + fx.Root + `","query":"ZZZQQQ_no_such_thing","scope":""}`, wantKey: "results"},
 		// node_edges with kinds that produce no edges.
-		{toolName: "node_edges", argsJSON: `{"id":"fn:auth.Login","kinds":["tests"],"limit":10}`, wantKey: "edges"},
+		{toolName: "node_edges", argsJSON: `{"project":"file://` + fx.Root + `","id":"fn:auth.Login","kinds":["tests"],"limit":10}`, wantKey: "edges"},
 	}
 	reg := seededReg(t, fx.Root)
 	runWireShapeCases(t, reg, r, cases)
@@ -400,7 +400,7 @@ func Use() int { return 99 }
 		s := mcp.NewServer("wire-shape-detect", "0.0.0-test", "2024-11-05", stdout,
 			func() (io.Reader, error) { return stdin, nil },
 		)
-		s.RegisterTool(wireShapeDefs["detect_changes"](nil, r))
+		s.RegisterTool(wireShapeDefs["detect_changes"](reg, r))
 
 		req := map[string]any{
 			"jsonrpc": "2.0",

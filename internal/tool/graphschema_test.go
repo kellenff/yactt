@@ -26,7 +26,8 @@ func loadTestRepo(t *testing.T) *store.Repo {
 
 func runSchema(t *testing.T, repo *store.Repo) *GraphSchemaResult {
 	t.Helper()
-	out, err := GetGraphSchema(repo)(context.Background(), json.RawMessage(`{}`))
+	_ = repo
+	out, err := GetGraphSchema()(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}

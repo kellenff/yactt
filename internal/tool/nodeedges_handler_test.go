@@ -70,7 +70,7 @@ type Session struct {
 
 	// Empty Limit + empty Kinds: defaults must kick in. We expect at
 	// least one callee edge (payments.Charge from Login).
-	out, err := NodeEdges(r)(context.Background(), json.RawMessage(
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
 		`{"id":"fn:auth.Login"}`,
 	))
 	if err != nil {
@@ -100,7 +100,7 @@ func TestNodeEdges_RejectsEmptyID(t *testing.T) {
 	}
 	defer func() { _ = r.Close() }()
 
-	out, err := NodeEdges(r)(context.Background(), json.RawMessage(
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
 		`{"id":""}`,
 	))
 	if err == nil {
@@ -119,7 +119,7 @@ func TestNodeEdges_RejectsMalformedID(t *testing.T) {
 	}
 	defer func() { _ = r.Close() }()
 
-	out, err := NodeEdges(r)(context.Background(), json.RawMessage(
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
 		`{"id":"notanid"}`,
 	))
 	if err == nil {
@@ -137,7 +137,7 @@ func TestNodeEdges_UnknownID(t *testing.T) {
 	}
 	defer func() { _ = r.Close() }()
 
-	out, err := NodeEdges(r)(context.Background(), json.RawMessage(
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
 		`{"id":"fn:auth.NoSuchFunc"}`,
 	))
 	if err == nil {
@@ -259,7 +259,7 @@ func TestSmoke(t *testing.T) {
 	// Drive NodeEdges with kinds=["tests"] on fn:auth.Login. The test
 	// file declares TestSmoke; scanTests must surface it as a TESTS
 	// edge for the symbol we're asking about.
-	out, err := NodeEdges(r)(context.Background(), json.RawMessage(
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
 		`{"id":"fn:auth.Login","kinds":["tests"],"limit":50}`,
 	))
 	if err != nil {
@@ -330,7 +330,7 @@ export class UseUser {
 	// Drive scanImports on the Go file via its declared function. The
 	// `file`, not `sym`, is what scanImports reads, so the choice of
 	// symbol is incidental — UseFmt lives in the same file.
-	out, err := NodeEdges(r)(context.Background(), json.RawMessage(
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
 		`{"id":"fn:auth.UseFmt","kinds":["imports"],"limit":50}`,
 	))
 	if err != nil {
@@ -370,7 +370,7 @@ export class UseUser {
 	// TS file: a separate query on the TS-declared class surfaces the
 	// TS-only import. Confirms the dispatch and walker cover both
 	// import_declaration (Go) and import_statement (TS/JS).
-	out2, err := NodeEdges(r)(context.Background(), json.RawMessage(
+	out2, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
 		`{"id":"class:auth.UseUser","kinds":["imports"],"limit":50}`,
 	))
 	if err != nil {
@@ -388,7 +388,7 @@ export class UseUser {
 	}
 
 	// Sanity: a file with no imports returns zero IMPORTS edges.
-	out3, err := NodeEdges(r)(context.Background(), json.RawMessage(
+	out3, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
 		`{"id":"fn:auth.Login","kinds":["imports"],"limit":50}`,
 	))
 	if err != nil {
@@ -445,7 +445,7 @@ export class Child extends Parent {
 
 	// Child.greet overrides Parent.greet — must surface one OVERRIDES
 	// edge. Child.fetch has no parent counterpart — zero edges.
-	out, err := NodeEdges(r)(context.Background(), json.RawMessage(
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
 		`{"id":"meth:auth.Child.greet","kinds":["overrides"],"limit":50}`,
 	))
 	if err != nil {
@@ -476,7 +476,7 @@ export class Child extends Parent {
 	}
 
 	// Child.fetch has no parent counterpart — zero edges.
-	out2, err := NodeEdges(r)(context.Background(), json.RawMessage(
+	out2, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
 		`{"id":"meth:auth.Child.fetch","kinds":["overrides"],"limit":50}`,
 	))
 	if err != nil {
@@ -504,7 +504,7 @@ export class Child extends Parent {
 	}
 	defer func() { _ = r2.Close() }()
 
-	out3, err := NodeEdges(r2)(context.Background(), json.RawMessage(
+	out3, err := NodeEdges(seedRegFromRepo(t, r2))(context.Background(), json.RawMessage(
 		`{"id":"meth:auth.Standalone.method","kinds":["overrides"],"limit":50}`,
 	))
 	if err != nil {
@@ -520,7 +520,7 @@ export class Child extends Parent {
 	// Go method returns nil — Go has no override semantics. Refresh
 	// is a method on User; no OVERRIDES edges even if the user happens
 	// to have a method of the same name elsewhere.
-	out4, err := NodeEdges(r2)(context.Background(), json.RawMessage(
+	out4, err := NodeEdges(seedRegFromRepo(t, r2))(context.Background(), json.RawMessage(
 		`{"id":"meth:auth.User.Refresh","kinds":["overrides"],"limit":50}`,
 	))
 	if err != nil {
@@ -535,7 +535,7 @@ export class Child extends Parent {
 
 	// A function (no Receiver) emits nil — guard against the dispatch
 	// confusing top-level functions with class methods.
-	out5, err := NodeEdges(r2)(context.Background(), json.RawMessage(
+	out5, err := NodeEdges(seedRegFromRepo(t, r2))(context.Background(), json.RawMessage(
 		`{"id":"fn:auth.Login","kinds":["overrides"],"limit":50}`,
 	))
 	if err != nil {
@@ -562,7 +562,7 @@ func TestNodeEdges_RespectsLimit(t *testing.T) {
 	r.DetachLSPForTest()
 
 	// Ask for everything with limit=1. We expect at most 1 edge.
-	out, err := NodeEdges(r)(context.Background(), json.RawMessage(
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
 		`{"id":"fn:auth.Login","limit":1}`,
 	))
 	if err != nil {

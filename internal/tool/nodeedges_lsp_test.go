@@ -84,7 +84,7 @@ func Login(user, pass string) (Session, error) {
 	r.AttachLSPForTest(c)
 
 	// Drive node_edges: callers of fn:payments.Charge.
-	out, err := NodeEdges(r)(context.Background(), json.RawMessage(
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
 		`{"id":"fn:payments.Charge","kinds":["callers"],"limit":10}`,
 	))
 	if err != nil {
@@ -153,7 +153,7 @@ func TestScanCallers_LSPReturnsNoCaller_FallsBackToTreeSitter(t *testing.T) {
 	}
 	r.AttachLSPForTest(c)
 
-	out, err := NodeEdges(r)(context.Background(), json.RawMessage(
+	out, err := NodeEdges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(
 		`{"id":"fn:payments.Charge","kinds":["callers"],"limit":10}`,
 	))
 	if err != nil {

@@ -224,7 +224,7 @@ func TestTarjanSCC_TrivialSanity(t *testing.T) {
 
 func callArch(t *testing.T, r *store.Repo, args string) *ArchitectureResult {
 	t.Helper()
-	out, err := GetArchitecture(r)(context.Background(), json.RawMessage(args))
+	out, err := GetArchitecture(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(args))
 	if err != nil {
 		t.Fatalf("handler: %v (args=%s)", err, args)
 	}

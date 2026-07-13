@@ -11,6 +11,8 @@ import (
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/parser"
+	"github.com/kellenff/yactt/internal/project"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 )
 
@@ -23,8 +25,9 @@ import (
 // `include_cycles` defaults to true when omitted. We use a pointer so
 // the handler can tell "caller said false" from "caller didn't say".
 type GetArchitectureArgs struct {
-	Top           int   `json:"top"`
-	IncludeCycles *bool `json:"include_cycles"`
+	Project       string `json:"project"`
+	Top           int    `json:"top"`
+	IncludeCycles *bool  `json:"include_cycles"`
 }
 
 // ArchitectureResult is the structuredContent envelope for get_architecture.
@@ -103,9 +106,11 @@ var GetArchitectureSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "project":        { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path). Must be in the registry; call index_repository first." },
     "top":            { "type": "integer", "minimum": 1, "maximum": 100, "default": 10 },
     "include_cycles": { "type": "boolean", "default": true }
   },
+  "required": ["project"],
   "additionalProperties": false
 }`)
 
@@ -141,12 +146,17 @@ const (
 // GetArchitecture returns a Handler that emits a structural summary.
 // Reads walk `Files()` + the persisted call-edge / imports indices once,
 // then runs an in-tree Tarjan SCC pass when cycles are requested.
-func GetArchitecture(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
+func GetArchitecture(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a GetArchitectureArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid get_architecture args: %w", err)
 		}
+		repo, err := project.Resolve(reg, a.Project)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = repo.Close() }()
 		if a.Top <= 0 {
 			a.Top = defaultArchTop
 		}

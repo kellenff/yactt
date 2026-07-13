@@ -8,15 +8,18 @@ import (
 
 	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/parser"
+	"github.com/kellenff/yactt/internal/project"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 )
 
 // FindReferencingSymbolsArgs is the typed input for find_referencing_symbols.
 // Mirrors design §4.10.
 type FindReferencingSymbolsArgs struct {
-	Symbol string   `json:"symbol"`
-	Kinds  []string `json:"kinds"`
-	Limit  int      `json:"limit"`
+	Project string   `json:"project"`
+	Symbol  string   `json:"symbol"`
+	Kinds   []string `json:"kinds"`
+	Limit   int      `json:"limit"`
 }
 
 // FindReferencingSymbolsResult is one typed edge similar to node_edges.
@@ -27,6 +30,7 @@ var FindReferencingSymbolsSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "project": { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path). Must be in the registry; call index_repository first." },
     "symbol": { "type": "string", "description": "Node ID or name_path." },
     "kinds": {
       "type": "array",
@@ -36,7 +40,7 @@ var FindReferencingSymbolsSchema = json.RawMessage(`{
     },
     "limit": { "type": "integer", "default": 100 }
   },
-  "required": ["symbol"],
+  "required": ["project", "symbol"],
   "additionalProperties": false
 }`)
 
@@ -74,12 +78,17 @@ var FindReferencingSymbolsOutputSchema = json.RawMessage(`{
 // FindReferencingSymbols returns a Handler that resolves `symbol` to an ID
 // and forwards to node_edges. Per design §4.10 this is the symbol-addressed
 // alias for node_edges.
-func FindReferencingSymbols(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
+func FindReferencingSymbols(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a FindReferencingSymbolsArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid find_referencing_symbols args: %w", err)
 		}
+		repo, err := project.Resolve(reg, a.Project)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = repo.Close() }()
 		if a.Symbol == "" {
 			return nil, fmt.Errorf("find_referencing_symbols: symbol is required")
 		}

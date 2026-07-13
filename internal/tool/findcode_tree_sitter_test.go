@@ -33,7 +33,7 @@ func loadRepoFromFixture(t *testing.T) *store.Repo {
 // returns the unwrapped []FindCodeMatch slice.
 func callFindCode(t *testing.T, repo *store.Repo, argsJSON string) []FindCodeMatch {
 	t.Helper()
-	out, err := FindCode(repo)(context.Background(), json.RawMessage(argsJSON))
+	out, err := FindCode(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(argsJSON))
 	if err != nil {
 		t.Fatalf("handler error: %v (args=%s)", err, argsJSON)
 	}
@@ -112,7 +112,7 @@ func TestFindCode_TreeSitter_IncludeContext(t *testing.T) {
 // limit (issue #33).
 func TestFindCode_TreeSitter_Limit(t *testing.T) {
 	repo := loadRepoFromFixture(t)
-	out, err := FindCode(repo)(context.Background(), json.RawMessage(`{"pattern":"(call_expression) @c","pattern_kind":"tree_sitter","limit":2}`))
+	out, err := FindCode(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(`{"pattern":"(call_expression) @c","pattern_kind":"tree_sitter","limit":2}`))
 	if err != nil {
 		t.Fatalf("find_code: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestFindCode_TreeSitter_EmptyResult(t *testing.T) {
 // canonical "invalid tree-sitter query" prefix.
 func TestFindCode_TreeSitter_CompileError(t *testing.T) {
 	repo := loadRepoFromFixture(t)
-	_, err := FindCode(repo)(context.Background(), json.RawMessage(`{"pattern":"(function_declaration","pattern_kind":"tree_sitter","limit":10}`))
+	_, err := FindCode(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(`{"pattern":"(function_declaration","pattern_kind":"tree_sitter","limit":10}`))
 	if err == nil {
 		t.Fatalf("expected compile error; got nil")
 	}

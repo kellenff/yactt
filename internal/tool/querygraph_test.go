@@ -27,7 +27,7 @@ func loadQueryGraphRepo(t *testing.T) *store.Repo {
 // runQueryGraph drives the handler with raw JSON and type-asserts.
 func runQueryGraph(t *testing.T, repo *store.Repo, args string) *QueryGraphResult {
 	t.Helper()
-	out, err := QueryGraph(repo)(context.Background(), json.RawMessage(args))
+	out, err := QueryGraph(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(args))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestQueryGraph_DefaultsAndValidation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := QueryGraph(r)(context.Background(), json.RawMessage(tc.args))
+			_, err := QueryGraph(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(tc.args))
 			if tc.wantErr == "" {
 				// Just exercise the call — bad-from-id may resolve to
 				// "cannot locate" or a parse error; both are valid.
@@ -189,7 +189,7 @@ func TestQueryGraph_DefaultsAndValidation(t *testing.T) {
 	}
 
 	t.Run("depth 0 uses default", func(t *testing.T) {
-		_, err := QueryGraph(r)(context.Background(), json.RawMessage(`{
+		_, err := QueryGraph(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{
 			"from":"meth:auth.Alpha.Ping","follow":["callees"],"depth":0
 		}`))
 		if err != nil {
@@ -198,7 +198,7 @@ func TestQueryGraph_DefaultsAndValidation(t *testing.T) {
 	})
 
 	t.Run("limit 0 uses default", func(t *testing.T) {
-		_, err := QueryGraph(r)(context.Background(), json.RawMessage(`{
+		_, err := QueryGraph(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{
 			"from":"meth:auth.Alpha.Ping","follow":["callees"],"limit":0
 		}`))
 		if err != nil {
@@ -213,7 +213,7 @@ func TestQueryGraph_DefaultsAndValidation(t *testing.T) {
 			seedJSON[i] = fmt.Sprintf(`"fn:auth.Fn%d"`, i)
 		}
 		args := `{"seeds":[` + strings.Join(seedJSON, ",") + `],"follow":["callers"]}`
-		_, err := QueryGraph(r)(context.Background(), json.RawMessage(args))
+		_, err := QueryGraph(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(args))
 		if err == nil {
 			t.Fatalf("expected cap error, got nil")
 		}

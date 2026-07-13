@@ -13,7 +13,7 @@ import (
 // of callSnippet in getcodesnippet_test.go.
 func findSymbols(t *testing.T, repo *store.Repo, args string) []FindSymbolResult {
 	t.Helper()
-	out, err := FindSymbol(repo)(context.Background(), json.RawMessage(args))
+	out, err := FindSymbol(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(args))
 	if err != nil {
 		t.Fatalf("find_symbol: %v (args=%s)", err, args)
 	}
@@ -34,7 +34,7 @@ func findSymbols(t *testing.T, repo *store.Repo, args string) []FindSymbolResult
 // returned an empty slice.
 func TestFindSymbol_DottedNamePath_AuthLogin(t *testing.T) {
 	r := loadTestRepo(t)
-	hits := findSymbols(t, r, `{"name_path":"auth.Login","limit":5}`)
+	hits := findSymbols(t, r, `{"project":"file://`+r.Root()+`","name_path":"auth.Login","limit":5}`)
 
 	if len(hits) == 0 {
 		t.Fatal("expected at least one match for auth.Login; got none")
@@ -91,7 +91,7 @@ func TestFindSymbol_SlashKindPrefix_ClassUserMethod(t *testing.T) {
 	// No `class` segment matches the fixture (sample-go has functions
 	// and methods, no classes); assert the kind-strip doesn't break the
 	// bare-name slash form either.
-	hits := findSymbols(t, r, `{"name_path":"fn/Login","limit":5}`)
+	hits := findSymbols(t, r, `{"project":"file://`+r.Root()+`","name_path":"fn/Login","limit":5}`)
 	if len(hits) == 0 {
 		t.Fatal("expected at least one match for fn/Login (kind-prefix stripped)")
 	}
@@ -102,7 +102,7 @@ func TestFindSymbol_SlashKindPrefix_ClassUserMethod(t *testing.T) {
 // / `totalCount` (issue #33).
 func findSymbolEnvelope(t *testing.T, repo *store.Repo, args string) map[string]any {
 	t.Helper()
-	out, err := FindSymbol(repo)(context.Background(), json.RawMessage(args))
+	out, err := FindSymbol(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(args))
 	if err != nil {
 		t.Fatalf("find_symbol: %v (args=%s)", err, args)
 	}

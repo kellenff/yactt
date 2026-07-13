@@ -110,7 +110,7 @@ func TestGetCodeSnippet_Ambiguous(t *testing.T) {
 // TestGetCodeSnippet_NoArgs asserts we reject the empty input.
 func TestGetCodeSnippet_NoArgs(t *testing.T) {
 	r := loadTestRepo(t)
-	_, err := GetCodeSnippet(r)(context.Background(), json.RawMessage(`{}`))
+	_, err := GetCodeSnippet(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{}`))
 	if err == nil {
 		t.Fatal("expected error on empty args, got nil")
 	}
@@ -122,7 +122,7 @@ func TestGetCodeSnippet_NoArgs(t *testing.T) {
 // TestGetCodeSnippet_UnknownID asserts we error cleanly on a non-existent id.
 func TestGetCodeSnippet_UnknownID(t *testing.T) {
 	r := loadTestRepo(t)
-	_, err := GetCodeSnippet(r)(context.Background(), json.RawMessage(`{"id":"fn:does.not.Exist"}`))
+	_, err := GetCodeSnippet(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"id":"fn:does.not.Exist"}`))
 	if err == nil {
 		t.Fatal("expected error on unknown id, got nil")
 	}
@@ -132,7 +132,7 @@ func TestGetCodeSnippet_UnknownID(t *testing.T) {
 // zero declarations.
 func TestGetCodeSnippet_UnknownNamePath(t *testing.T) {
 	r := loadTestRepo(t)
-	_, err := GetCodeSnippet(r)(context.Background(), json.RawMessage(`{"name_path":"NoSuchSymbol"}`))
+	_, err := GetCodeSnippet(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"name_path":"NoSuchSymbol"}`))
 	if err == nil {
 		t.Fatal("expected error on unknown name_path, got nil")
 	}
@@ -145,7 +145,7 @@ func TestGetCodeSnippet_DidYouMeanInError(t *testing.T) {
 	r := loadTestRepo(t)
 	// "Loginn" is edit-distance 1 from "Login" — the suggestion hint
 	// should be present in the error text.
-	_, err := GetCodeSnippet(r)(context.Background(), json.RawMessage(`{"name_path":"auth.Loginn"}`))
+	_, err := GetCodeSnippet(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"name_path":"auth.Loginn"}`))
 	if err == nil {
 		t.Fatal("expected error on misspelled name_path")
 	}
@@ -158,7 +158,7 @@ func TestGetCodeSnippet_DidYouMeanInError(t *testing.T) {
 
 func callSnippet(t *testing.T, repo *store.Repo, args string) *GetCodeSnippetResult {
 	t.Helper()
-	out, err := GetCodeSnippet(repo)(context.Background(), json.RawMessage(args))
+	out, err := GetCodeSnippet(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(args))
 	if err != nil {
 		t.Fatalf("handler: %v (args=%s)", err, args)
 	}

@@ -7,16 +7,18 @@ import (
 	"strings"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/project"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/search"
-	"github.com/kellenff/yactt/internal/store"
 )
 
 // SearchArgs is the typed input for the search tool. Mirrors design §4.5.
 type SearchArgs struct {
-	Query string   `json:"query"`
-	Scope string   `json:"scope"`
-	Kind  []string `json:"kind"`
-	Limit int      `json:"limit"`
+	Project string   `json:"project"`
+	Query   string   `json:"query"`
+	Scope   string   `json:"scope"`
+	Kind    []string `json:"kind"`
+	Limit   int      `json:"limit"`
 }
 
 // SearchSchema is the JSON Schema for `search` (MCP name `search`).
@@ -27,15 +29,16 @@ var SearchSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "project": { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path). Must be in the registry; call index_repository first." },
     "query": { "type": "string" },
-    "scope": { "type": "string", "description": "Absolute path or repo alias" },
+    "scope": { "type": "string", "description": "Optional absolute path under repo root." },
     "kind": {
       "type": "array",
       "items": { "enum": ["function", "method", "class", "module"] }
     },
     "limit": { "type": "integer", "default": 10 }
   },
-  "required": ["query", "scope"],
+  "required": ["project", "query"],
   "additionalProperties": false
 }`)
 
@@ -66,12 +69,17 @@ var SearchOutputSchema = json.RawMessage(`{
 }`)
 
 // Search returns a Handler that emits ranked (id, summary) results.
-func Search(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
+func Search(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a SearchArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid search args: %w", err)
 		}
+		repo, err := project.Resolve(reg, a.Project)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = repo.Close() }()
 		if a.Query == "" {
 			return nil, fmt.Errorf("search: query is required")
 		}

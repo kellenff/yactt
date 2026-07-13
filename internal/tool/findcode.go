@@ -13,11 +13,14 @@ import (
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/parser"
+	"github.com/kellenff/yactt/internal/project"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 )
 
 // FindCodeArgs is the typed input for find_code. Mirrors design §4.9.
 type FindCodeArgs struct {
+	Project        string `json:"project"`
 	Pattern        string `json:"pattern"`
 	PatternKind    string `json:"pattern_kind"`
 	Scope          string `json:"scope"`
@@ -48,6 +51,7 @@ var FindCodeSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "project":         { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path). Must be in the registry; call index_repository first." },
     "pattern":         { "type": "string" },
     "pattern_kind":    { "enum": ["regex", "tree_sitter"], "default": "regex" },
     "scope":           { "type": "string" },
@@ -55,7 +59,7 @@ var FindCodeSchema = json.RawMessage(`{
     "include_context": { "type": "boolean", "default": true },
     "limit":           { "type": "integer", "default": 50 }
   },
-  "required": ["pattern"],
+  "required": ["project", "pattern"],
   "additionalProperties": false
 }`)
 
@@ -100,12 +104,17 @@ var FindCodeOutputSchema = json.RawMessage(`{
 //
 // MVP supports regex (tree_sitter pattern is wired up via the Language
 // interface but the runner itself is Phase 2 — see find_code §4.9).
-func FindCode(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
+func FindCode(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a FindCodeArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid find_code args: %w", err)
 		}
+		repo, err := project.Resolve(reg, a.Project)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = repo.Close() }()
 		if a.Pattern == "" {
 			return nil, fmt.Errorf("find_code: pattern is required")
 		}

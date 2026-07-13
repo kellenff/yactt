@@ -103,9 +103,10 @@ func BenchmarkToolTreeOverview(b *testing.B) {
 // BenchmarkToolFindCode — the "find every function matching X" ask.
 // Anchored regex keeps the cost comparable across iters.
 func BenchmarkToolFindCode(b *testing.B) {
-	root, repo := inlineFixtureRepo(b)
-	h := tool.FindCode(repo)
-	args := `{"pattern":"^func (Login|Authenticate|Charge|Refund)$","pattern_kind":"regex","scope":"` + root + `","limit":20}`
+	root, _ := inlineFixtureRepo(b)
+	reg := seedInlineReg(b, root)
+	h := tool.FindCode(reg)
+	args := `{"project":"file://` + root + `","pattern":"^func (Login|Authenticate|Charge|Refund)$","pattern_kind":"regex","scope":"` + root + `","limit":20}`
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dispatch(b, h, args)
@@ -114,9 +115,10 @@ func BenchmarkToolFindCode(b *testing.B) {
 
 // BenchmarkToolFindSymbol — the "find Login" / "find meth:User.Greet" ask.
 func BenchmarkToolFindSymbol(b *testing.B) {
-	_, repo := inlineFixtureRepo(b)
-	h := tool.FindSymbol(repo)
-	args := `{"name_path":"auth.Login"}`
+	root, _ := inlineFixtureRepo(b)
+	reg := seedInlineReg(b, root)
+	h := tool.FindSymbol(reg)
+	args := `{"project":"file://` + root + `","name_path":"auth.Login"}`
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dispatch(b, h, args)
@@ -127,9 +129,10 @@ func BenchmarkToolFindSymbol(b *testing.B) {
 // path. Ponytail: pick Authenticate because its body has a real
 // cross-package callee (Charge) that surfaces in Tier 0.
 func BenchmarkToolNodeEdges(b *testing.B) {
-	_, repo := inlineFixtureRepo(b)
-	h := tool.NodeEdges(repo)
-	args := `{"id":"fn:auth.Authenticate","kinds":["callees"]}`
+	root, _ := inlineFixtureRepo(b)
+	reg := seedInlineReg(b, root)
+	h := tool.NodeEdges(reg)
+	args := `{"project":"file://` + root + `","id":"fn:auth.Authenticate","kinds":["callees"]}`
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dispatch(b, h, args)
@@ -179,9 +182,10 @@ func BenchmarkToolNodeGet_source(b *testing.B) {
 // Exercises the symbol→callers Tier-1 (LSP) with Tier-2 (tree-sitter)
 // fallback.
 func BenchmarkToolFindReferencingSymbols(b *testing.B) {
-	_, repo := inlineFixtureRepo(b)
-	h := tool.FindReferencingSymbols(repo)
-	args := `{"symbol":"fn:auth.Login"}`
+	root, _ := inlineFixtureRepo(b)
+	reg := seedInlineReg(b, root)
+	h := tool.FindReferencingSymbols(reg)
+	args := `{"project":"file://` + root + `","symbol":"fn:auth.Login"}`
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dispatch(b, h, args)

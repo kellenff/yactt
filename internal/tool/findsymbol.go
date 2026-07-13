@@ -8,11 +8,14 @@ import (
 	"strings"
 
 	"github.com/kellenff/yactt/internal/domain"
+	"github.com/kellenff/yactt/internal/project"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 )
 
 // FindSymbolArgs is the typed input for find_symbol. Mirrors design §4.7.
 type FindSymbolArgs struct {
+	Project     string   `json:"project"`
 	NamePath    string   `json:"name_path"`
 	Scope       string   `json:"scope"`
 	Kind        []string `json:"kind"`
@@ -31,13 +34,14 @@ var FindSymbolSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "project": { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path). Must be in the registry; call index_repository first." },
     "name_path": { "type": "string", "description": "Qualified name using '/' or '.' as the package separator (e.g. 'class/User/method/validate' or 'auth.Login'). Globs allowed on the final segment when the slash form is used." },
     "scope":     { "type": "string" },
     "kind":      { "type": "array", "items": { "enum": ["function","method","class","module"] } },
     "include_body": { "type": "boolean", "default": false },
     "limit":     { "type": "integer", "default": 20 }
   },
-  "required": ["name_path"],
+  "required": ["project", "name_path"],
   "additionalProperties": false
 }`)
 
@@ -76,12 +80,17 @@ var FindSymbolOutputSchema = json.RawMessage(`{
 // FindSymbol returns a Handler that locates symbols by qualified name path.
 // Glob patterns are translated to a small matching routine against the symbol
 // index built at repo load.
-func FindSymbol(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
+func FindSymbol(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a FindSymbolArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid find_symbol args: %w", err)
 		}
+		repo, err := project.Resolve(reg, a.Project)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = repo.Close() }()
 		if a.NamePath == "" {
 			return nil, fmt.Errorf("find_symbol: name_path is required")
 		}

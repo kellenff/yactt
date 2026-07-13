@@ -8,11 +8,14 @@ import (
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/parser"
+	"github.com/kellenff/yactt/internal/project"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 )
 
 // EditImpactArgs is the typed input for edit_impact. Mirrors design §4.6.
 type EditImpactArgs struct {
+	Project string   `json:"project"`
 	Renames []Rename `json:"renames"`
 }
 
@@ -49,6 +52,7 @@ var EditImpactSchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "project": { "type": "string", "description": "Absolute path as a file:// URI (e.g. file:///abs/path). Must be in the registry; call index_repository first." },
     "renames": {
       "type": "array",
       "items": {
@@ -61,7 +65,7 @@ var EditImpactSchema = json.RawMessage(`{
       }
     }
   },
-  "required": ["renames"],
+  "required": ["project", "renames"],
   "additionalProperties": false
 }`)
 
@@ -86,12 +90,17 @@ var EditImpactOutputSchema = json.RawMessage(`{
 // are detected by name collision in the same package. safe_to_rename is true
 // iff there are no conflicts and affected callers/tests is non-empty (i.e.
 // the rename is propagated correctly).
-func EditImpact(repo *store.Repo) func(ctx context.Context, args json.RawMessage) (any, error) {
+func EditImpact(reg *registry.Registry) func(ctx context.Context, args json.RawMessage) (any, error) {
 	return func(ctx context.Context, args json.RawMessage) (any, error) {
 		var a EditImpactArgs
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid edit_impact args: %w", err)
 		}
+		repo, err := project.Resolve(reg, a.Project)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = repo.Close() }()
 		if len(a.Renames) == 0 {
 			return nil, fmt.Errorf("edit_impact: at least one rename required")
 		}

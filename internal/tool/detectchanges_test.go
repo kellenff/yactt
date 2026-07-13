@@ -86,7 +86,7 @@ func writeFiles(t *testing.T, root string, files map[string]string) {
 // fails fast on handler errors and gives a typed result.
 func callDC(t *testing.T, repo *store.Repo, args string) *DetectChangesResult {
 	t.Helper()
-	out, err := DetectChanges(repo)(context.Background(), json.RawMessage(args))
+	out, err := DetectChanges(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(args))
 	if err != nil {
 		t.Fatalf("handler: %v (args=%s)", err, args)
 	}
@@ -271,7 +271,7 @@ func Use() int { return 2 }
 // touching git.
 func TestDetectChanges_BaseAndSinceRejected(t *testing.T) {
 	r := loadTestRepo(t)
-	_, err := DetectChanges(r)(context.Background(), json.RawMessage(`{"base":"HEAD~1","since":"HEAD~1"}`))
+	_, err := DetectChanges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"base":"HEAD~1","since":"HEAD~1"}`))
 	if err == nil {
 		t.Fatal("expected error when both base and since are set")
 	}
@@ -285,7 +285,7 @@ func TestDetectChanges_BaseAndSinceRejected(t *testing.T) {
 // the git subprocess.
 func TestDetectChanges_RequiresRef(t *testing.T) {
 	r := loadTestRepo(t)
-	_, err := DetectChanges(r)(context.Background(), json.RawMessage(`{}`))
+	_, err := DetectChanges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{}`))
 	if err == nil {
 		t.Fatal("expected error when neither base nor since is set")
 	}
@@ -301,7 +301,7 @@ func TestDetectChanges_RequiresRef(t *testing.T) {
 func TestDetectChanges_NotGitRepo(t *testing.T) {
 	gitAvailable(t)
 	r := loadTestRepo(t)
-	_, err := DetectChanges(r)(context.Background(), json.RawMessage(`{"base":"HEAD~1","head":"HEAD"}`))
+	_, err := DetectChanges(seedRegFromRepo(t, r))(context.Background(), json.RawMessage(`{"base":"HEAD~1","head":"HEAD"}`))
 	if err == nil {
 		t.Fatal("expected error on non-git repo; got nil")
 	}
