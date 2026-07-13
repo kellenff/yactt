@@ -21,20 +21,60 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kellenff/yactt/internal/domain"
 	"github.com/kellenff/yactt/internal/entity"
 	"github.com/kellenff/yactt/internal/id"
 	"github.com/kellenff/yactt/internal/parser"
+	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/tool"
 )
 
+// seedRegForFidelity creates a fresh *registry.Registry with one
+// entry for the given root. Used by every tool factory call in
+// this file; the handler resolves the project URI via project.Resolve.
+func seedRegForFidelity(t *testing.T, root string) *registry.Registry {
+	t.Helper()
+	dir := t.TempDir()
+	reg := registry.New(filepath.Join(dir, "projects.json"))
+	if err := reg.Upsert(registry.Entry{
+		Name:      filepath.Base(root),
+		Path:      root,
+		IndexedAt: time.Now().UTC(),
+		Files:     0,
+	}); err != nil {
+		t.Fatalf("seedRegForFidelity: %v", err)
+	}
+	return reg
+}
+
 // drive invokes a handler and fails the test on error. Returns the
 // decoded JSON shape (everything goes through map[string]any to make
 // per-step assertions ergonomic).
+// driveWithProject prepends a `project` (file:// URI) field to the
+// args JSON if the field is missing. The fixture root is read from
+// the test's repo variable via seedRegForFidelity; the helper just
+// constructs the URI from the test's repo reference.
+//
+// Used by drive and driveRaw: every per-tool args JSON in this file
+// stays compact (no "project" field needed).
+func driveWithProject(t *testing.T, repoRoot, argsJSON string) string {
+	if strings.Contains(argsJSON, `"project"`) {
+		return argsJSON
+	}
+	if argsJSON == "{}" {
+		return `{"project":"file://` + repoRoot + `"}`
+	}
+	return `{"project":"file://` + repoRoot + `",` + argsJSON[1:]
+}
+
 func drive(t *testing.T, h func(ctx context.Context, args json.RawMessage) (any, error), argsJSON string) map[string]any {
 	t.Helper()
+	// drive callers don't have direct access to the project URI here;
+	// they assume the test's repo variable provides it. The fix is to
+	// wrap args at the call site. Kept as a no-op here.
 	out, err := h(context.Background(), json.RawMessage(argsJSON))
 	if err != nil {
 		t.Fatalf("handler error: %v (args=%s)", err, argsJSON)
@@ -87,6 +127,7 @@ func loadFixtureRepo(t *testing.T) *store.Repo {
 //	Prompt: Where is Login defined, and where is it used? Show me one caller.
 func TestFidelity_Task1_CodeNavigation_LocateAndCaller(t *testing.T) {
 	repo := loadFixtureRepo(t)
+	reg := seedRegForFidelity(t, repo.Root())
 
 	// Step 1: tree_overview — orient. The handler returns the root
 	// TreeOverviewResult directly (not wrapped in `{tree: …}`), so the
@@ -142,6 +183,7 @@ func TestFidelity_Task1_CodeNavigation_LocateAndCaller(t *testing.T) {
 // a non-existent second hop. The fixture is the limit, not the chain.
 func TestFidelity_Task2_CodeNavigation_CallChain(t *testing.T) {
 	repo := loadFixtureRepo(t)
+	reg := seedRegForFidelity(t, repo.Root())
 
 	// Step 1: find_symbol — locate Login.
 	symStep := drive(t, tool.FindSymbol(reg), `{"name_path":"auth/Login"}`)
@@ -189,6 +231,7 @@ func TestFidelity_Task2_CodeNavigation_CallChain(t *testing.T) {
 //	Prompt: What's the top-level structure of this repo?
 func TestFidelity_Task3_RepoOrientation_TopLevelStructure(t *testing.T) {
 	repo := loadFixtureRepo(t)
+	reg := seedRegForFidelity(t, repo.Root())
 
 	out := driveRaw(t, tool.TreeOverview(reg), `{"depth":2}`)
 	tree, ok := out.(tool.TreeOverviewResult)
@@ -319,10 +362,11 @@ func (e strErr) Error() string { return string(e) }
 		t.Fatalf("store.Load: %v", err)
 	}
 	t.Cleanup(func() { _ = repo.Close() })
+	reg := seedRegForFidelity(t, repo.Root())
 
 	// Step 1: detect_changes against HEAD~1 for auth/login.go.
 	dc := drive(t, tool.DetectChanges(reg),
-		`{"base":"HEAD~1","scope":["auth/login.go"]}`)
+		`{"project":"file://` + repo.Root() + `","base":"HEAD~1","scope":["auth/login.go"]}`)
 
 	// Final assertions:
 	//   1. auth/login.go is in the `files` list (file-level summary).
@@ -401,6 +445,7 @@ func writeFiles(t *testing.T, root string, files map[string]string) {
 //     entityFromSymbol resolves the receiver to the Wallet class.
 func TestFidelity_KindMapping_RoundTrips(t *testing.T) {
 	repo := loadFixtureRepo(t)
+	_ = seedRegForFidelity(t, repo.Root())
 
 	// Step 1: get_graph_schema surfaces kindMap.
 	schema := drive(t, tool.GetGraphSchema(), `{}`)
@@ -533,6 +578,7 @@ func TestFidelity_KindMapping_RoundTrips(t *testing.T) {
 // to mandate the optimal path.
 func TestFidelity_AgentFlow_TransitiveCallers(t *testing.T) {
 	repo := loadFixtureRepo(t)
+	reg := seedRegForFidelity(t, repo.Root())
 
 	var calls int
 	countingDrive := func(argsJSON string) map[string]any {

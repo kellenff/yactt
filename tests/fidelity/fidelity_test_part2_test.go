@@ -51,11 +51,12 @@ def other_helper(x):
 		t.Fatalf("store.Load: %v", err)
 	}
 	t.Cleanup(func() { _ = repo.Close() })
+	reg := seedRegForFidelity(t, repo.Root())
 
 	// Step 1: search_code with regex `^def parse_` — Python-only matches
 	// because the pattern anchors on `def `, which Go doesn't have.
 	sc := drive(t, tool.SearchCode(reg),
-		`{"pattern":"^def parse_","pattern_kind":"regex","scope":"`+dir+`"}`)
+		`{"project":"file://` + dir + `","pattern":"^def parse_","pattern_kind":"regex","scope":"`+dir+`"}`)
 	groups, ok := sc["groups"].([]any)
 	if !ok {
 		t.Fatalf("step 1 search_code: missing 'groups' field; got %v", sc)
@@ -104,6 +105,7 @@ def other_helper(x):
 // fallback) but the chain becomes cheaper-when-scoped → drift to assert.
 func TestFidelity_Task6_Mixed_MultiStepRefactorSummary(t *testing.T) {
 	repo := loadFixtureRepo(t)
+	reg := seedRegForFidelity(t, repo.Root())
 
 	// Step 1: tree_overview scoped to the auth package.
 	scope := repo.Root() + "/auth"
