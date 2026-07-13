@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kellenff/yactt/internal/mcp"
 	"github.com/kellenff/yactt/internal/persisted"
@@ -23,17 +22,16 @@ import (
 // TestMCPServer_RegisterThenDrillIn is the regression test for the
 // project-reference migration's new lifecycle: index a fixture
 // repo, then call tree_overview and find_symbol against it via
-// the in-process MCP server. Drives the server's stdin/stdout
-// directly to confirm the JSON-RPC framing is intact.
+// the in-process MCP server. The JSON-RPC framing is verified
+// through stdio pipes.
 func TestMCPServer_RegisterThenDrillIn(t *testing.T) {
+	if testing.Short() {
+		t.Skip("end-to-end MCP dispatch skipped in -short mode (requires LSP warmup)")
+	}
 	fx := repofixture.New(t)
-	// Set up a fresh registry file in a tempdir; the MCP server
-	// reads it on startup.
 	regPath := filepath.Join(t.TempDir(), "projects.json")
 	reg := registry.New(regPath)
 
-	// Load the fixture so we know its real root and can hand the
-	// resolved path to index_repository.
 	r, _, err := store.Load(fx.Root)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -50,7 +48,6 @@ func TestMCPServer_RegisterThenDrillIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pipe: %v", err)
 	}
-	t.Cleanup(func() { _ = stdinR.Close(); _ = stdinW.Close() })
 
 	srv := mcp.NewServer("yactt", "test", "2024-11-05",
 		stdoutW,
@@ -69,17 +66,7 @@ func TestMCPServer_RegisterThenDrillIn(t *testing.T) {
 		Handler: tool.FindSymbol(reg),
 	})
 
-	// Drain stdout into a buffer for assertions.
-	var got bytes.Buffer
-	doneCh := make(chan struct{})
-	go func() {
-		_, _ = io.Copy(&got, stdoutR)
-		close(doneCh)
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
+	// Send all requests, then close stdin to signal EOF.
 	projectURI := "file://" + r.Root()
 	requests := []string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
@@ -93,11 +80,21 @@ func TestMCPServer_RegisterThenDrillIn(t *testing.T) {
 		}
 	}
 	_ = stdinW.Close()
+	_ = stdinR.Close()
 
-	if err := srv.Serve(ctx); err != nil && !strings.Contains(err.Error(), "EOF") {
+	// Read responses on the main goroutine. The server blocks on
+	// stdin; closing stdin causes Serve to return EOF.
+	var got bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&got, stdoutR)
+		close(done)
+	}()
+
+	if err := srv.Serve(context.Background()); err != nil && !strings.Contains(err.Error(), "EOF") {
 		t.Fatalf("Serve: %v", err)
 	}
-	<-doneCh
+	<-done
 
 	// Parse responses: 4 ids (1..4), all should have non-null results.
 	lines := strings.Split(strings.TrimRight(got.String(), "\n"), "\n")

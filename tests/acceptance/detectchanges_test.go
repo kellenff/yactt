@@ -95,6 +95,9 @@ func writeFiles(t *testing.T, root string, files map[string]string) {
 // acceptance_test.go but returns the typed DetectChangesResult.
 func callDC(t *testing.T, repo *store.Repo, argsJSON string) *tool.DetectChangesResult {
 	t.Helper()
+	if !strings.Contains(argsJSON, `"project"`) {
+		argsJSON = `{"project":"file://` + repo.Root() + `",` + argsJSON[1:]
+	}
 	out, err := tool.DetectChanges(seedRegForProject(t, repo.Root()))(context.Background(), json.RawMessage(argsJSON))
 	if err != nil {
 		t.Fatalf("handler: %v (args=%s)", err, argsJSON)
@@ -250,7 +253,7 @@ func Use() int { return 99 }
 `}
 	r := freshGitRepo(t, v1, v2)
 
-	_, err := tool.DetectChanges(seedRegForProject(t, r.Root()))(context.Background(), json.RawMessage(`{}`))
+	_, err := tool.DetectChanges(seedRegForProject(t, r.Root()))(context.Background(), json.RawMessage(`{"project":"file://`+r.Root()+`"}`))
 	if err == nil {
 		t.Fatal("expected error on empty args; got nil")
 	}
