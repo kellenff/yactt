@@ -2,6 +2,7 @@ package tool
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,6 +91,22 @@ func seedRegForRoot(tb testing.TB, root string) *registry.Registry {
 // call in tests.
 func seedRegFromRepo(tb testing.TB, repo interface{ Root() string }) *registry.Registry {
 	return seedRegForRoot(tb, repo.Root())
+}
+
+// withProject prepends a `project` (file:// URI) field to the args
+// JSON if the field is missing. Mirrors what every per-tool handler
+// does at the start of a request: ensure `project` is set. Used by
+// the test helpers (callSnippet, findSymbols, etc.) so the per-tool
+// args JSON in the test bodies doesn't have to know the tempdir
+// path up front.
+//
+// Args are expected to be a JSON object literal starting with `{`.
+// The returned string is also a JSON object literal.
+func withProject(root, args string) string {
+	if strings.Contains(args, `"project"`) {
+		return args
+	}
+	return `{"project":"file://` + root + `",` + args[1:]
 }
 
 func TestRelPath_TrimsRootPrefix(t *testing.T) {

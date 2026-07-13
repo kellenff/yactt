@@ -16,7 +16,7 @@ import (
 // methods, classes).
 func TestGetArchitecture_HappyPath(t *testing.T) {
 	r := loadTestRepo(t)
-	out := callArch(t, r, `{}`)
+	out := callArch(t, r, `{"project":"file://` + r.Root() + `"}`)
 
 	if out.Summary.FileCount == 0 {
 		t.Error("summary.fileCount is zero")
@@ -52,7 +52,7 @@ func TestGetArchitecture_HappyPath(t *testing.T) {
 // import cycles. The Tarjan SCC pass must report zero cycles here.
 func TestGetArchitecture_NoCyclesOnFixture(t *testing.T) {
 	r := loadTestRepo(t)
-	out := callArch(t, r, `{}`)
+	out := callArch(t, r, `{"project":"file://` + r.Root() + `"}`)
 
 	if len(out.ImportCycles) != 0 {
 		t.Errorf("fixture has no cycles; got %d: %+v", len(out.ImportCycles), out.ImportCycles)
@@ -99,7 +99,7 @@ func Greet() { Hello() }
 	}
 	defer func() { _ = r.Close() }()
 
-	out := callArch(t, r, `{}`)
+	out := callArch(t, r, `{"project":"file://` + r.Root() + `"}`)
 
 	if len(out.ImportCycles) == 0 {
 		t.Fatal("expected at least one import cycle; got none")
@@ -136,7 +136,7 @@ func Greet() { Hello() }
 // real one. The Exported field still gets set so the caller can judge.
 func TestGetArchitecture_DeadCodeFiltering(t *testing.T) {
 	r := loadTestRepo(t)
-	out := callArch(t, r, `{}`)
+	out := callArch(t, r, `{"project":"file://` + r.Root() + `"}`)
 
 	for _, d := range out.DeadCode {
 		isGo := strings.HasSuffix(d.File, ".go")
@@ -150,7 +150,7 @@ func TestGetArchitecture_DeadCodeFiltering(t *testing.T) {
 // and topPackages lists.
 func TestGetArchitecture_TopArg(t *testing.T) {
 	r := loadTestRepo(t)
-	out := callArch(t, r, `{"top":2}`)
+	out := callArch(t, r, `{"project":"file://` + r.Root() + `","top":2}`)
 
 	if len(out.TopPackages) > 2 {
 		t.Errorf("topPackages has %d entries; cap is 2", len(out.TopPackages))
@@ -164,7 +164,7 @@ func TestGetArchitecture_TopArg(t *testing.T) {
 // the SCC pass entirely.
 func TestGetArchitecture_IncludeCyclesFalse(t *testing.T) {
 	r := loadTestRepo(t)
-	out := callArch(t, r, `{"include_cycles":false}`)
+	out := callArch(t, r, `{"project":"file://` + r.Root() + `","include_cycles":false}`)
 	// Even with cycles false, the slice must be present (non-nil empty)
 	// — clients shouldn't need a nil check.
 	if out.ImportCycles == nil {

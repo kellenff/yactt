@@ -13,7 +13,8 @@ import (
 // of callSnippet in getcodesnippet_test.go.
 func findSymbols(t *testing.T, repo *store.Repo, args string) []FindSymbolResult {
 	t.Helper()
-	out, err := FindSymbol(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(args))
+	fullArgs := withProject(repo.Root(), args)
+	out, err := FindSymbol(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(fullArgs))
 	if err != nil {
 		t.Fatalf("find_symbol: %v (args=%s)", err, args)
 	}
@@ -50,8 +51,8 @@ func TestFindSymbol_DottedNamePath_AuthLogin(t *testing.T) {
 func TestFindSymbol_SlashAndDottedAgree(t *testing.T) {
 	r := loadTestRepo(t)
 
-	slash := findSymbols(t, r, `{"name_path":"auth/Login","limit":5}`)
-	dotted := findSymbols(t, r, `{"name_path":"auth.Login","limit":5}`)
+	slash := findSymbols(t, r, `{"project":"file://` + r.Root() + `","name_path":"auth/Login","limit":5}`)
+	dotted := findSymbols(t, r, `{"project":"file://` + r.Root() + `","name_path":"auth.Login","limit":5}`)
 
 	if len(slash) == 0 {
 		t.Fatal("slash form returned no matches")
@@ -72,7 +73,7 @@ func TestFindSymbol_SlashAndDottedAgree(t *testing.T) {
 // name-only lookup.
 func TestFindSymbol_BareName_Login(t *testing.T) {
 	r := loadTestRepo(t)
-	hits := findSymbols(t, r, `{"name_path":"Login","limit":5}`)
+	hits := findSymbols(t, r, `{"project":"file://` + r.Root() + `","name_path":"Login","limit":5}`)
 
 	if len(hits) == 0 {
 		t.Fatal("expected at least one match for bare 'Login'")
@@ -102,7 +103,8 @@ func TestFindSymbol_SlashKindPrefix_ClassUserMethod(t *testing.T) {
 // / `totalCount` (issue #33).
 func findSymbolEnvelope(t *testing.T, repo *store.Repo, args string) map[string]any {
 	t.Helper()
-	out, err := FindSymbol(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(args))
+	fullArgs := withProject(repo.Root(), args)
+	out, err := FindSymbol(seedRegFromRepo(t, repo))(context.Background(), json.RawMessage(fullArgs))
 	if err != nil {
 		t.Fatalf("find_symbol: %v (args=%s)", err, args)
 	}
@@ -118,7 +120,7 @@ func findSymbolEnvelope(t *testing.T, repo *store.Repo, args string) map[string]
 func TestFindSymbol_DidYouMeanOnMiss(t *testing.T) {
 	r := loadTestRepo(t)
 	// "Loginn" is one transposition away from "Login" in the fixture.
-	env := findSymbolEnvelope(t, r, `{"name_path":"auth.Loginn"}`)
+	env := findSymbolEnvelope(t, r, `{"project":"file://` + r.Root() + `","name_path":"auth.Loginn"}`)
 
 	if s, _ := env["symbols"].([]FindSymbolResult); len(s) != 0 {
 		t.Fatalf("expected empty symbols for misspelling; got %d", len(s))
@@ -149,7 +151,7 @@ func TestFindSymbol_DidYouMeanOnMiss(t *testing.T) {
 // wire shape honest: an empty array would still pay the schema cost.
 func TestFindSymbol_NoSuggestionOnHit(t *testing.T) {
 	r := loadTestRepo(t)
-	env := findSymbolEnvelope(t, r, `{"name_path":"auth.Login"}`)
+	env := findSymbolEnvelope(t, r, `{"project":"file://` + r.Root() + `","name_path":"auth.Login"}`)
 	if _, hasSugg := env["suggestions"]; hasSugg {
 		t.Errorf("did not expect `suggestions` on a hit; envelope=%+v", env)
 	}
@@ -160,7 +162,7 @@ func TestFindSymbol_NoSuggestionOnHit(t *testing.T) {
 // we still get ≥1 result. The point: truncated=false, totalCount≥1.
 func TestFindSymbol_TruncatedAndTotalCount(t *testing.T) {
 	r := loadTestRepo(t)
-	env := findSymbolEnvelope(t, r, `{"name_path":"auth.Login"}`)
+	env := findSymbolEnvelope(t, r, `{"project":"file://` + r.Root() + `","name_path":"auth.Login"}`)
 
 	if tr, _ := env["truncated"].(bool); tr {
 		t.Errorf("truncated = true; want false (1 hit, limit not hit)")

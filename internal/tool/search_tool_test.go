@@ -65,8 +65,10 @@ func TestSearch_RejectsUnclosedQuote(t *testing.T) {
 	// any valid repo works.
 	// We delegate to the existing helper to keep the test simple.
 	r := loadRegexFixtureRepo(t)
-	args := `{"query":"foo \"bar","scope":"","limit":5}`
-	_, err := Search(r)(nil, mustJSON(t, args))
+	repo := r
+	args := `{"project":"file://` + repo.Root() + `","query":"foo \"bar","scope":"","limit":5}`
+	_ = args
+	_, err := Search(seedRegFromRepo(t, repo))(nil, mustJSON(t, args))
 	if err == nil {
 		t.Fatal("Search should reject unclosed quote")
 	}
