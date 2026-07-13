@@ -141,7 +141,7 @@ func TestRunner_RunHappyPath(t *testing.T) {
 		},
 	}
 	runner := persisted.NewRunner(reg, tools)
-	out, err := runner.Run(context.Background(), "ok")
+	out, err := runner.Run(context.Background(), "ok", "file:///test", nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestRunner_RunUnknownID(t *testing.T) {
 	runner := persisted.NewRunner(reg, map[string]persisted.ToolFunc{
 		"x": func(ctx context.Context, args json.RawMessage) (any, error) { return nil, nil },
 	})
-	_, err := runner.Run(context.Background(), "beta")
+	_, err := runner.Run(context.Background(), "beta", "file:///test", nil)
 	if err == nil {
 		t.Fatal("Run unknown: err = nil")
 	}
@@ -180,7 +180,7 @@ func TestRunner_RunUnknownTool(t *testing.T) {
 	reg := persisted.NewRegistry()
 	_ = reg.Register(persisted.Op{ID: "x", Tool: "ghost"})
 	runner := persisted.NewRunner(reg, map[string]persisted.ToolFunc{}) // empty
-	_, err := runner.Run(context.Background(), "x")
+	_, err := runner.Run(context.Background(), "x", "file:///test", nil)
 	if err == nil {
 		t.Fatal("Run with missing tool: err = nil")
 	}
@@ -199,7 +199,7 @@ func TestRunner_PropagatesError(t *testing.T) {
 			return nil, errors.New("boom")
 		},
 	})
-	_, err := runner.Run(context.Background(), "x")
+	_, err := runner.Run(context.Background(), "x", "file:///test", nil)
 	if err == nil {
 		t.Fatal("err = nil")
 	}

@@ -129,12 +129,18 @@ func NewRunner(reg *Registry, tools map[string]ToolFunc) *Runner {
 }
 
 // Run looks up opID, resolves the wrapped tool's handler, and
-// dispatches the call. Returns the tool's result unchanged so
-// persisted_query callers see the same wire shape as direct calls.
+// dispatches the call. The `project` URI is injected into the
+// wrapped tool's args under the "project" key (overriding any value
+// the op's static args supply) so every code-intel tool that needs
+// a project gets one transparently. Returns the tool's result
+// unchanged so persisted_query callers see the same wire shape as
+// direct calls. Errors are wrapped with the op id so an agent can
+// tell which persisted query failed.
 //
-// Errors are wrapped with the op id so an agent can tell which
-// persisted query failed.
-func (r *Runner) Run(ctx context.Context, opID string) (any, error) {
+// `rawArgs` is the full persisted_query caller's JSON, kept around
+// so the runner can layer the caller's args on top of the op's
+// static args (caller wins for any key other than "project").
+func (r *Runner) Run(ctx context.Context, opID, project string, rawArgs json.RawMessage) (any, error) {
 	op, ok := r.reg.Get(opID)
 	if !ok {
 		return nil, fmt.Errorf("persisted_query: unknown id %q; valid ids: %v", opID, r.reg.IDs())
@@ -143,7 +149,7 @@ func (r *Runner) Run(ctx context.Context, opID string) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("persisted_query: op %q references unknown tool %q", opID, op.Tool)
 	}
-	argsJSON, err := ArgsJSONFor(op)
+	argsJSON, err := r.mergedArgs(op, project, rawArgs)
 	if err != nil {
 		return nil, fmt.Errorf("persisted_query: op %q: marshal args: %w", opID, err)
 	}
@@ -152,6 +158,35 @@ func (r *Runner) Run(ctx context.Context, opID string) (any, error) {
 		return nil, fmt.Errorf("persisted_query: op %q (%s) failed: %w", opID, op.Tool, err)
 	}
 	return out, nil
+}
+
+// mergedArgs layers the persisted_query caller's args on top of
+// the op's static args (caller wins for any key other than
+// "project") and injects `project` (file:// URI) under the
+// "project" key — the wrapped tool's required field. The caller
+// can't override project because that would let an agent
+// bypass the URI validation.
+func (r *Runner) mergedArgs(op Op, project string, rawArgs json.RawMessage) ([]byte, error) {
+	var callerArgs map[string]any
+	if len(rawArgs) > 0 {
+		if err := json.Unmarshal(rawArgs, &callerArgs); err != nil {
+			return nil, fmt.Errorf("persisted_query: invalid args: %w", err)
+		}
+	}
+	out := make(map[string]any, len(op.Args)+len(callerArgs)+1)
+	for k, v := range op.Args {
+		out[k] = v
+	}
+	for k, v := range callerArgs {
+		// Don't let the caller override `project` — that would
+		// let an agent bypass the URI check.
+		if k == "project" {
+			continue
+		}
+		out[k] = v
+	}
+	out["project"] = project
+	return json.Marshal(out)
 }
 
 // ArgsJSONFor returns the args map from op marshalled to JSON. The

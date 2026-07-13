@@ -9,22 +9,26 @@ import (
 )
 
 // PersistedQueryArgs is the typed boundary input for persisted_query.
-// `id` is the registered op's identifier; the runner resolves the
-// wrapped tool from the registry at dispatch time.
+// `op` is the registered op's identifier; `project` is the file:// URI
+// of the project the op should run against. The runner resolves the
+// wrapped tool from the registry at dispatch time and injects
+// `project` into the wrapped tool's args.
 type PersistedQueryArgs struct {
-	ID string `json:"id"`
+	Op      string `json:"op"`
+	Project string `json:"project"`
 }
 
 // PersistedQuerySchema is the JSON Schema for persisted_query.
-// Mirrors the surface every other tool exposes: a single required
-// `id` string, no surprises.
+// `op` is the registered op's identifier; `project` is the file://
+// URI of the project the op should run against. Both are required.
 var PersistedQuerySchema = json.RawMessage(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "id": { "type": "string", "description": "Registered persisted-query identifier, e.g. \"onboarding\"." }
+    "op":      { "type": "string", "description": "Registered persisted-query identifier, e.g. \"onboarding\"." },
+    "project": { "type": "string", "description": "Absolute path as a file:// URI. Injected into the wrapped tool's args before dispatch." }
   },
-  "required": ["id"],
+  "required": ["op", "project"],
   "additionalProperties": false
 }`)
 
@@ -52,10 +56,13 @@ func PersistedQuery(runner *persisted.Runner) func(ctx context.Context, args jso
 		if err := json.Unmarshal(args, &a); err != nil {
 			return nil, fmt.Errorf("invalid persisted_query args: %w", err)
 		}
-		if a.ID == "" {
-			return nil, fmt.Errorf("persisted_query: id is required")
+		if a.Op == "" {
+			return nil, fmt.Errorf("persisted_query: op is required")
 		}
-		out, err := runner.Run(ctx, a.ID)
+		if a.Project == "" {
+			return nil, fmt.Errorf("persisted_query: project is required")
+		}
+		out, err := runner.Run(ctx, a.Op, a.Project, args)
 		if err != nil {
 			return nil, err
 		}
