@@ -20,7 +20,7 @@ func (noopHandler) Handler(_ context.Context, _ json.RawMessage) (any, error) {
 }
 
 func benchServer(b *testing.B) *Server {
-	s := NewServer("yactt-bench", "v0.0.0", "2024-11-05", nil, nil)
+	s := NewServer("yactt-bench", "v0.0.0", ProtocolVersion, nil, nil)
 	for i := 0; i < 16; i++ {
 		s.RegisterTool(ToolDef{
 			Name:         "stub_" + itoa(i),
@@ -97,7 +97,7 @@ func BenchmarkRegisterTool(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// Ponytail: NewServer per iter so RegisterTool doesn't trip the
 		// duplicate-name panic. NewServer is sub-µs.
-		s := NewServer("yactt-bench", "v0.0.0", "2024-11-05", nil, nil)
+		s := NewServer("yactt-bench", "v0.0.0", ProtocolVersion, nil, nil)
 		s.RegisterTool(toolDef)
 	}
 }

@@ -43,6 +43,16 @@ var (
 //   - non-empty authority (e.g. file://host/path)
 //   - relative paths (the URI must encode an absolute path)
 //   - percent-encoded path-traversal segments (e.g. %2e%2e)
+//   - double-encoded traversal (e.g. %252e%252e — url.Parse
+//     decodes one level to literal "%2e%2e", but url.PathUnescape
+//     on the result catches the second level too)
+//
+// Defence in depth: the layer beneath us (the registry / store
+// loaders) does not itself unescape percent-encoded path segments,
+// so a "double-encoded" URI is currently inert. We still reject
+// it on the wire so the contract is closed against future
+// downstream tools that DO unescape (or against agents that pass
+// the raw string to a shell, where unescape rules differ).
 func ParseRef(raw string) (Ref, error) {
 	if strings.TrimSpace(raw) == "" {
 		return Ref{}, ErrEmpty
@@ -66,8 +76,28 @@ func ParseRef(raw string) (Ref, error) {
 	if u.Host != "" {
 		return Ref{}, ErrNonLocal
 	}
-	// Reject decoded path-traversal before filepath.Clean erases it.
+	// Reject decoded path-traversal on the single-decoded path
+	// before filepath.Clean erases it. url.Parse decodes percent-
+	// encoded segments inside u.Path, so "%2e%2e" becomes ".."
+	// here — the substring check catches it.
 	if strings.Contains(u.Path, "/../") || strings.HasSuffix(u.Path, "/..") || u.Path == "/.." {
+		return Ref{}, ErrNotAbsolute
+	}
+	// Belt-and-suspenders: call url.PathUnescape on u.Path to
+	// collapse any DOUBLE-encoded traversal that slipped past
+	// the single-decode check (e.g. "%252e%252e" — url.Parse
+	// decodes to literal "%2e%2e", which the OS treats as data,
+	// but a downstream tool that unescapes again would turn it
+	// into real ".."). Re-check the traversal pattern on the
+	// fully-decoded path. A malformed percent sequence surfaces
+	// here as an error — we treat it as ErrNotAbsolute (the
+	// caller can re-try with a corrected URI; ErrUnsupportedScheme
+	// would be misleading since the scheme is fine).
+	fullyDecoded, perr := url.PathUnescape(u.Path)
+	if perr != nil {
+		return Ref{}, ErrNotAbsolute
+	}
+	if strings.Contains(fullyDecoded, "/../") || strings.HasSuffix(fullyDecoded, "/..") || fullyDecoded == "/.." {
 		return Ref{}, ErrNotAbsolute
 	}
 	cleaned := filepath.Clean(filepath.Join("/", u.Path))

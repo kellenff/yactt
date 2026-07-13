@@ -29,8 +29,9 @@ URI that every targeting tool takes in its args.
   `index_repository` explicitly with their chosen `file://` URI.
 - `get_graph_schema` no longer takes a `*store.Repo` constructor
   argument (it was always unused; drop simplifies the tool map).
-- `tree_overview`'s `repo` field is a deprecated alias for one
-  release. Use `project`; a stderr notice fires on every use.
+- `tree_overview`'s `repo` field is a deprecated alias kept
+  through **v0.2.0** (one release). Use `project`; a stderr
+  notice fires on every use. The alias will be removed in v0.2.0.
 
 **Why now:** unifies the wire shape across the registry tools
 (`index_repository`, `index_status`, `delete_project`) and the
