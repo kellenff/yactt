@@ -18,7 +18,6 @@ func RegisterExampleOps(r *Registry) {
 		Description: "Repo map: tree_overview at depth 2 — top packages and files only.",
 		Tool:        "tree_overview",
 		Args: map[string]any{
-			"repo":  "",
 			"depth": 2,
 		},
 	})
@@ -27,7 +26,6 @@ func RegisterExampleOps(r *Registry) {
 		Description: "Top-level directory map: tree_overview at depth 1 — packages and notable files only.",
 		Tool:        "tree_overview",
 		Args: map[string]any{
-			"repo":  "",
 			"depth": 1,
 		},
 	})
