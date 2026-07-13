@@ -54,6 +54,22 @@ func loadRepo(t *testing.T) *store.Repo {
 	return repo
 }
 
+// withAcceptanceProject prepends a `project` (file:// URI) field
+// to the args JSON if the field is missing. The fixture root is
+// read from fixtureRepoCache.Root() (populated by loadRepo).
+// Used by callJSON and callAsMap to keep per-test args JSON
+// compact.
+func withAcceptanceProject(t *testing.T, args string) string {
+	if strings.Contains(args, `"project"`) {
+		return args
+	}
+	root := fixtureRepoCache.Root()
+	if args == "{}" {
+		return `{"project":"file://` + root + `"}`
+	}
+	return `{"project":"file://` + root + `",` + args[1:]
+}
+
 // seedRegForProject creates a fresh *registry.Registry containing one
 // entry for `root`. Used by every test that needs to call a
 // registry-bound tool factory. The handler resolves the project
@@ -78,6 +94,7 @@ func seedRegForProject(t *testing.T, root string) *registry.Registry {
 // callAsMap for structural assertions.
 func callJSON(t *testing.T, h func(ctx context.Context, args json.RawMessage) (any, error), argsJSON string) any {
 	t.Helper()
+	argsJSON = withAcceptanceProject(t, argsJSON)
 	out, err := h(context.Background(), json.RawMessage(argsJSON))
 	if err != nil {
 		t.Fatalf("handler error: %v (args=%s)", err, argsJSON)
@@ -90,6 +107,7 @@ func callJSON(t *testing.T, h func(ctx context.Context, args json.RawMessage) (a
 // that don't care about the concrete result type, only its contents.
 func callAsMap(t *testing.T, h func(ctx context.Context, args json.RawMessage) (any, error), argsJSON string) any {
 	t.Helper()
+	argsJSON = withAcceptanceProject(t, argsJSON)
 	out, err := h(context.Background(), json.RawMessage(argsJSON))
 	if err != nil {
 		t.Fatalf("handler error: %v (args=%s)", err, argsJSON)

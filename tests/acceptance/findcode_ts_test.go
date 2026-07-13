@@ -57,7 +57,7 @@ func TestFindCodeAcceptance_TreeSitter(t *testing.T) {
 func TestFindCodeAcceptance_TreeSitter_CompileError(t *testing.T) {
 	loadRepo(t)
 	reg := fixtureRegCache
-	_, err := tool.FindCode(reg)(context.Background(), json.RawMessage(`{"pattern":"(function_declaration","pattern_kind":"tree_sitter","limit":10}`))
+	_, err := tool.FindCode(reg)(context.Background(), json.RawMessage(`{"project":"file://`+fixtureRepoCache.Root()+`","pattern":"(function_declaration","pattern_kind":"tree_sitter","limit":10}`))
 	if err == nil {
 		t.Fatal("expected compile error; got nil")
 	}
