@@ -165,3 +165,132 @@ The angle is locked:
 - **Close:** install + roadmap + security
 
 Pen Wielding (Stage 5) drafts the README on this skeleton, reconciles the demo transcript to the real tool names, and renders the quadrant chart as a Mermaid `quadrantChart` code block (auto-renders to SVG on GitHub).
+
+---
+
+# Refresh — 2026-07-13 (worktree `plant-camel`)
+
+Re-ran the chorus with current state. The 2026-07-06 angle (trust strip + 5-call demo) is **superseded** by a parser-warm / languages-first lead that better fits the post-PR-54 / V3 / file:// migration state.
+
+**Transcript:** `.brainstorm/chorus-20260713T184229.json`
+**Cast:** claude-synth + pragmatist (minimax/MiniMax-M3); critic unavailable again
+
+## What changed in this refresh
+
+| Decision | 2026-07-06 angle | 2026-07-13 angle |
+|---|---|---|
+| Lead | Trust strip `SLSA L3 · 21 tools · 1 dep · read-only` | **Parser-warm, 6 languages over persistent HTTP** |
+| Hook | 5-call worked example (payment validation) | Tools grouped **introspect / traverse / diagnose** with concrete envelope samples |
+| Frame | Empty quadrant (lossless × resolved) | Empty quadrant + **Serena contrast** (parser-shaped vs LSP-shaped) |
+| Proof | "What's behind the badge row" | **Envelope examples** + **URI normalization rules** |
+| Close | Install + roadmap + security | When-to-use-yactt + roadmap + security |
+| Tool taxonomy | 16/4/1 (code-intel / registry / persisted) | **introspect / traverse / diagnose** (functional) |
+
+## Round 1 — pragmatist's lead (verbatim summary)
+
+> yactt gives an AI agent a single 21-tool surface over code written in Go, TypeScript, JavaScript, Python, PHP, and Rust. Instead of writing one extractor per language, you get structured symbol/region/RFC-7807-shaped answers over a persistent HTTP connection. One tree-sitter dependency, read-only filesystem access, SLSA-L3 provenance. The wire format is `file://` URIs, so paths your agent already knows just work.
+
+Bet: **languages-first, tools-second**. Language coverage is the moat (anyone can ship 21 tools for one language in a weekend); the tool count is surface area (the thing that scares operators).
+
+## Round 2 — synth's pushback (the persistent-HTTP anchor)
+
+The persistent-HTTP callout is the angle, not the operational footnote. **stdio MCP inherits the lifecycle of the spawning process** — every agent restart, context-window collapse, MCP-client reinit tears down parser state. For a 200k LOC Go monorepo, that's 3-8s of reparse per session resume. HTTP keepalive keeps the parser warm. **Incrementality (reparse only changed files, reuse prior symbol tables) is only possible over a persistent transport** — so persistent HTTP is the prerequisite for the v0.2 roadmap, not a connection-reuse footnote.
+
+**Revised lead (~90 words):**
+
+> yactt is an MCP server that gives an AI agent one parser-warm, URI-addressable view of code in Go, TypeScript, JavaScript, Python, PHP, and Rust. It runs over persistent HTTP, so tree-sitter state survives agent restarts and context-window collapses — a 200k LOC Go monorepo stays parsed across sessions instead of paying 3-8s of reparse latency on every resume. Twenty-one tools, one tree-sitter dependency, read-only filesystem access, SLSA-L3 provenance. Paths are `file://` URIs, so the agent doesn't learn a new addressing dialect.
+
+Three changes worth calling out:
+
+1. **"parser-warm" is the new hero word** — concrete benefit, not protocol detail.
+2. **The 200k LOC / 3-8s number** does real work — that's a budget an agent operator can feel.
+3. **"Paths are `file://` URIs"** moved to the closing sentence — earns its place as the "by the way, this just works" beat.
+
+## Round 2 — file:// URI normalization (the bug magnet)
+
+Agents that speak URI are picky in different ways. Claude Desktop, Cline, Goose all normalize input differently:
+
+- Claude passes paths from tool output, not normalized URIs → "doesn't start with file://" rejections
+- Cline passes relative paths when cwd is the repo root → "relative not allowed" rejections
+- Some agents percent-encode, some don't → two symbols for the same file if match logic is sloppy
+
+**Action item for the README:** add an explicit "URI handling" subsection, not a footnote:
+
+> **URI normalization.** yactt accepts `file://` absolute URIs (`file:///abs/path`), bare absolute paths, and paths relative to the workspace root. The server normalizes on input; clients should treat the `file://` form returned in tool responses as canonical. Relative paths without a workspace root set are rejected.
+
+This is the kind of thing that looks like docs pedantry until an agent engineer spends an afternoon debugging "works in Cline, errors in Claude Desktop."
+
+## Round 2 — envelope taxonomy (`introspect / traverse / diagnose`)
+
+The synth's pushback on the original `structure / navigation / diagnostics`:
+
+> `introspect / traverse / diagnose` is materially better. "Navigation" overlaps "structure" — find-references is a *query* against structure, the language doesn't matter once you have the symbol table. The rename makes the data model visible: **introspect** = read the file, return contents-shaped view; **traverse** = walk the graph, return edges; **diagnose** = read the file, return failure-shaped view.
+
+> The graph framing matters because the next tool you ship (almost certainly something like `impact` or `dependents`) fits cleanly into *traverse*. If you call it "navigation" you're locked into IDE vocabulary and the roadmap gets cramped.
+
+The pragmatic envelope shape (honest version):
+
+| Group | Response shape | Notes |
+|---|---|---|
+| introspect | `{uri, language, symbols: [...], ranges: [...]}` | same envelope per language |
+| traverse | `{uri, language, edges: [...], target?: uri}` | same envelope, different payload key |
+| diagnose | RFC 7807 `{type, title, detail, source_pointer}` | same envelope across all errors |
+
+"Shared envelope, shape-compatible payloads, RFC 7807 for errors."
+
+## Round 2 — Serena contrast (the trust-earning paragraph)
+
+The honest trade:
+
+| | yactt | Serena (LSP-based) |
+|---|---|---|
+| Response shape | Parser-shaped (AST-level) | LSP-shaped (IDE semantics) |
+| Fidelity | Predictable across all 6 langs | Highest for what LSP covers |
+| Cold start | Re-parse (~seconds, one-time) | Index build + per-language server spin-up |
+| Cross-language queries | Same envelope, same syntax | Per-language server, per-language quirks |
+| Where it loses | No type inference, no hover docs | Wins on Go/Python/Rust where LSP is mature |
+| Where it wins | PHP (LSP story is grim), 6-lang consistency, persistent state | Single-language deep work in a well-served language |
+
+> **yactt trades LSP-grade fidelity for cross-language consistency and parser-warm persistence.** If your codebase is single-language and you want hover-docs precision, use Serena. If your codebase is polyglot or you want predictable tool behavior across all of it, use yactt.
+
+That paragraph earns trust because it admits the trade. The reader who picks Serena after reading it still recommends yactt to their polyglot-team friend.
+
+## Resolved angle (this refresh)
+
+### Lead — parser-warm + 6 languages + persistent HTTP
+
+The hero word is **parser-warm**. The mechanism sentence is **persistent HTTP**. The moat is **6 languages**. The tool count (21) is evidence, not headline.
+
+### Structure
+
+1. **The lead** — ~90 words; parser-warm + persistent HTTP + 6 langs + 21 tools + 1 dep + SLSA-L3 + file:// URIs
+2. **Quickstart** — install + first `tools/call` showing the `file://` URI round-trip
+3. **Tool surface** — `introspect / traverse / diagnose` with one-liner per tool + concrete envelope samples
+4. **URI handling** — explicit normalization rules (not a footnote)
+5. **When to use yactt (vs. LSP-shaped tools)** — the Serena contrast, named honestly
+6. **Trust sidebar** — SLSA-L3 + read-only + audit log (confirms, doesn't convince)
+7. **Roadmap** — cross-repo queries, workspace_overview, persisted-query step chaining, consumer-side SLSA verification, tree_at(ref)
+8. **Security** — links to docs/security.md + the tree-sitter floor
+
+### What this beat captures that the prior beat missed
+
+- **The persistent-HTTP angle** — it's the prerequisite for the v0.2 incrementality story, not a footnote
+- **The parser-warm framing** — concrete budget number (200k LOC, 3-8s reparse)
+- **Languages-first ordering** — language coverage is the moat
+- **The introspect/traverse/diagnose taxonomy** — the data model becomes visible; `traverse` makes the next roadmap tool (`impact`/`dependents`) obvious
+- **The Serena contrast** — the trust-earning paragraph that wasn't in the prior beat
+
+### Risks (this refresh)
+
+- **The lead is longer (~90 words) than the prior ~80-word lead.** Worth it: parser-warm + persistent HTTP + 6 langs in one block is the deal.
+- **The "When to use yactt" section needs Serena's cooperation.** If Serena's positioning changes, this section needs updating. Worth a re-read on every release.
+- **The 200k LOC / 3-8s reparse number must be defensible.** Check `docs/benchmarks.md` (recently added) for the actual number. If the benchmark says something different, the lead needs to match.
+- **The critic was unavailable again.** Both 2026-07-06 and 2026-07-13 runs hit this — single-provider cast fallback. Future jams should retry with the critic enabled.
+- **The `introspect/traverse/diagnose` taxonomy is a new naming convention.** Tool descriptions in `register.go` still use functional names (`tree_overview`, `node_get`, `node_edges`). Pen Wielding needs to add the taxonomy as a *grouping* in the README, not as a rename of the tools.
+
+## Source for this refresh
+
+- `chorus --prompt ... --seed ... --max-rounds 2 --critique` (full transcript at `.brainstorm/chorus-20260713T184229.json`)
+- 2026-07-06 `brain-jam.md` (foundation; superseded on lead, hook, taxonomy)
+- 2026-07-13 `deep-dive.md` (tool names + wire shape)
+- 2026-07-13 `crystal-ball.md` (corrected roadmap + audience segments)

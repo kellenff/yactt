@@ -2,9 +2,9 @@
 
 **Federated code intelligence for AI agents — lossless source, resolved semantics, MCP-native.**
 
-*Walk the tree, choose your layer.*
+`SLSA L3` · `21 tools` · `6 languages` · `1 dep` · `read-only`
 
-`SLSA L3` · `21 tools` · `1 dep` · `read-only`
+*Walk the tree, choose your layer.*
 
 > **Don't `go install` from `main`.** Release tarballs are SHA256-verified and ship SLSA Build Provenance Level 3 attestations — building from source skips the trust chain. Verify a release:
 >
@@ -12,7 +12,7 @@
 > gh attestation verify yactt_darwin_arm64.tar.gz -R kellenff/yactt
 > ```
 
-yactt is a Model Context Protocol server that gives an AI agent both the raw bytes of a source file **and** the resolved symbol/call/reference graph — the empty quadrant of the code-intelligence tradeoff for polyglot Go, TypeScript, JavaScript, and Python repositories. *Yet Another Code Tree Tool*, in the GNU / YACC / WINE tradition; the name is tongue-in-cheek, the tool is serious.
+yactt is an MCP server that gives an AI agent one parser-warm, URI-addressable view of code written in **Go, TypeScript, JavaScript, Python, PHP, and Rust**. It runs over persistent HTTP, so tree-sitter state survives agent restarts and context-window collapses — a 200k LOC Go monorepo stays parsed across sessions instead of paying 3-8s of reparse latency on every resume. Twenty-one tools, one tree-sitter dependency, read-only filesystem access, SLSA-L3 provenance. Paths are `file://` URIs, so the agent doesn't learn a new addressing dialect. *Yet Another Code Tree Tool*, in the GNU / YACC / WINE tradition; the name is tongue-in-cheek, the tool is serious.
 
 ---
 
@@ -20,9 +20,9 @@ yactt is a Model Context Protocol server that gives an AI agent both the raw byt
 
 > **Trust, not promises.** Every release binary is signed, checksummed, and SLSA-L3-attested. Verify above; trust the artifact, not the GitHub UI.
 >
-> **Audit before running.** This tool reads source code at every MCP call. The full source is here. Every response is structured, no write tools exist, and every `tools/call` can be audit-logged with `--audit-log=<file>`.
+> **Audit before running.** This tool reads source code at every MCP call. The full source is here. Every response is structured, no write tools exist by default, and every `tools/call` can be audit-logged with `--audit-log=<file>`.
 
-The reference tools sit on a strict diagonal in the polyglot zone:
+yactt occupies the empty corner of the polyglot code-intelligence tradeoff:
 
 ```mermaid
 quadrantChart
@@ -47,9 +47,9 @@ quadrantChart
   grep: [0.10, 0.05]
 ```
 
-yactt occupies the empty corner. It uses [tree-sitter](https://tree-sitter.github.io/) as the unconditional syntactic floor and opportunistically attaches [`gopls`](https://pkg.go.dev/golang.org/x/tools/gopls), [`typescript-language-server`](https://github.com/typescript-language-server/typescript-language-server), and [`pyright-langserver`](https://github.com/microsoft/pyright) for resolved type/call/reference data when those servers are on `PATH`. Without them, yactt still works — every answer is then stamped `provenance.tool = "tree-sitter"` so the agent can branch on what it trusts.
-
 The wire surface is [MCP](https://modelcontextprotocol.org/), not a custom protocol. Every tool declares both an `InputSchema` and an `OutputSchema` (the `OutputSchema` must declare `type:"object"` — enforced at registration time), so an agent gets structured results it can branch on without parsing prose.
+
+yactt uses [tree-sitter](https://tree-sitter.github.io/) as the unconditional syntactic floor and opportunistically attaches [`gopls`](https://pkg.go.dev/golang.org/x/tools/gopls), [`typescript-language-server`](https://github.com/typescript-language-server/typescript-language-server), and [`pyright-langserver`](https://github.com/microsoft/pyright) for resolved type/call/reference data when those servers are on `PATH`. Without them, yactt still works — every answer is then stamped `provenance.tool = "tree-sitter"` so the agent can branch on what it trusts. PHP and Rust rely on tree-sitter alone (LSP availability for those languages is uneven; the trait-irrelevant path is the principled default).
 
 ---
 
@@ -102,7 +102,7 @@ Any MCP-capable client. Wire the server into your `.mcp.json`:
     "yactt": {
       "type": "stdio",
       "command": "yactt",
-      "args": ["mcp", "serve", "/path/to/repo"]
+      "args": ["mcp", "serve"]
     }
   }
 }
@@ -110,21 +110,7 @@ Any MCP-capable client. Wire the server into your `.mcp.json`:
 
 The protocol version is `2024-11-05`. After `initialize` + `notifications/initialized`, call `tools/list` to enumerate the registered tools, then `tools/call` per request.
 
-### For HTTP-capable clients
-
-A persistent HTTP daemon is available via `yactt mcp serve-http` (MCP `2025-03-26` Streamable HTTP). One daemon serves every repo in the registry from a shared `*mcp.Server` — tools resolve their project via the `file://` URI passed in their arguments:
-
-```bash
-yactt mcp serve-http --port=8080
-# yactt mcp serve-http listening on 127.0.0.1:8080 protocol=2025-03-26 registry=/Users/you/.cache/yactt/projects.json ...
-```
-
-Clients connect to a single endpoint:
-
-- `http://127.0.0.1:8080/mcp` — JSON-RPC over POST/GET/DELETE. All 21 tools are available; project resolution is per-call via `args.project` (a `file://` URI) on the 16 code-intel tools, or implicit (registry row) on the 4 registry tools.
-- `http://127.0.0.1:8080/healthz` — liveness probe, unauthenticated.
-
-Default bind is `127.0.0.1` with no auth. To expose to a network, use `--bind=0.0.0.0` together with `--auth-token=<secret>`; the daemon refuses non-loopback traffic without a token. TLS termination is the operator's responsibility — front the daemon with Caddy, nginx, or a Cloudflare Tunnel for HTTPS.
+For HTTP-capable clients, see **Transports** below.
 
 ### For shell pipelines
 
@@ -138,12 +124,70 @@ curl -fsSL https://github.com/kellenff/yactt/releases/latest/download/yactt_darw
 
 # then
 yactt overview /path/to/repo        # tree dump as JSON
-yactt mcp serve                     # MCP server on stdio (registry mode)
+yactt chunk   /path/to/repo        # chunks for RAG ingestion
+yactt hybrid  /path/to/repo        # hybrid retrieval
+yactt mcp serve                    # MCP server on stdio
 ```
 
-The CLI is intentionally thin — `help`, `version`, `overview`, `mcp serve`. Anything with logic lives under `internal/`.
+The CLI is intentionally thin — `help`, `version`, `overview`, `chunk`, `hybrid`, `mcp serve`, `mcp serve --http`. Anything with logic lives under `internal/`.
 
-The `mcp serve` subcommand runs in **registry mode** — it boots without loading any repo. To work with a repo, an agent first calls `index_repository` with the repo's `file://` URI, then invokes code-intel tools (`tree_overview`, `find_symbol`, etc.) with the same URI in their `project` field. Every targeting tool takes a `file://` absolute-path URI; the legacy positional-path argument on `mcp serve` is removed.
+---
+
+## Transports
+
+yactt ships two transports, sharing the same 21-tool surface. Pick one; the agent's perspective is identical either way.
+
+```mermaid
+graph LR
+  subgraph "Agent runtime"
+    A[spawn on-demand] --> Y[yactt mcp serve]
+    B[long-lived daemon] --> Y2[yactt mcp serve --http :8080]
+  end
+  Y --> M1["MCP<br/>stdio JSON-RPC"]
+  Y2 --> M2["MCP<br/>Streamable HTTP"]
+  M1 --> S[21 tools]
+  M2 --> S
+  S --> P[parser-warm<br/>tree-sitter]
+  S --> L[opportunistic<br/>gopls / tsserver / pyright]
+  S --> C["$XDG_CACHE_HOME/<br/>yactt/projects.json"]
+```
+
+**stdio (default).** Spawned per agent session; protocol `2024-11-05`. Best for short-lived sessions where reparse latency on startup is negligible (small workspaces). Each session starts cold; tree-sitter re-parses the workspace.
+
+**Persistent HTTP.** Long-running daemon; protocol `2025-03-26` Streamable HTTP. Best for production agents doing 100+ tool calls per session, or any agent that wants to survive across restarts without paying reparse latency. Tree-sitter parse tables stay warm — a 200k LOC Go monorepo doesn't reparse on every agent resume.
+
+```bash
+# Boot the daemon — survives agent restarts, context-window collapses
+yactt mcp serve --http :8080
+# yactt mcp serve listening on 127.0.0.1:8080 protocol=2025-03-26 registry=/Users/you/.cache/yactt/projects.json ...
+```
+
+Clients connect to two endpoints:
+
+- `http://127.0.0.1:8080/mcp` — JSON-RPC over POST/GET/DELETE. All 21 tools available; project resolution per-call via `args.project` (a `file://` URI).
+- `http://127.0.0.1:8080/healthz` — liveness probe, unauthenticated.
+
+Default bind is `127.0.0.1` with no auth. To expose to a network, pair `--bind=0.0.0.0` with `--auth-token=<secret>`; the daemon refuses non-loopback traffic without a token. TLS termination is the operator's responsibility — front the daemon with Caddy, nginx, or a Cloudflare Tunnel for HTTPS.
+
+**Why this is the architectural anchor.** stdio MCP inherits the lifecycle of the spawning process — every agent restart, every context-window collapse, every MCP-client reinit tears down parser state. HTTP keepalive keeps the parser warm. Incrementality (reparse only changed files, reuse prior symbol tables) is only possible over a persistent transport, which is why this is the prerequisite for the v0.2 roadmap.
+
+---
+
+## URI handling
+
+Every targeting tool takes a `file://` absolute-path URI in its `project` field. The legacy positional-path argument on `mcp serve` is removed (was `yactt mcp serve /abs/path`); the URI goes in the args, on every call.
+
+The server normalizes input so agent variation doesn't break:
+
+| Input | Accepted? | Normalized form |
+|---|---|---|
+| `file:///abs/path/to/repo` | yes (canonical) | `file:///abs/path/to/repo` |
+| `/abs/path/to/repo` (bare absolute) | yes | `file:///abs/path/to/repo` |
+| `./relative/to/cwd` | only when cwd is the workspace root | `file://<cwd-absolute>` |
+| `file://./relative/foo.py` | no | — (rejected; relative without a base) |
+| `file:foo.py` | no | — (rejected; missing `//`) |
+
+Clients should treat the `file://` form returned in tool responses as canonical. Bare paths and relative paths are accepted as ergonomics, not as an addressing dialect — agents that build URIs should emit the canonical form. The bug magnet is mixing the two: tools that build paths from agent output sometimes emit canonical `file://`, sometimes emit bare paths, and a server with sloppy match logic returns two symbols for the same file. yactt's normalizer catches both forms and emits the canonical one back, so the agent's next call sees consistent identity.
 
 ---
 
@@ -155,7 +199,10 @@ Agent prompt:
 
 ```jsonc
 // call 1 — find by name. three hits surface the resolution need.
-{"tool": "find_symbol", "args": {"name_path": "validatePayment"}}
+{"tool": "find_symbol", "args": {
+  "project": "file:///code/svc-billing",
+  "name_path": "validatePayment"
+}}
 ```
 →
 ```jsonc
@@ -173,8 +220,9 @@ Three hits across two source files and one test file. The agent picks the `valid
 ```jsonc
 // call 2 — typed body, LSP-backed. provenance shows which path served the answer.
 {"tool": "node_get", "args": {
-  "id": "meth:internal/billing/validator.go:validatePayment",
-  "layers": ["body"]
+  "project": "file:///code/svc-billing",
+  "id":      "meth:internal/billing/validator.go:validatePayment",
+  "layers":  ["body"]
 }}
 ```
 →
@@ -190,7 +238,7 @@ Three hits across two source files and one test file. The agent picks the `valid
       {"kind": "return", "text": "return nil, billing.ErrDeclined"}
     ]
   },
-  "provenance": {"tool": "gopls", "version": "0.16.2", "fetchedAt": "2026-07-06T13:22:51Z"}
+  "provenance": {"tool": "gopls", "version": "0.16.2", "fetchedAt": "2026-07-13T13:22:51Z"}
 }
 ```
 
@@ -199,8 +247,9 @@ The method's body, resolved by `gopls`. **This is the resolved-symbol beat — t
 ```jsonc
 // call 3 — agent-controllable filtering: just production callers, no tests.
 {"tool": "find_referencing_symbols", "args": {
-  "symbol": "meth:internal/billing/validator.go:validatePayment",
-  "kinds":  ["calls"]
+  "project": "file:///code/svc-billing",
+  "symbol":  "meth:internal/billing/validator.go:validatePayment",
+  "kinds":   ["calls"]
 }}
 ```
 →
@@ -221,8 +270,9 @@ Two production callers; tests filtered out by `kinds: ["calls"]` (vs `["all"]` w
 ```jsonc
 // call 4 — what does validatePayment call? flip the direction.
 {"tool": "find_referencing_symbols", "args": {
-  "symbol": "meth:internal/billing/validator.go:validatePayment",
-  "kinds":  ["all"]
+  "project": "file:///code/svc-billing",
+  "symbol":  "meth:internal/billing/validator.go:validatePayment",
+  "kinds":   ["all"]
 }}
 ```
 →
@@ -241,8 +291,9 @@ Two production callers; tests filtered out by `kinds: ["calls"]` (vs `["all"]` w
 ```jsonc
 // call 5 — the lossless source slice, for human-in-the-loop confirmation.
 {"tool": "node_source", "args": {
-  "id":    "meth:internal/billing/validator.go:validatePayment",
-  "range": [12, 28]
+  "project": "file:///code/svc-billing",
+  "id":      "meth:internal/billing/validator.go:validatePayment",
+  "range":   [12, 28]
 }}
 ```
 →
@@ -261,52 +312,78 @@ Five calls. The agent now has: discovery, typed body with LSP-resolved statement
 
 ## The 21 tools
 
-The codebase is one node graph; the tools are 21 facets of access.
+The codebase is one node graph; the tools are 21 facets of access. Grouped by what they give the agent back.
 
-<details>
-<summary><strong>16 code-intelligence tools</strong> (single-repo mode)</summary>
-
-| Tool | Purpose |
+| Group | What the agent gets |
 |---|---|
-| `tree_overview` | Top of the repo tree, depth-limited. Start here. |
-| `node_get` | One or more layers of a node — `summary`, `signature`, `body`, `source`, `tokens`. |
-| `node_source` | Lossless source for a node, optionally line-bounded. |
-| `node_edges` | Cross-references — `callers`, `callees`, `tests`, `overrides`, `imports`. |
-| `search` | Find symbols by name or doc-comment matching. |
-| `find_symbol` | Locate by qualified name path with glob support (e.g. `internal/store/*/Load`). |
-| `get_symbols_overview` | Top-level outline of a single file. |
-| `find_code` | AST-aware (tree-sitter) or regex pattern search across files. |
-| `search_code` | `find_code` matches collapsed into their containing functions, deduped by symbol, ranked by structural importance (definitions first, popular next, tests last). |
-| `find_referencing_symbols` | All references to a given symbol; supports `kinds: ["calls"\|"mentions"\|"tests"\|"overrides"\|"all"]`. |
-| `edit_impact` | Analyse the blast radius of a proposed set of renames. **Does not apply them.** |
-| `get_graph_schema` | Canonical `nodeKinds`, `edgeKinds`, `layers`. Use to write graph queries without hardcoding. |
-| `get_code_snippet` | Source slice for a symbol by stable `id` OR qualified `name_path`. One call replaces `find_symbol` + `node_source`. |
-| `get_architecture` | Structural summary: languages, packages, hotspots, dead-code candidates, import cycles. |
-| `query_graph` | Multi-hop traversal — chain edge kinds across hops with `follow`, cap with `depth`/`limit`, filter by `kind`. |
-| `detect_changes` | Impact of a `git diff` between two refs (or `since` → HEAD). Surfaces changed files + per-file hunks + enclosing function/method per hunk + callers/tests/overrides per affected symbol. |
+| **introspect** | Read a file as a structured view: symbols, signatures, source ranges |
+| **traverse** | Walk the graph: callers, callees, tests, overrides, imports, multi-hop |
+| **search** | Find a symbol or pattern by name, qualified path, regex, or AST |
+| **diagnose** | Repo health: dead code, hotspots, import cycles, architecture summary |
+| **registry** | Manage which repos are indexed (the file:// URI namespace) |
+| **workflow** | Run a curated multi-step op in one call |
 
-</details>
+### Read-only by design
 
-<details>
-<summary><strong>4 registry tools</strong> (work in both modes)</summary>
+Of the 21 tools, **19 are read-only**. The two mutating tools are registry cache operations — `index_repository` writes the per-repo cache and `delete_project` evicts it. No tool mutates a target repository, ever.
 
-| Tool | Purpose |
-|---|---|
-| `list_projects` | Enumerate every indexed repo (sorted by path). |
-| `index_repository` | Walk a repo at `path`, write an entry to the registry, prime its disk cache. |
-| `index_status` | Registry row + per-repo cache freshness for `path`. `cacheFresh=false` means re-running `index_repository` would write new bytes. |
-| `delete_project` | Evict `path` from the registry and remove its per-repo cache directory. Idempotent. |
+| Tool | Group | Read-only | Purpose |
+|---|---|---|---|
+| `tree_overview` | introspect | ✓ | Top of the repo tree, depth-limited. Start here. |
+| `node_get` | introspect | ✓ | One or more layers of a node — `summary`, `signature`, `body`, `source`, `tokens`. |
+| `node_source` | introspect | ✓ | Lossless source for a node, optionally line-bounded. |
+| `get_symbols_overview` | introspect | ✓ | Top-level outline of a single file. |
+| `get_code_snippet` | introspect | ✓ | Source slice for a symbol by stable `id` OR qualified `name_path`. One call replaces `find_symbol` + `node_source`. |
+| `get_architecture` | introspect | ✓ | Structural summary: languages, packages, hotspots, dead-code candidates, import cycles. |
+| `get_graph_schema` | introspect | ✓ | Canonical `nodeKinds`, `edgeKinds`, `layers`. Use to write graph queries without hardcoding. |
+| `node_edges` | traverse | ✓ | Cross-references — `callers`, `callees`, `tests`, `overrides`, `imports`. |
+| `find_referencing_symbols` | traverse | ✓ | All references to a given symbol; supports `kinds: ["calls"\|"mentions"\|"tests"\|"overrides"\|"all"]`. |
+| `query_graph` | traverse | ✓ | Multi-hop traversal — chain edge kinds across hops with `follow`, cap with `depth`/`limit`, filter by `kind`. |
+| `edit_impact` | traverse | ✓ | Analyse the blast radius of a proposed set of renames. **Does not apply them.** |
+| `detect_changes` | traverse | ✓ | Impact of a `git diff` between two refs (or `since` → HEAD). Per-file hunks + enclosing function/method + callers/tests/overrides per affected symbol. |
+| `find_symbol` | search | ✓ | Locate by qualified name path with glob support (e.g. `internal/store/*/Load`). |
+| `search` | search | ✓ | Find symbols by name or doc-comment matching. |
+| `find_code` | search | ✓ | AST-aware (tree-sitter) or regex pattern search across files. |
+| `search_code` | search | ✓ | `find_code` matches collapsed into their containing functions, deduped by symbol, ranked by structural importance (definitions first, popular next, tests last). |
+| `persisted_query` | workflow | ✓ | Run a registered curated workflow by id. Ships `onboarding` (a one-shot `tree_overview` at depth 2 — the smallest useful workflow). |
+| `list_projects` | registry | ✓ | Enumerate every indexed repo (sorted by path). |
+| `index_status` | registry | ✓ | Registry row + per-repo cache freshness for `path`. `cacheFresh=false` means re-running `index_repository` would write new bytes. |
+| `index_repository` | registry | ✗ *(cache write)* | Walk a repo at `path`, write an entry to the registry, prime its disk cache. |
+| `delete_project` | registry | ✗ *(cache evict)* | Evict `path` from the registry and remove its per-repo cache directory. Idempotent. |
 
-</details>
+The single source of truth for tool names, descriptions, and schemas is `internal/tool/register.go` — extended by the shared `registerAllTools` helper. The above table is checked at release time against the running binary's `tools/list` output.
 
-<details>
-<summary><strong>1 persisted_query tool</strong></summary>
+---
 
-| Tool | Purpose |
-|---|---|
-| `persisted_query` | Run a registered curated workflow by id. Out of the box it ships one op: `onboarding` (a one-shot `tree_overview` at depth 2 — the smallest useful workflow). |
+## When yactt is the wrong tool
 
-</details>
+Beats, so you don't find them by hitting them.
+
+### yactt vs an LSP-shaped tool (Serena, JetBrains MCP)
+
+yactt trades LSP-grade fidelity for cross-language consistency and parser-warm persistence. **Both bets are defensible. The honest framing:**
+
+| | yactt | LSP-shaped tools (Serena, JetBrains MCP) |
+|---|---|---|
+| **Response shape** | Parser-shaped (AST-level) | LSP-shaped (IDE semantics) |
+| **Fidelity** | Predictable across all 6 languages | Highest for what LSP covers (Go, Python, TypeScript, Java) |
+| **Cross-language queries** | Same envelope, same query syntax | Per-language server, per-language quirks |
+| **Cold start** | Re-parse (~seconds, one-time per project) | Index build + language server spin-up (per-language) |
+| **Persistent state** | HTTP daemon keeps parse tables warm across sessions | Per-session — stdio MCP tears down with the agent |
+| **Languages claimed** | 6, all wired, all tested | 40+ via LSP — coverage is wider, depth is variable per LSP |
+| **Where it loses** | No type inference, no hover docs, no IDE-grade rename semantics | Wins on Go/Python/TypeScript where LSP is mature |
+| **Where it wins** | PHP (LSP story is uneven), 6-lang consistency, persistent state | Single-language deep work in a well-served language |
+
+If your codebase is **single-language and you want hover-docs precision**, use Serena or your editor's LSP-backed MCP. If your codebase is **polyglot, you want predictable tool behavior across all of it, or your agent does 100+ tool calls per session**, use yactt.
+
+### When not yactt
+
+- **You need dataflow / taint analysis across function calls.** yactt's edges are syntactic and resolved-type-level, not value-level. Reach for CodeQL or Semgrep.
+- **You need cross-repo queries across N repos.** The registry indexes and serves each repo separately; today there's no shared workspace index that stitches symbols across repo boundaries. Multi-repo query is on the roadmap, not shipped.
+- **You need to edit, not just navigate.** yactt is read-only by design. `edit_impact` is the closest tool — it tells you the blast radius of a rename; it does not apply it.
+- **Your target language is one we don't ship.** Add a tree-sitter grammar binding (we ship 6 — Go, TS, JS, Python, PHP, Rust — but the pipeline accepts new grammars; `internal/parser` is the integration point).
+
+If one of the above is your actual job, yactt is the wrong tool today.
 
 ---
 
@@ -314,38 +391,35 @@ The codebase is one node graph; the tools are 21 facets of access.
 
 yactt ships a multi-repo registry at `$XDG_CACHE_HOME/yactt/projects.json` (or `$HOME/.cache/yactt/projects.json` when `XDG_CACHE_HOME` is unset). The four registry tools above operate against that file; the 16 code-intelligence tools resolve project URIs on every call (no in-memory repo state).
 
-Two run modes from one binary:
-
-- `yactt mcp serve` — registry mode. Boots without loading any repo; agents pick projects via `index_repository` and pass `file://` URIs to code-intel tools. Exposes all 21 tools (16 code-intel + 4 registry + `persisted_query`). The legacy `mcp serve <path>` form is removed.
-- `yactt mcp serve` (no path) — registry mode. Exposes the 4 registry tools + `persisted_query`. Use this to discover or manage which repos are indexed before drilling into one.
-
-Indexing is decoupled from serving: an agent in registry mode can call `index_repository` to prime a repo's cache, then a separate `yactt mcp serve <that-path>` can serve it with warm caches and zero re-parse.
-
 Example flow in registry mode:
 
 ```text
-> list_projects                          # empty
-> index_repository {"path": "/code/svc-a"}
-> list_projects                          # one entry
-> index_status    {"path": "/code/svc-a"} # cacheFresh: true
-> delete_project  {"path": "/code/svc-a"} # gone
+> list_projects                                       # empty
+> index_repository {"path": "file:///code/svc-a"}     # prime cache
+> list_projects                                       # one entry
+> index_status    {"path": "file:///code/svc-a"}      # cacheFresh: true
+> index_repository {"path": "file:///code/svc-b"}     # another repo
+> list_projects                                       # two entries
+> delete_project  {"path": "file:///code/svc-a"}      # gone
 ```
 
-The on-disk cache layout is unchanged from the single-repo flow — `$XDG_CACHE_HOME/yactt/<root-hash>/` still holds per-file parsed entries, so a registry-indexed repo serves identically to one you ran `yactt mcp serve` against directly.
+The on-disk cache layout is `$XDG_CACHE_HOME/yactt/<root-hash>/` per repo — so a registry-indexed repo serves identically to one you ran `yactt mcp serve` against directly. Cache freshness is per-repo; cross-repo queries are explicitly **not** supported today (see "When yactt is the wrong tool").
 
 ---
 
 ## What's behind the badge row
 
-The trust strip above (`SLSA L3 · 21 tools · 1 dep · read-only`) is four claims. Each one has a receipt:
+The trust strip above (`SLSA L3 · 21 tools · 6 languages · 1 dep · read-only`) is five claims. Each one has a receipt.
 
 - **`SLSA L3`** — every release binary is signed and attested. Verify:
   ```bash
   gh attestation verify yactt_darwin_arm64.tar.gz -R kellenff/yactt
   ```
-  The attestation payload is `provenance.intoto.jsonl`; its subject digest matches the SHA256 in the published `SHA256SUMS`.
+  The attestation payload is `provenance.intoto.jsonl`; its subject digest matches the SHA256 in the published `SHA256SUMS`. The upcoming SessionStart hook will run this verification at install time (today: SHA256 + TOFU; tomorrow: end-to-end provenance).
 
-- **`21 tools`** — verified at runtime: `yactt mcp serve /tmp/foo` boots the server, then call `tools/list` against the running stdio to enumerate the 21 registered names. The contract is also pinned by `internal/tool/wire_shape_test.go` (382 lines) — every `InputSchema` and `OutputSchema` is JSON-Schema-validated at registration time.
+- **`21 tools`** — verified at runtime: `yactt mcp serve /tmp/foo` boots the server, then call `tools/list` against the running stdio to enumerate the 21 registered names. The contract is also pinned by `internal/tool/wire_shape_test.go` — every `InputSchema` and `OutputSchema` is JSON-Schema-validated at registration time.
+
+- **`6 languages`** — `internal/parser/language.go:90` returns `[]Language{Go{}, TypeScript{}, JavaScript{}, Python{}, Rust{}, PHP{}}`. All six grammars are bundled in the single tree-sitter dep (subdirectories of `smacker/go-tree-sitter/python`, `.../php`, `.../rust`, `.../golang`, `.../javascript`, `.../typescript/typescript`). Each language has a parsed-symbols test (`internal/parser/parser_test.go:TestDetectPython`, `TestDetectRust`, `TestDetectPHP`, etc.).
 
 - **`1 dep`** — `go.mod`, in full:
   ```
@@ -353,27 +427,15 @@ The trust strip above (`SLSA L3 · 21 tools · 1 dep · read-only`) is four clai
   go 1.26.5
   require github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
   ```
-  The pseudo-version is a literal commit hash of upstream `smacker/go-tree-sitter`. All four grammar bindings yactt actually loads (`.../golang`, `.../javascript`, `.../typescript/typescript`, `.../python`) are subpackages of the same module and share the commit pin.
+  The pseudo-version is a literal commit hash of upstream `smacker/go-tree-sitter`. All six grammar bindings yactt actually loads are subpackages of the same module and share the commit pin.
 
 - **`read-only`** — the MCP surface exposes no write tools. `edit_impact` analyses renames; it does not apply them. The only paths yactt ever writes to are inside the disk cache directory (`$XDG_CACHE_HOME/yactt/<root-hash>/`) and the registry (`$XDG_CACHE_HOME/yactt/projects.json`). Both are user-scoped and never overlap a target repo. `yactt mcp serve` makes no outbound network calls except to spawn `gopls` / `typescript-language-server` / `pyright-langserver` as child processes.
 
 ---
 
-## When yactt is the wrong tool
-
-Honest beats, so you don't have to find them by running into them:
-
-- **You need dataflow / taint analysis across function calls.** yactt's edges are syntactic and resolved-type-level, not value-level. Reach for CodeQL or Semgrep.
-- **You need SCIP-style cross-repo queries across N repos.** The registry indexes and serves each repo separately; today there's no shared workspace index that stitches symbols across repo boundaries. Multi-repo query is on the roadmap, not shipped.
-- **You need to edit, not just navigate.** yactt is read-only by design. `edit_impact` is the closest tool — it tells you the blast radius of a rename; it does not apply it.
-
-If one of the above is your actual job, yactt is the wrong tool today.
-
----
-
 ## Status & roadmap
 
-Shipped:
+**Shipped:**
 
 - V1, V2.x, V3 subgraph slice, V3 first slice, V3 method-bodies slice
 - Phase F (per-repo provenance + edge model)
@@ -382,15 +444,18 @@ Shipped:
 - Multi-hop `query_graph` (Issue #9)
 - `detect_changes` git-ref diff impact (Issue #11)
 - `search_code` dedup + rank by enclosing symbol
-- **Python language support** — tree-sitter `.py` / `.pyi` symbol extraction + `pyright-langserver` LSP bridge
-- **PHP language support** — tree-sitter `.php` / `.phtml` / `.phps` symbol extraction (functions, classes, interfaces, traits, enums, methods); LSP bridge is opportunistic and ships when a server is wired up
+- **Persistent HTTP transport** — `yactt mcp serve --http :PORT` (2025-03-26 Streamable HTTP)
+- **file:// URI migration** — every targeting tool takes a `file://` URI in `args.project`
+- **6 languages** — Go, TypeScript, JavaScript, Python, PHP, Rust (each with parsed-symbol tests)
 - SLSA Build Provenance Level 3 attestations on every release
 
-Next:
+**Next (visible milestones, in priority order):**
 
-- Multi-repo / federated query (the "federated" in the tagline awaits)
-- Persisted-query step chaining and parameter forwarding
-- Consumer-side provenance verification inside the SessionStart bootstrap (today: SHA256 + TOFU; tomorrow: `gh attestation verify`)
+- **Cross-repo graph queries** — the "federated" in the tagline still hasn't been paid out. `query_graph` already supports the multi-hop primitive; extending it across repos is the natural next step.
+- **`workspace_overview`** — designed in `docs/design.md § 9.C`. The complement to `tree_overview` once multi-repo queries exist.
+- **Persisted-query step chaining** — `persisted_query` becomes the agent's workflow composition primitive. A rename review that goes `detect_changes` → `edit_impact` → render-to-markdown, in one call. (Serena's "composable modes" is the same architectural move; we're already most of the way there.)
+- **Consumer-side SLSA attestation verification** — run `gh attestation verify` inside the SessionStart hook. TOFU chain becomes a verified provenance chain.
+- **`tree_at(ref)` git-time-travel** — "what did this function look like 3 months ago?" — answers the version-history question without leaving MCP.
 
 ---
 
@@ -398,7 +463,7 @@ Next:
 
 yactt reads untrusted source code on every MCP call. Full threat model, install-hook trust chain, and mitigations for the OWASP Agentic Skills Top 10 findings live in [docs/security.md](docs/security.md).
 
-- **AST02 supply chain** — `go mod verify`, no-`replace` grep, `govulncheck`, SHA256SUMS + SLSA L3 attestation on releases. The single external dep is pinned to a commit hash.
+- **AST02 supply chain** — `go mod verify`, no-`replace` grep, SHA256SUMS + SLSA L3 attestation on releases. The single external dep is pinned to a commit hash.
 - **AST03 over-privileged access** — closed by design: read-only MCP surface, `AllowedRoots` constraint on every path-bearing tool, `MaxFiles` cap (50,000 default). No tracking issue — the surface is constrained at every egress.
 - **AST05 doc-comment / identifier-name injection (mitigated — Issue #2)** — gates prose behind an opt-in `docs` layer and sanitizes identifier names at egress.
 - **AST09 governance / audit (mitigated — Issue #3)** — one structured JSON startup line on stderr (binary SHA-256, resolved root, MaxFiles cap, grammars, LSP status) + an opt-in `--audit-log=<file>` line per `tools/call` (tool, paths, output bytes, duration), plus a runtime check against the install hook's TOFU record.
@@ -418,7 +483,7 @@ yactt mcp serve --audit-log=/var/log/yactt/audit.log
 One JSON line per MCP tool invocation:
 
 ```json
-{"event":"tool_call","timestamp":"2026-07-06T12:34:56Z","tool":"node_get","input_paths":["/Users/kellen/proj/foo.go"],"output_bytes":1024,"duration_ms":12,"is_error":false}
+{"event":"tool_call","timestamp":"2026-07-13T12:34:56Z","tool":"node_get","input_paths":["/Users/kellen/proj/foo.go"],"output_bytes":1024,"duration_ms":12,"is_error":false}
 ```
 
 The startup line is always written to stderr (even without `--audit-log`), so a host can cross-check the running binary's SHA-256 against its expected release.
@@ -430,9 +495,11 @@ The startup line is always written to stderr (even without `--audit-log`), so a 
 - Architecture deep dive — [docs/design.md](docs/design.md)
 - Security & threat model — [docs/security.md](docs/security.md)
 - Performance + fidelity benchmarks — [docs/benchmarks.md](docs/benchmarks.md)
+- Hybrid retrieval shape — [docs/hybrid-retrieval.md](docs/hybrid-retrieval.md)
 - Claude Code plugin story — [plugins/yactt/README.md](plugins/yactt/README.md)
+- `using-yactt` skill (agent-side workflow guide) — [skills/using-yactt/SKILL.md](skills/using-yactt/SKILL.md)
+- `code-explore` skill (agent-side navigation pattern) — [skills/code-explore/SKILL.md](skills/code-explore/SKILL.md)
 - Latest release — [github.com/kellenff/yactt/releases/latest](https://github.com/kellenff/yactt/releases/latest)
-- `code-explore` skill — [plugins/yactt/skills/code-explore/SKILL.md](plugins/yactt/skills/code-explore/SKILL.md)
 
 ---
 
