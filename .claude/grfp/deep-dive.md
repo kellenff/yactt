@@ -294,3 +294,65 @@ These are auto-recorded facts that should shape later stages:
 - **Graph:** `get_architecture` (4 aspects), `search_graph` (BM25: "main entry point", "tool registration"), `query_graph` (Cypher over `Package`/`File` — empty results; schema used instead), `get_graph_schema` (full label/edge catalogue).
 - **Read fallback:** `README.md`, `cmd/yactt/main.go` (head 130 lines), `internal/registry/registry.go` (head 80 lines), `internal/tool/list_projects.go`, `docs/design.md` (full 1200 lines), `go.mod`, `wc -l` of every package file, directory listings.
 - **Caveats:** Cypher query against `Package` label returned 0 rows; fell back to filename heuristics + Read. Graph likely uses `Folder` for package-level nodes.
+
+---
+
+# Refresh — 2026-07-13 (worktree `plant-camel`)
+
+Re-indexed. Re-verified entry points + tool surface. The 2026-07-06 report above is still the foundation; the deltas since:
+
+## Index deltas
+
+| Metric | 2026-07-06 | 2026-07-13 |
+|---|---|---|
+| Nodes | 1,858 | **3,123** (+68%) |
+| Edges | 7,171 | **11,297** (+58%) |
+| Method bodies in graph | no | **yes** (V3 method-bodies slice) |
+
+The growth is concentrated in the method-body slice — every Go function/method now has its body in the graph as a first-class layer (was only `summary`/`signature` previously).
+
+## Wire-shape migration (in CHANGELOG.md "Unreleased" → v0.2.0)
+
+| Before | After |
+|---|---|
+| `yactt mcp serve /abs/path` | `yactt mcp serve` (path arg **removed**) |
+| `{"path": "/abs/path"}` on registry tools | `{"project": "file:///abs/path"}` |
+| (no `project` on code-intel tools) | `{"project": "file:///abs/path", ...}` (required) |
+| `{"repo": "/abs/path"}` on `tree_overview` (decorative) | `{"project": "file:///abs/path"}` (`repo` deprecated, stderr notice, removed in v0.2.0) |
+| `{"id": "onboarding"}` on `persisted_query` | `{"op": "onboarding", "project": "file:///abs/path"}` |
+
+Unifies the wire shape across registry tools + code-intel tools.
+
+## Persistent HTTP transport (PR-54 review-fix series)
+
+`yactt mcp serve --http :PORT` now exposed. New `runMCPServeHTTP` (lines 754–936 of `cmd/yactt/main.go`). Reuses `tool.RegisterAllTools(srv, reg, nil, nil)` — `emitStartup` and `warnTrust` are pass-through nil for HTTP because the TOFU check is memoised inside `IndexRepository` (runs on first successful `index_repository`, not at boot).
+
+## Go version bump
+
+`go.mod` line 3: `go 1.26.5` (was 1.26.4). Trigger: GO-2026-5856 (Encrypted Client Hello).
+
+## junie-extension change
+
+`junie-extension/scripts/yactt-launcher.sh` no longer resolves project root via `git rev-parse`. Agents call `index_repository` explicitly with their chosen `file://` URI.
+
+## New companions since prior report
+
+- `examples/hybrid/` — sample hybrid-retrieval pipeline
+- `docs/benchmarks.md`, `docs/hybrid-retrieval.md` — documented performance surface
+- `docs/snowball/{decisions,plans,specs}/` — design notes accumulated during the V3 + Issue #11 work
+
+## What did NOT change
+
+- 21 tools. Same tool surface; only the wire shape moved.
+- 1 production dep (tree-sitter).
+- Single binary (`yactt`).
+- Tier-ranked fallback (SCIP → LSP → tree-sitter) with `provenance.tool` on every response.
+- SLSA-L3 release policy.
+
+## Source for this refresh
+
+- `cat go.mod` — Go version
+- `cat CHANGELOG.md` — wire migration + audit-line memoisation + launcher change
+- `cat cmd/yactt/main.go:runMCPServeHTTP` — HTTP transport entry point
+- `cat .github/workflows/ci.yml` — pin policy unchanged
+- `cat internal/tool/register.go` — tool surface (21, identical names)

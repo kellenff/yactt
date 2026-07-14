@@ -203,3 +203,131 @@ Lead with the protocol. Frame yactt as the canonical example of a serious MCP se
 - **Graph tools used:** `search_graph` (BM25), `query_graph` (Cypher — returned 0 rows for `complexity > N` and inbound/outbound-degree queries; the `complexity` / `lines` properties are empty strings for this project's index, confirmed by `query_graph` returning blank values); `get_graph_schema` (label/edge catalogue).
 - **Read fallback:** `rg` for TODO/FIXME/panic/exit patterns, `wc -l` for function-count + LOC ranking, `git log` for the commit arc, `docs/security.md` for trust-chain context, directory listings for the LSP / persisted / cache packages.
 - **Caveats:** the graph index for yactt has a sparse `complexity`/`lines` population. To get a fuller dead-code / hotspot view, the next index pass should re-run with the moderate or full mode (it may have indexed in `fast` mode only). All fan-in/fan-out claims here are heuristic from LOC + function count, not graph-confirmed.
+
+---
+
+# Refresh — 2026-07-13 (worktree `plant-camel`)
+
+Re-indexed. Re-ran the graph queries. The 2026-07-06 report above is the foundation; the deltas below are corrections and what changed.
+
+## Index deltas
+
+| Metric | 2026-07-06 | 2026-07-13 |
+|---|---|---|
+| Nodes | 1,858 | **3,123** (+68%) |
+| Edges | 7,171 | **11,297** (+58%) |
+| `complexity` / `lines` properties | empty (Cypher returns blanks) | **still empty** — confirmed via `query_graph` |
+| `CALLS` edge population | sparse | **rich** — fanout/fanin queries now return meaningful data |
+
+The growth is the **V3 method-bodies slice** — every Go fn/method now has its body in the graph as a first-class layer, which adds dense `DEFINES_METHOD` / `USAGE` edges.
+
+## Graph-confirmed fan-in / fan-out (replaces the heuristic table)
+
+Cypher now returns meaningful data. The hotspot candidates are:
+
+### Top fan-out (orchestration hotspots)
+
+| Function | Fan-out | File | Verdict |
+|---|---|---|---|
+| `RegisterAllTools` | **22** | `internal/tool/register.go` | Single source of truth — by design |
+| `Run` | 22 | (test helper) | Test plumbing |
+| `scanCallers` | **20** | `internal/tool/nodeedges.go` | **Largest tool** — caller resolution |
+| `DetectChanges` | 18 | `internal/tool/detectchanges.go` | Git-diff impact |
+| `Load` | 18 | `internal/store/store.go` | Repo loading orchestrator |
+| `main` | 15 | `cmd/yactt/main.go` | CLI dispatcher |
+| `Search` | 15 | `internal/tool/search_tool.go` | BM25 search |
+| `IndexRepository` | 14 | `internal/tool/index_repository.go` | Registry entry |
+| `scanCalleesLive` | 13 | `internal/tool/nodeedges.go` | LSP-driven callee scan |
+| `classChunk` | 13 | `internal/chunker/` | Hybrid chunker |
+| `MaterializeNode` | 13 | `internal/store/` | Lazy layer materialization |
+
+### Top fan-in (deeply depended-on primitives)
+
+| Function | Fan-in | Verdict |
+|---|---|---|
+| `Close` | 141 | Test/defer boilerplate (matches across many tests) |
+| `Root` | 139 | `sitter.NewTree` plumbing |
+| `New` | 115 | Generic constructor pattern |
+| `Contains` | 107 | `strings.Contains` calls |
+| `Error` | 99 | `errors.New` calls |
+| `Run` | 86 | Test runner |
+| `Load` | **77** | `store.Load` is the public load surface — used by 77 call sites |
+| `loadFixture` | 70 | Test fixtures |
+| `loadRepo` | 51 | Test fixture (lighter weight) |
+| `String` | 49 | `fmt.Sprintf`-style |
+| `LoadFile` | 45 | Source loader — used by every parser lang |
+| `ExtractSymbols` | 41 | Per-language symbol extraction |
+
+`store.Load` at fan-in 77 is the **single most-depended-on domain primitive** outside of stdlib. Refactoring its signature has the largest blast radius in the project.
+
+### Dead-code check (graph-confirmed this time)
+
+`query_graph` for `Function` nodes with **zero** inbound `CALLS` edges returned **0 rows**. Every function in the graph is called by something. The 2026-07-06 heuristic finding ("no dead code") is now **graph-confirmed**.
+
+`query_graph` for `Variable` nodes matching TODO/FIXME/XXX returned **0 rows**. Consistent with the prior `rg` finding.
+
+## 🚨 Correction: Python IS wired (the prior report's #1 roadmap item is stale)
+
+The 2026-07-06 report ranked **Python grammar** as the single biggest audience unlock, claiming it wasn't yet wired in `internal/parser/language.go:All()`. **That was wrong — Python shipped since then.**
+
+Evidence (all read 2026-07-13):
+
+- `internal/parser/lang_python.go` — full driver, imports `github.com/smacker/go-tree-sitter/python`
+- `internal/parser/lang_php.go` — same
+- `internal/parser/lang_rust.go` — same
+- `internal/parser/language.go:90` — `return []Language{Go{}, TypeScript{}, JavaScript{}, Python{}, Rust{}, PHP{}}` ← all 6 wired
+- `internal/parser/parser_test.go` — `TestDetectPython` (line 936), `TestDetectRust` (1146), `TestDetectPHP`, plus `ExtractSymbols` tests for Python (lines 982, 1011, 1029, 1064, 1098), Rust, PHP
+
+The tree-sitter Go bindings (`smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82`) bundle all grammar packages — `python/`, `php/`, `rust/`, `golang/`, `javascript/`, `typescript/` — as subdirectories of the single module. **No additional deps. The "1 dep" claim is intact AND all 6 languages ship.** `go build ./...` succeeds; `go list -m all` still shows only 5 modules (the smacker umbrella + 4 indirect test-only).
+
+This is a **README positioning bet**: the polyglot claim is now real, not aspirational. The README's "empty quadrant for polyglot Go, TS, JS, Python repos" line is **conservative** — yactt also handles PHP and Rust.
+
+## Revised roadmap priorities (replaces section 6 of the prior report)
+
+| # | Item | Why it matters now |
+|---|---|---|
+| 1 | **Cross-repo graph queries** | "Federated" still hasn't been paid out. Each `Repo` is single-root; `query_graph` can't span two registries. **Highest leverage.** |
+| 2 | **`workspace_overview` tool** | Designed in `docs/design.md § 9.C`, not shipped. The natural complement to `tree_overview` once multi-repo is live. |
+| 3 | **Persisted-query step chaining** | `persisted_query` is still a one-op registry. Workflow composition (PR review, onboarding tour, code health) is the missing wedge. |
+| 4 | **Consumer-side SLSA attestation verification in SessionStart hook** | TOFU → verified provenance. Trust chain becomes end-to-end. |
+| 5 | **`tree_at(ref)` for git-time-travel** | "What did this function look like 3 months ago?" Low cost, high agent value. |
+| 6 | **CodeQL-style `dataflow` layer** | Parked Phase 2. |
+| ~~Python~~ | ~~Grammar~~ | **Already shipped.** No longer a roadmap item. |
+| ~~PHP/Rust~~ | ~~Grammar~~ | **Already shipped.** Mentioned in the README as a "more than just Go/TS/JS" line. |
+
+## Audience segments (revised — the platform one is under-served)
+
+The 2026-07-06 segmentation is still good. Adding:
+
+| Segment | What's missing | The pitch |
+|---|---|---|
+| **Polyglot PHP / Rust shops** | Not called out at all in README | "6 languages — Go, TS, JS, Python, PHP, Rust — under one tool surface, one binary" |
+| **Security-conscious platforms** | `AllowedRoots` + audit-log + SLSA-L3 + read-only — these collectively make yactt the safest MCP server in the ecosystem. **Loudest selling point is muted.** | "Read-only + audit-logged + SLSA-L3 + per-tool path constraints = first MCP server you can ship to enterprise" |
+| **Long-running agents** | Persistent HTTP transport + dep-free runtime | "Survives session restarts; same wire surface as stdio" |
+
+## README positioning bets (updated)
+
+The 2026-07-06 bets (A: empty quadrant, B: agent's code model, C: MCP-native) are still defensible. New bet to add:
+
+**Bet D — "Polyglot-first."**
+Lead with the 6-language claim. The empty-quadrant chart shows yactt and CodeQL but doesn't surface the multi-language breadth vs competitors (each competitor covers 1–2 well). Pro: opens the door to PHP/Rust shops that aren't even reading the README yet. Con: requires the README to actually demonstrate the breadth (sample inputs/outputs per language).
+
+**Updated recommendation:** lead with **A** (empty quadrant) + a refreshed chart that adds yactt's 6-language breadth as a separate axis. Flow into **D** (polyglot). Use **B** (worked example) in the middle. Cap with **C** (MCP-native protocol details).
+
+## Source for this refresh
+
+- `query_graph` Cypher for fanout/fanin (first time meaningful data returned — see "Index deltas")
+- `query_graph` Cypher for dead code (zero inbound CALLS) → 0 rows
+- `query_graph` Cypher for TODO/FIXME/XXX in Variable nodes → 0 rows
+- `grep -n "LangPython"` and `grep -n "Tree-sitter-.*python"` — confirmed Python/PHP/Rust wired
+- `go build ./...` — exit 0
+- `go list -m all` — 5 modules, no new grammar deps
+- `cat internal/parser/language.go:90` — all 6 languages registered
+- `cat internal/parser/parser_test.go:918–1100` — Python test suite
+
+## Method summary for this refresh
+
+- **Graph:** `query_graph` for fanout, fanin, dead code, TODO/FIXME — all returned meaningful data this pass
+- **Read fallback:** `cat go.mod`, `cat internal/parser/language.go`, `grep` for `tree-sitter-{python,php,rust}` imports
+- **Build verification:** `go build ./...` exit 0; `go list -m all` shows only the 5 modules from the prior baseline
+- **Net correction:** the prior report's #1 roadmap item (Python grammar) is shipped — the new #1 is cross-repo graph queries

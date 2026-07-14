@@ -303,3 +303,181 @@ The Pen Wielding stage must reconcile the demo to these names before the README 
 The angle is locked, the four adopt moves are pinned, the four avoid moves are flagged, the structural skeleton is finalized, the tool-name reconciliation is enumerated as a pre-flight checklist for Pen Wielding.
 
 Next: `/claudikins-grfp:pen-wielding` — write the final README on the skeleton above.
+
+---
+
+# Refresh — 2026-07-13 (worktree `plant-camel`)
+
+The 2026-07-06 think-tank studied 5 exemplars. This refresh pulls fresh data on the same exemplars (Serena, ast-grep, Playwright MCP) plus 2 new ones (Deno for single-binary/multi-language framing; mcp-streamable-http references for the persistent-HTTP story). The 2026-07-06 pattern matrix is the foundation; the deltas below are corrections and what changed.
+
+**Method:** `WebFetch` (raw.githubusercontent.com) for the same 5 exemplars + `WebSearch` for MCP HTTP transport exemplars.
+**Transcript:** no new chorus run — think-tank is external research, not voice/strategy.
+
+## New exemplar: Playwright MCP (re-read 2026-07-13)
+
+The 2026-07-06 pass noted Playwright MCP as the "MCP-server conventions benchmark" but only sketched it. The re-read surfaces **three patterns the prior pass missed**:
+
+### Pattern 1 — Explicit stdio vs HTTP/SSE contrast
+
+Playwright's README has a `## Standalone MCP server` section that explicitly contrasts stdio and HTTP:
+
+> Stdio is used when clients spawn the process directly. HTTP is recommended "when running headed browser on system w/o display or from worker processes of the IDEs," started with `--port 8931` and connected via `url: http://localhost:8931/mcp`.
+
+This is exactly the framing yactt needs. The brain-jam's "parser-warm" lead lives here: a yactt `## Transports` section with one paragraph each on stdio (default, agent-spawned) and HTTP (`yactt mcp serve --http :PORT`, daemon mode, parser state survives across requests). The transport choice becomes a reader decision, not an implementation footnote.
+
+### Pattern 2 — Per-tool "Read-only" boolean flag
+
+Playwright's tool reference includes a "Read-only boolean" field per tool:
+
+> Each tool entry lists Title, Description, Parameters (with type annotations and required/optional flags), and a Read-only boolean.
+
+yactt is **all-read-only** at the project level. But this per-tool boolean is the finer-grained signal yactt's design enables but doesn't currently surface. For the Pen Wielding stage: a column in the 21-tool table marking each tool's read/write semantics (most are read; `index_repository` and `delete_project` mutate the registry cache — call those out).
+
+### Pattern 3 — "X is not a security boundary" framing
+
+Playwright's `## Security` section opens:
+
+> *"Playwright MCP is not a security boundary,"* linking to MCP Security Best Practices.
+
+This is the same tone as yactt's "Read-only by design." The Pen Wielding stage can lift the framing directly: yactt's read-only is a *guardrail*, not a boundary; the real boundary is `AllowedRoots` + `--audit-log=<file>` + the operating-system user the daemon runs as.
+
+### Pattern 4 — One-click deeplinks for MCP clients
+
+Playwright ships **deep-link install buttons** for VS Code, VS Code Insiders, Cursor, Goose, Kiro, LM Studio. The Claude Code install is `claude mcp add`. **This is the multi-client install matrix the 2026-07-06 pass wanted yactt to consider.** Today yactt covers Claude Code + generic MCP JSON. Adding per-client install buttons (image badges that link to `vscode:mcp/install?...`) is a low-cost win for the install section.
+
+## New exemplar: Deno (single-binary + multi-language)
+
+Deno is a useful comparison case because it's a **single-binary, multi-language, well-resourced** project. Its README teaches restraint:
+
+### What Deno does NOT do (and yactt should learn from)
+
+| Deno does | yactt does | Lesson |
+|---|---|---|
+| Concise one-line positioning | Concise positioning possible | Deno proves long-form opening isn't required |
+| No "all in one binary" framing | Single binary is a feature callout | Deno's restraint suggests yactt's "21 tools / 1 dep" framing may already be too loud |
+| No "When NOT to use" section | Should have one (per brain-jam) | The omission is acceptable for Deno because it's a runtime; yactt is a code-intel tool where the trade-offs are sharper |
+| Multi-platform install (6+ paths) | 3 paths (Claude Code, generic MCP, shell) | yactt's install section is appropriately scoped; expansion needed only if non-Claude clients become first-class |
+
+### The "trust strip" alternative Deno models
+
+Deno's first paragraph is **a positioning statement**, not a trust strip:
+
+> Deno is a "JavaScript, TypeScript, and WebAssembly runtime with secure defaults and a great developer experience." It's built on V8, Rust, and Tokio — name-dropping the tech stack to signal credibility and performance orientation.
+
+This is an alternative to yactt's trust strip: **name-drop the tech stack** (tree-sitter + Go + optional LSPs) as the credibility signal, instead of (or alongside) the SLSA L3 badge.
+
+## Refresh of Serena (re-read 2026-07-13)
+
+The 2026-07-06 pass skimmed Serena. The re-read surfaces:
+
+### Pattern — "composable modes"
+
+Serena has "composable 'modes'" — a per-context configuration system. **This is the analog of yactt's `persisted_query`** — Serena calls them "modes," yactt calls them "ops." The brain-jam's "persisted-query step chaining" roadmap item matches Serena's mode composition. Worth a cross-reference in the Pen Wielding stage: yactt's roadmap says "step chaining" → it's the same architectural move as Serena's modes.
+
+### Pattern — 40+ languages via LSP (claimed)
+
+Serena claims 40+ languages supported via LSP. yactt claims 6 (Go, TS, JS, Python, PHP, Rust). **The honest framing for the Serena contrast:** yactt's 6 are wired directly into the server with tree-sitter guarantees + provenance on every response; Serena's 40+ depend on whatever LSP the host has, with the response shape varying per LSP. Different bets, different guarantees. yactt's bet is **consistent envelope across a known set**; Serena's bet is **maximum coverage with per-language response shapes**.
+
+### What the 2026-07-06 pass got wrong
+
+The 2026-07-06 pass claimed "voice-of-user / model quotes" was a Serena pattern that yactt should **skip**. The re-read confirms the call: Serena has "What Our 'End Users' Say" with three agent testimonials. **For yactt's engineer-to-engineer tone, this would feel gimmicky. Skip remains the right call.**
+
+## Refresh of ast-grep (re-read 2026-07-13)
+
+### Pattern — generated tool reference
+
+ast-grep's tool reference is hand-maintained (it predates the Playwright MCP pattern of `update-readme.js`). For yactt, the 21-tool table is hand-maintained in `internal/tool/register.go`'s descriptions. **The Pen Wielding stage should not generate the README tool table** — the canonical source is `register.go`, and any README drift from that source is a bug.
+
+### Pattern — multiple package managers as a polyglot signal
+
+ast-grep ships via npm, pip, cargo, brew, scoop, MacPorts, mise — **three language ecosystems (Node, Python, Rust)**. This is a polyglot signal that doesn't name languages explicitly. yactt's README already names its 6 languages explicitly (better than ast-grep's approach because yactt supports language-specific grammars, not generic-syntax tools).
+
+## Pattern matrix (refreshed)
+
+| Pattern | ripgrep | ast-grep | Serena | codebase-memory-mcp | Playwright MCP | Deno | **yactt-adopt?** |
+|---|---|---|---|---|---|---|---|
+| Badge row as trust signals | yes | yes | yes | yes (14) | yes | minimal | **Yes** — keep the trust strip |
+| Explicit transport contrast (stdio vs HTTP) | n/a | n/a | yes | n/a | **yes (named section)** | n/a | **Yes — new from this refresh** |
+| Per-tool read-only flag | n/a | n/a | partial | n/a | **yes** | n/a | **Yes — column in 21-tool table** |
+| "X is not a security boundary" framing | n/a | n/a | n/a | n/a | **yes** | n/a | **Yes — for the read-only claim** |
+| One-click deeplinks per MCP client | n/a | n/a | yes | n/a | **yes (image badges)** | n/a | **Optional** — expand if non-Claude clients become first-class |
+| Generated tool reference | partial | no | no | yes | **yes (`update-readme.js`)** | n/a | **Skip** — `register.go` is the source of truth |
+| Multi-language via indirect signals | n/a | **yes (3 package managers)** | yes (40+ via LSP) | n/a | n/a | yes (TS/JS/Wasm) | **Already adopted** (yactt names its 6) |
+| Composability primitive ("modes") | n/a | n/a | **yes** | n/a | n/a | n/a | **Yes — `persisted_query` roadmap says step chaining** |
+| Restraint on "all in one binary" framing | n/a | n/a | n/a | n/a | n/a | **yes** | **Calibrate** — yactt's "21 tools / 1 dep" is already loud; consider toning down |
+
+## Two moves the 2026-07-13 refresh adds
+
+### Move 5 — Explicit `## Transports` section
+
+Borrowed from Playwright MCP. One paragraph per transport:
+
+```
+## Transports
+
+yactt ships two transports, sharing the same 21-tool surface.
+
+**stdio** (default) — `yactt mcp serve` is spawned by the agent runtime.
+One process per session. Parser state is rebuilt on every spawn; for
+small workspaces the reparse cost is negligible.
+
+**Persistent HTTP** — `yactt mcp serve --http :PORT` boots a long-running
+daemon that survives agent restarts and context-window collapses.
+Tree-sitter parse tables stay warm across sessions — a 200k LOC Go
+monorepo doesn't pay reparse latency on every agent resume. Recommended
+for production agents doing 100+ tool calls per session.
+```
+
+This section **earns the brain-jam's parser-warm lead** by giving the reader the concrete `--http :PORT` flag to use.
+
+### Move 6 — Per-tool read-only column in the 21-tool table
+
+Borrowed from Playwright MCP. Adds a column to the table:
+
+| Tool | Group | Read-only |
+|---|---|---|
+| `tree_overview` | introspect | ✓ |
+| `node_get` | introspect | ✓ |
+| `node_source` | introspect | ✓ |
+| `node_edges` | traverse | ✓ |
+| `query_graph` | traverse | ✓ |
+| `find_referencing_symbols` | traverse | ✓ |
+| `edit_impact` | traverse | ✓ |
+| `find_code` | search | ✓ |
+| `find_symbol` | search | ✓ |
+| `search_code` | search | ✓ |
+| `search` | search | ✓ |
+| `get_symbols_overview` | introspect | ✓ |
+| `get_code_snippet` | introspect | ✓ |
+| `get_architecture` | introspect | ✓ |
+| `get_graph_schema` | introspect | ✓ |
+| `detect_changes` | traverse | ✓ |
+| `persisted_query` | workflow | ✓ |
+| `list_projects` | registry | ✓ |
+| `index_repository` | registry | ✗ (cache write) |
+| `index_status` | registry | ✓ |
+| `delete_project` | registry | ✗ (cache evict) |
+
+The two non-read-only tools are the registry mutators. This is the **most concrete way to make the "Read-only by design" claim verifiable** — only 2 of 21 tools mutate, and both are explicitly named.
+
+## Risks (refresh)
+
+- **The "## Transports" section is a new addition** to the README. Pen Wielding needs to position it after the install block (where the `--http :PORT` flag is shown), not before.
+- **The per-tool read-only column requires a small grammar change in the tool descriptions** in `register.go` — or the column reads from a separate source-of-truth table. The Pen Wielding stage must not duplicate the canonical tool map; if the column is in the README, it must be generated from `register.go` (or hand-checked against it on every release).
+- **The Serena contrast language ("40+ languages vs 6")** in the brain-jam needs calibration. Serena's "40+" includes languages where LSP support is uneven; yactt's "6" is the **verified working set**. Frame as "6 wired and tested" vs "40+ via opportunistic LSP."
+
+## Source for this refresh
+
+- `WebFetch` of `https://raw.githubusercontent.com/oraios/serena/main/README.md` (re-read)
+- `WebFetch` of `https://raw.githubusercontent.com/ast-grep/ast-grep/main/README.md` (re-read)
+- `WebFetch` of `https://raw.githubusercontent.com/microsoft/playwright-mcp/main/README.md` (new detail)
+- `WebFetch` of `https://raw.githubusercontent.com/denoland/deno/main/README.md` (new exemplar)
+- `WebSearch` for "MCP server persistent HTTP transport examples" (background context; no exemplar was lifted into the matrix)
+- 2026-07-06 `think-tank.md` (foundation; superseded on transport + per-tool read-only)
+
+## Method summary for this refresh
+
+- **Exemplars studied:** 6 (5 prior + Deno); 4 of those re-read with current state
+- **Patterns extracted:** 11 (vs 13 in the prior pass — net -2 because the 14-badge wall and agent testimonials moves from "skip" stayed skipped, and the new exemplar count is +1)
+- **Adopt moves (cumulative):** 4 prior + 2 new = **6**
+- **Avoid moves (cumulative):** 4 prior + 0 new = **4**
