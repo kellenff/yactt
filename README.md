@@ -350,7 +350,7 @@ The trust strip above (`SLSA L3 · 21 tools · 1 dep · read-only`) is four clai
 - **`1 dep`** — `go.mod`, in full:
   ```
   module github.com/kellenff/yactt
-  go 1.26.4
+  go 1.26.5
   require github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
   ```
   The pseudo-version is a literal commit hash of upstream `smacker/go-tree-sitter`. All four grammar bindings yactt actually loads (`.../golang`, `.../javascript`, `.../typescript/typescript`, `.../python`) are subpackages of the same module and share the commit pin.

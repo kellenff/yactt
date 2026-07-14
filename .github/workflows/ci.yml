@@ -24,7 +24,7 @@ jobs:
       # Bump via Dependabot/Renovate; never edit the SHA by hand on a whim.
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        # go-version-file reads the `go 1.26.4` directive from go.mod so the
+        # go-version-file reads the `go 1.26.5` directive from go.mod so the
         # runner's toolchain always matches what the project declares — no
         # drift between local dev and CI. `cache: true` re-uses the module
         # download cache across runs.
