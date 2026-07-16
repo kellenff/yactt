@@ -174,8 +174,10 @@ func TestCachedFileRereadsOnMtimeChange(t *testing.T) {
 		t.Fatalf("CachedFile initial: %v", err)
 	}
 
-	// Touch the file to advance its mtime; modify content to make the change observable.
-	time.Sleep(2 * time.Millisecond) // ensure the new mtime is strictly greater
+	// Modify content and force mtime strictly past the cached value.
+	// A short sleep is not enough under load (coarser FS clocks / busy
+	// runners can keep WriteFile inside the same mtime tick); Chtimes
+	// makes the invalidation contract deterministic.
 	original, err := os.ReadFile(fix.LoginPath)
 	if err != nil {
 		t.Fatal(err)
@@ -185,6 +187,10 @@ func TestCachedFileRereadsOnMtimeChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.WriteFile(fix.LoginPath, original, 0o644)
+	newMTime := time.Unix(0, f1.MTime).Add(time.Second)
+	if err := os.Chtimes(fix.LoginPath, newMTime, newMTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
 
 	f2, err := r.CachedFile(fix.LoginPath)
 	if err != nil {
@@ -196,6 +202,63 @@ func TestCachedFileRereadsOnMtimeChange(t *testing.T) {
 	if !strings.Contains(string(f2.Bytes), "LoginV2") {
 		t.Errorf("re-read content missing LoginV2: %q", f2.Bytes)
 	}
+}
+
+// TestCachedFile_OverLRUCapUsesResidentFiles pins the warm-path bug that
+// made BenchmarkHTTP_ToolsCall/large/find_code ~200ms/op on fastify
+// (~298 files): Load fills Repo.files for every source file, but
+// CachedFile only consulted the LRU (DefaultFileCap=256) and reparsed
+// on miss. With N > cap, chmod'ing the corpus after Load makes any
+// reparse fail ReadFile — resident hits must still succeed.
+func TestCachedFile_OverLRUCapUsesResidentFiles(t *testing.T) {
+	dir := t.TempDir()
+	const n = 300 // > cache.DefaultFileCap (256)
+	paths := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		p := filepath.Join(dir, "f"+itoa3(i)+".go")
+		body := "package p\n\nfunc F" + itoa3(i) + "() {}\n"
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		paths = append(paths, p)
+	}
+	r, errs, err := store.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, e := range errs {
+		t.Errorf("Load per-file err: %v", e)
+	}
+	if got := len(r.Files()); got != n {
+		t.Fatalf("Files() = %d, want %d", got, n)
+	}
+
+	for _, p := range paths {
+		if err := os.Chmod(p, 0o000); err != nil {
+			t.Fatalf("chmod 000 %s: %v", p, err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, p := range paths {
+			_ = os.Chmod(p, 0o644)
+		}
+	})
+
+	for _, p := range r.Files() {
+		f, err := r.CachedFile(p)
+		if err != nil {
+			t.Fatalf("CachedFile(%s): %v (expected resident hit; LRU cap alone cannot cover N=%d)", p, err, n)
+		}
+		if f.Root == nil {
+			t.Fatalf("CachedFile(%s): Root is nil", p)
+		}
+	}
+}
+
+// itoa3 formats i as a zero-padded 3-digit decimal without strconv
+// (keeps this file's imports stable).
+func itoa3(i int) string {
+	return string([]byte{'0' + byte(i/100), '0' + byte((i/10)%10), '0' + byte(i%10)})
 }
 
 func TestProvenanceSet(t *testing.T) {
