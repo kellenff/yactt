@@ -469,6 +469,18 @@ func (r *Repo) Pin() {
 	r.pinned = true
 }
 
+// SetCacheForTest replaces the in-memory LRU. Test-only — used to
+// install a tiny fileCap so overflow / resident-map behaviour can be
+// exercised without materialising DefaultFileCap+1 source files.
+func (r *Repo) SetCacheForTest(c *cache.Cache) {
+	if c == nil {
+		c = cache.New()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cache = c
+}
+
 // ForceClose clears the pin (if any) and reaps LSP children.
 // Used by project.Index on eviction and shutdown.
 func (r *Repo) ForceClose() error {
@@ -558,10 +570,10 @@ func PackagePath(root, p string) string {
 //  2. Load-resident r.files map (unbounded; every source file Load saw)
 //  3. source.LoadFile reparse
 //
-// Step 2 matters for repos larger than the LRU cap: Load fills r.files but
-// does not seed the LRU, and callers like find_code walk every path via
-// CachedFile. Without the resident hit, each miss reparses with tree-sitter
-// and thrash-evicts the LRU — the fastify large HTTP bench paid ~200ms/op.
+// Step 2 covers the gap where Load fills r.files but does not seed the
+// LRU, and callers like find_code walk every path via CachedFile. Without
+// the resident hit, an undersized LRU thrash-reparses with tree-sitter —
+// the fastify large HTTP bench paid ~200ms/op under the old 256-entry cap.
 func (r *Repo) CachedFile(path string) (*source.File, error) {
 	if !strings.HasPrefix(path, r.root) {
 		return nil, ErrNotFound

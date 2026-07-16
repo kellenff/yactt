@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kellenff/yactt/internal/cache"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/store/repofixture"
@@ -204,61 +205,36 @@ func TestCachedFileRereadsOnMtimeChange(t *testing.T) {
 	}
 }
 
-// TestCachedFile_OverLRUCapUsesResidentFiles pins the warm-path bug that
-// made BenchmarkHTTP_ToolsCall/large/find_code ~200ms/op on fastify
-// (~298 files): Load fills Repo.files for every source file, but
-// CachedFile only consulted the LRU (DefaultFileCap=256) and reparsed
-// on miss. With N > cap, chmod'ing the corpus after Load makes any
-// reparse fail ReadFile — resident hits must still succeed.
-func TestCachedFile_OverLRUCapUsesResidentFiles(t *testing.T) {
-	dir := t.TempDir()
-	const n = 300 // > cache.DefaultFileCap (256)
-	paths := make([]string, 0, n)
-	for i := 0; i < n; i++ {
-		p := filepath.Join(dir, "f"+itoa3(i)+".go")
-		body := "package p\n\nfunc F" + itoa3(i) + "() {}\n"
-		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-			t.Fatalf("write: %v", err)
-		}
-		paths = append(paths, p)
+// TestCachedFile_TinyLRUUsesResidentFiles pins the warm-path contract:
+// Load fills Repo.files, and CachedFile must return that resident
+// *source.File even when the LRU is too small to hold the working set.
+// A tiny NewSized(1,1) cache stands in for "N > DefaultFileCap" without
+// materialising 50k files. chmod 000 makes any reparse fail ReadFile.
+func TestCachedFile_TinyLRUUsesResidentFiles(t *testing.T) {
+	r, fix := loadFixture(t)
+	r.SetCacheForTest(cache.NewSized(1, 1))
+
+	if err := os.Chmod(fix.LoginPath, 0o000); err != nil {
+		t.Fatalf("chmod 000: %v", err)
 	}
-	r, errs, err := store.Load(dir)
+	t.Cleanup(func() { _ = os.Chmod(fix.LoginPath, 0o644) })
+
+	// Touch a second file first so the 1-slot LRU evicts LoginPath if
+	// anything PutFile's it — resident map must still serve LoginPath.
+	if _, err := r.CachedFile(fix.UserPath); err != nil {
+		t.Fatalf("CachedFile(user) priming LRU: %v", err)
+	}
+
+	f, err := r.CachedFile(fix.LoginPath)
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("CachedFile after tiny-LRU eviction + chmod 000: %v (expected resident hit)", err)
 	}
-	for _, e := range errs {
-		t.Errorf("Load per-file err: %v", e)
+	if f.Root == nil {
+		t.Error("Root should be non-nil on resident hit")
 	}
-	if got := len(r.Files()); got != n {
-		t.Fatalf("Files() = %d, want %d", got, n)
+	if !strings.Contains(string(f.Bytes), "func Login") {
+		t.Errorf("resident bytes missing Login: %q", f.Bytes[:min(80, len(f.Bytes))])
 	}
-
-	for _, p := range paths {
-		if err := os.Chmod(p, 0o000); err != nil {
-			t.Fatalf("chmod 000 %s: %v", p, err)
-		}
-	}
-	t.Cleanup(func() {
-		for _, p := range paths {
-			_ = os.Chmod(p, 0o644)
-		}
-	})
-
-	for _, p := range r.Files() {
-		f, err := r.CachedFile(p)
-		if err != nil {
-			t.Fatalf("CachedFile(%s): %v (expected resident hit; LRU cap alone cannot cover N=%d)", p, err, n)
-		}
-		if f.Root == nil {
-			t.Fatalf("CachedFile(%s): Root is nil", p)
-		}
-	}
-}
-
-// itoa3 formats i as a zero-padded 3-digit decimal without strconv
-// (keeps this file's imports stable).
-func itoa3(i int) string {
-	return string([]byte{'0' + byte(i/100), '0' + byte((i/10)%10), '0' + byte(i%10)})
 }
 
 func TestProvenanceSet(t *testing.T) {

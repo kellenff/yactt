@@ -18,8 +18,8 @@ CPU profile of the large `find_code` bench (`-cpuprofile`):
 | `store.(*Repo).CachedFile` → `source.LoadFile` | dominant caller |
 | `tool.findCodeRegex` | ~40% of total samples (timed loop) |
 
-Repo shape: **298** indexed source files. In-memory LRU file cap:
-`cache.DefaultFileCap = 256`.
+Repo shape: **298** indexed source files. In-memory LRU file cap at the
+time of the bug: `cache.DefaultFileCap = 256` (since raised to 50_000).
 
 ## Root cause
 
@@ -110,9 +110,14 @@ with allocs/op falling well below the current ~79k.
 allocs are mostly per-file `bytes.Split` in the regex scanner (approach C) —
 follow-up, not required to clear the bench cliff.
 
+## Follow-up (done)
+
+- Raised `DefaultFileCap` 256 → 50_000 and `DefaultLayerCap` 1024 → 200_000
+  so a monorepo-sized working set fits the hot LRU (memory is cheap vs
+  reparse). Resident-map hit remains the correctness backstop.
+
 ## Out of scope
 
-- Raising `DefaultFileCap` (unnecessary once `r.files` is authoritative)
 - Streaming HTTP responses for long tool calls
 - Changing the Fastify pin or bench fixture size
 - Regex-path line-scan alloc reduction (approach C)
