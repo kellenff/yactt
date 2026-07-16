@@ -183,6 +183,13 @@ test_failed_bootout_preserves_the_previous_plist_for_retry() {
 	assert_contains "${plist}" 'replacement &amp; dev/bin/yactt</string>'
 }
 
+test_mcp_config_uses_persistent_http_endpoint() {
+	assert_contains "${MCP_CONFIG}" '"type": "http"'
+	assert_contains "${MCP_CONFIG}" '"url": "http://127.0.0.1:57812/mcp"'
+	assert_not_contains "${MCP_CONFIG}" '"command"'
+	assert_not_contains "${MCP_CONFIG}" '"args"'
+}
+
 test_current_release_uses_absolute_install_path() {
 	setup_case
 	unset CLAUDE_PROJECT_DIR
@@ -260,6 +267,7 @@ run_test test_changed_plist_is_reloaded
 run_test test_failed_bootout_preserves_the_previous_plist_for_retry
 run_test test_replaced_binary_kickstarts_unchanged_agent
 run_test test_current_release_uses_absolute_install_path
+run_test test_mcp_config_uses_persistent_http_endpoint
 
 if (( failures > 0 )); then
 	exit 1
