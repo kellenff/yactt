@@ -54,8 +54,9 @@ cache_age() {
 }
 
 installed_version() {
-	command -v yactt >/dev/null 2>&1 || return 1
-	yactt version 2>/dev/null | awk '{print $2}' | sed 's/^v//'
+	local binary="${1:-${INSTALL_PATH}}"
+	[[ -x "${binary}" ]] || return 1
+	"${binary}" version 2>/dev/null | awk '{print $2}' | sed 's/^v//'
 }
 
 # Lightweight semver allowlist. Accepts:
@@ -258,9 +259,8 @@ download_and_install() {
 	mkdir -p "$(dirname "${KNOWN_GOOD_FILE}")"
 	printf '%s %s\n' "${version}" "${actual}" > "${KNOWN_GOOD_FILE}"
 
-	# PATH sanity check — soft warning, not fatal. The MCP server
-	# will fail to start if yactt is unreachable, which surfaces the
-	# problem loudly enough.
+	# PATH sanity check for direct CLI use. The LaunchAgent executes
+	# INSTALL_PATH directly and does not depend on the shell's PATH.
 	if ! command -v yactt >/dev/null 2>&1; then
 		echo "yactt: WARNING — ${INSTALL_DIR} is not on PATH." >&2
 		echo "         Add 'export PATH=\"${INSTALL_DIR}:\$PATH\"' to your shell rc." >&2
@@ -285,7 +285,7 @@ main() {
 		echo "yactt: cannot reach GitHub Releases; plugin will not work until network is back" >&2
 		return 1
 	}
-	installed=$(installed_version || true)
+	installed=$(installed_version "${INSTALL_PATH}" || true)
 
 	if [[ "${installed}" != "${latest}" ]]; then
 		download_and_install "${latest}" "${target}"

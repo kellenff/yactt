@@ -183,10 +183,30 @@ test_failed_bootout_preserves_the_previous_plist_for_retry() {
 	assert_contains "${plist}" 'replacement &amp; dev/bin/yactt</string>'
 }
 
+test_current_release_uses_absolute_install_path() {
+	setup_case
+	unset CLAUDE_PROJECT_DIR
+	mkdir -p "${XDG_HOME}/bin" "$(dirname "${XDG_CACHE_HOME}/yactt/latest")"
+	cat > "${XDG_HOME}/bin/yactt" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'yactt v1.2.3\n'
+SCRIPT
+	chmod +x "${XDG_HOME}/bin/yactt"
+	printf '1.2.3\n' > "${XDG_CACHE_HOME}/yactt/latest"
+
+	run_installer
+
+	local plist="${HOME}/Library/LaunchAgents/com.kellenff.yactt.mcp.plist"
+	assert_contains "${plist}" "<string>${XDG_HOME}/bin/yactt</string>"
+	[[ ! -s "${YACTT_TEST_CURL_LOG}" ]] || fail "current absolute-path install contacted GitHub"
+	assert_not_contains "${YACTT_TEST_LAUNCHCTL_LOG}" "kickstart "
+}
+
 test_replaced_binary_kickstarts_unchanged_agent() {
 	setup_case
 	unset CLAUDE_PROJECT_DIR
-	# shellcheck disable=SC1090 -- the test intentionally sources the repository path.
+	# shellcheck disable=SC1090
+	# The test intentionally sources the repository path.
 	source "${INSTALL_SCRIPT}"
 	mkdir -p "${INSTALL_DIR}"
 	cat > "${INSTALL_PATH}" <<'SCRIPT'
@@ -197,8 +217,12 @@ SCRIPT
 	install_launch_agent "${INSTALL_PATH}" 0
 	: > "${YACTT_TEST_LAUNCHCTL_LOG}"
 
+	# These shadows are invoked via main() below, not directly.
+	# shellcheck disable=SC2329
 	latest_version() { printf '2.0.0\n'; }
+	# shellcheck disable=SC2329
 	installed_version() { printf '1.2.3\n'; }
+	# shellcheck disable=SC2329
 	download_and_install() {
 		cat > "${INSTALL_PATH}" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -235,6 +259,7 @@ run_test test_unchanged_agent_is_left_running
 run_test test_changed_plist_is_reloaded
 run_test test_failed_bootout_preserves_the_previous_plist_for_retry
 run_test test_replaced_binary_kickstarts_unchanged_agent
+run_test test_current_release_uses_absolute_install_path
 
 if (( failures > 0 )); then
 	exit 1
