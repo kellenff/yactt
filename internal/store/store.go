@@ -552,6 +552,16 @@ func PackagePath(root, p string) string {
 // CachedFile returns the parsed source.File for path, taking a fresh read if
 // the on-disk content has changed. Returns ErrNotFound for files outside the
 // repo.
+//
+// Lookup order:
+//  1. in-memory LRU (hot layer; capped at cache.DefaultFileCap)
+//  2. Load-resident r.files map (unbounded; every source file Load saw)
+//  3. source.LoadFile reparse
+//
+// Step 2 matters for repos larger than the LRU cap: Load fills r.files but
+// does not seed the LRU, and callers like find_code walk every path via
+// CachedFile. Without the resident hit, each miss reparses with tree-sitter
+// and thrash-evicts the LRU — the fastify large HTTP bench paid ~200ms/op.
 func (r *Repo) CachedFile(path string) (*source.File, error) {
 	if !strings.HasPrefix(path, r.root) {
 		return nil, ErrNotFound
@@ -564,6 +574,14 @@ func (r *Repo) CachedFile(path string) (*source.File, error) {
 	if f, err := r.cache.GetFile(path, mtime); err == nil {
 		return f, nil
 	}
+	// Prefer the Load-resident map over a tree-sitter reparse.
+	r.mu.RLock()
+	if f, ok := r.files[path]; ok && f != nil && f.MTime == mtime {
+		r.mu.RUnlock()
+		r.cache.PutFile(f)
+		return f, nil
+	}
+	r.mu.RUnlock()
 	lang, lerr := parser.Detect(path)
 	if lerr != nil {
 		return nil, lerr
