@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- **Persistent in-process project indexing.** `RegisterAllTools` binds a
+  `project.Index` to the registry so `project.Resolve` reuses a pinned
+  `*store.Repo` (symbol table, call-edge graph, LSP clients) across tool
+  calls. `index_repository` primes the Index; `delete_project` evicts it.
+  Callers keep `defer repo.Close()` — Close is a no-op on pinned repos;
+  ForceClose runs on eviction / daemon shutdown. This is the parser-warm
+  path for `yactt mcp serve` / `mcp serve-http` that the file:// migration
+  deferred when it moved to per-call Resolve.
+
 ### Breaking changes (MCP project-reference migration)
 
 The optional positional path argument on `yactt mcp serve` is

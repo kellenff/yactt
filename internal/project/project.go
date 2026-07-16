@@ -8,6 +8,11 @@
 // call project.Resolve rather than store.Load directly so URI
 // validation, registry lookup, and cache wiring all live in one
 // place.
+//
+// When BindIndex attaches an Index to a Registry, Resolve also
+// keeps the loaded *store.Repo warm in-process across tool calls
+// (symbol table, call-edge graph, LSP clients). That is the
+// parser-warm path for the persistent HTTP daemon.
 package project
 
 import (
@@ -108,8 +113,16 @@ func ParseRef(raw string) (Ref, error) {
 }
 
 // Resolve parses `raw`, looks the decoded path up in `reg`, and
-// loads the repo via the per-project disk cache. The caller owns
-// repo.Close() (use defer).
+// returns a loaded *store.Repo. When an Index is bound to `reg`
+// (see BindIndex), a warm hit returns the pinned repo without
+// re-walking the tree; a miss loads via the per-project disk
+// cache and stores the result in the Index. When no Index is
+// bound, every call pays a fresh store.Load (the pre-Index
+// contract — tests that never BindIndex keep that path).
+//
+// The caller should still defer repo.Close(). Indexed repos are
+// Pin()'d so Close is a no-op; eviction / Index.Close ForceClose
+// them. Unindexed (cold) repos Close normally and reap LSP children.
 //
 // Errors:
 //   - ParseRef errors (see above)
@@ -117,8 +130,8 @@ func ParseRef(raw string) (Ref, error) {
 //   - any error from store.Load
 //
 // ponytail: no context.Context today because store.Load is sync.
-// When the future daemon mode lands, add a ctx parameter so
-// cancellation propagates from the server loop.
+// When cancellation needs to propagate from the server loop, add a
+// ctx parameter here.
 func Resolve(reg *registry.Registry, raw string) (*store.Repo, error) {
 	ref, err := ParseRef(raw)
 	if err != nil {
@@ -127,9 +140,15 @@ func Resolve(reg *registry.Registry, raw string) (*store.Repo, error) {
 	if _, ok := reg.GetByPath(ref.Path); !ok {
 		return nil, ErrNotIndexed
 	}
+	if idx := IndexFor(reg); idx != nil {
+		if repo, ok := idx.Get(ref.Path); ok {
+			return repo, nil
+		}
+	}
 	repo, _, err := store.Load(ref.Path, registry.LoadOptsWithDiskCache(ref.Path)...)
 	if err != nil {
 		return nil, err
 	}
+	PutFor(reg, repo)
 	return repo, nil
 }

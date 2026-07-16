@@ -28,6 +28,7 @@ import (
 	"github.com/kellenff/yactt/internal/mcp"
 	httptransport "github.com/kellenff/yactt/internal/mcp/transport/http"
 	"github.com/kellenff/yactt/internal/parser"
+	"github.com/kellenff/yactt/internal/project"
 	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/tool"
@@ -629,7 +630,13 @@ func runMCPServe(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	return srv.Serve(ctx)
+	err := srv.Serve(ctx)
+	// Reap pinned warm-index LSP children on clean shutdown.
+	if idx := project.IndexFor(reg); idx != nil {
+		_ = idx.Close()
+		project.BindIndex(reg, nil)
+	}
+	return err
 }
 
 // buildStartupInfo snapshots the load-time state into the audit
