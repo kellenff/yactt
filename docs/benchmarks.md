@@ -30,6 +30,9 @@ go test -bench='^BenchmarkToolNodeGet' -benchmem ./internal/tool/...
 # HTTP MCP transport (small + medium project sizes).
 go test -bench='^BenchmarkHTTP' -benchmem ./internal/mcp/transport/http/...
 
+# External Go HTTP client path (real TCP listener).
+go test -bench='^BenchmarkHTTPClient' -benchmem ./internal/mcp/transport/http/...
+
 # Heavy benchmarks (LoadFixture, ReparseOneFile) benefit from longer benchtime.
 go test -bench='^BenchmarkLoadFixture$' -benchtime=10x ./internal/store/...
 ```
@@ -66,7 +69,8 @@ PASS
 | `BenchmarkLocateSymbol` | `internal/store/` | By-ID lookup |
 | `BenchmarkEdgesByCallee` / `BenchmarkEdgesByCaller` / `BenchmarkImportsIn` | `internal/store/` | Persisted index accessors |
 | `BenchmarkDispatchToolsCall` / `BenchmarkDispatchToolsList` / `BenchmarkRegisterTool` | `internal/mcp/` | JSON-RPC dispatch + tool registry |
-| `BenchmarkHTTP_Initialize` / `BenchmarkHTTP_ToolsList` / `BenchmarkHTTP_ToolsCall` | `internal/mcp/transport/http/` | MCP over Streamable HTTP (`serve-http`); `ToolsCall` sweeps small (repofixture) and medium (genfixture 100-file) project sizes |
+| `BenchmarkHTTP_Initialize` / `BenchmarkHTTP_ToolsList` / `BenchmarkHTTP_ToolsCall` | `internal/mcp/transport/http/` | MCP over Streamable HTTP via `httptest` (`serve-http`); `ToolsCall` sweeps small (repofixture) and medium (genfixture 100-file) project sizes |
+| `BenchmarkHTTPClient_Initialize` / `BenchmarkHTTPClient_ToolsList` / `BenchmarkHTTPClient_ToolsCall` | `internal/mcp/transport/http/` | Same MCP surface through a dedicated `*http.Client` against a real loopback TCP listener (agent-harness shaped) |
 | `BenchmarkToolTreeOverview` | `internal/tool/` | `tree_overview` handler |
 | `BenchmarkToolFindCode` / `BenchmarkToolFindSymbol` / `BenchmarkToolNodeEdges` / `BenchmarkToolFindReferencingSymbols` | `internal/tool/` | The navigation tools |
 | `BenchmarkToolNodeGet_signature` / `_body` / `_source` | `internal/tool/` | Layer materialisation; signature < body < source in cost |
