@@ -163,6 +163,25 @@ func benchPost(url, sid, body string) (*http.Response, error) {
 	return http.DefaultClient.Do(req)
 }
 
+// benchDelete terminates a session so initialize benches do not
+// accumulate slots against MaxSessions across large b.N runs.
+func benchDelete(url, sid string) error {
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set(HeaderSessionID, sid)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("DELETE status = %d, want 204", resp.StatusCode)
+	}
+	return nil
+}
+
 func benchToolsCall(b *testing.B, sess *benchSession, toolName, argsJSON string) {
 	b.Helper()
 	body := fmt.Sprintf(
@@ -183,7 +202,8 @@ func benchToolsCall(b *testing.B, sess *benchSession, toolName, argsJSON string)
 }
 
 // BenchmarkHTTP_Initialize measures session allocation + initialize
-// dispatch over HTTP. One fresh session per iteration.
+// dispatch over HTTP. One fresh session per iteration; each session
+// is DELETEd outside the timed path so MaxSessions is never exhausted.
 func BenchmarkHTTP_Initialize(b *testing.B) {
 	cfg := ServerConfig{
 		Token:        "",
@@ -214,11 +234,20 @@ func BenchmarkHTTP_Initialize(b *testing.B) {
 		if err != nil {
 			b.Fatalf("post: %v", err)
 		}
-		if resp.Header.Get(HeaderSessionID) == "" {
+		sid := resp.Header.Get(HeaderSessionID)
+		if sid == "" {
 			b.Fatalf("missing session id")
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
+
+		// Drop the session outside the timed path so large b.N
+		// runs never trip MaxSessions / ErrSessionCap.
+		b.StopTimer()
+		if err := benchDelete(url, sid); err != nil {
+			b.Fatalf("delete session: %v", err)
+		}
+		b.StartTimer()
 	}
 }
 
