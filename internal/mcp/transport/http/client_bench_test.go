@@ -23,6 +23,7 @@ import (
 // Same project-size matrix as BenchmarkHTTP_ToolsCall:
 //   - small  — repofixture
 //   - medium — genfixture (100 files)
+//   - large  — fastify/fastify @ pinned SHA
 //
 // Run:
 //
@@ -275,6 +276,7 @@ func BenchmarkHTTPClient_ToolsCall(b *testing.B) {
 	fixtures := []func(*testing.B) benchFixture{
 		benchSmallFixture,
 		benchMediumFixture,
+		benchLargeFixture,
 	}
 	tools := []struct {
 		name string

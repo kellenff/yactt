@@ -1,0 +1,3 @@
+# Cached third-party clones used by real-world benchmarks
+# (e.g. fastify/fastify). Populated on first bench run.
+.cache/

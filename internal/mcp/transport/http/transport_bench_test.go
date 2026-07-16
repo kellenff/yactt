@@ -14,6 +14,7 @@ import (
 	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/store/repofixture"
 	"github.com/kellenff/yactt/tests/chunking/genfixture"
+	"github.com/kellenff/yactt/tests/fixtures/realrepo"
 )
 
 // These benchmarks exercise MCP tool calls over the Streamable HTTP
@@ -24,6 +25,7 @@ import (
 // Project sizes:
 //   - small  — repofixture (~6 source files)
 //   - medium — genfixture synthetic repo (100 files, ~500 declarations)
+//   - large  — fastify/fastify @ pinned SHA (real-world JS; ~300 files)
 //
 // Each tools/call sub-benchmark pre-warms the project via one
 // index_repository round-trip before ResetTimer so the timed loop
@@ -32,7 +34,7 @@ import (
 // Run:
 //
 //	go test -bench='^BenchmarkHTTP' -benchmem ./internal/mcp/transport/http/...
-//	go test -bench='^BenchmarkHTTP_ToolsCall/medium' -benchtime=3x ./internal/mcp/transport/http/...
+//	go test -bench='^BenchmarkHTTP_ToolsCall/large' -benchtime=3x ./internal/mcp/transport/http/...
 
 // benchFixture is one indexed project the HTTP daemon can resolve.
 type benchFixture struct {
@@ -67,6 +69,21 @@ func benchMediumFixture(b *testing.B) benchFixture {
 		projectURI: "file://" + dir,
 		findName:   "auth.Aggregate",
 		findPat:    `^func (Aggregate|Sanitize|Normalize|Charge|Refund)$`,
+	}
+}
+
+// benchLargeFixture is the real-world fastify/fastify tree (pinned).
+// find_symbol uses a dotted path that matches the store's package
+// inference for lib/*.js (e.g. fn:lib.handleError).
+func benchLargeFixture(b *testing.B) benchFixture {
+	b.Helper()
+	root := realrepo.Fastify(b)
+	return benchFixture{
+		name:       "large",
+		root:       root,
+		projectURI: "file://" + root,
+		findName:   "lib.handleError",
+		findPat:    `^function (fastify|handleError|buildRouting|createLogger)$`,
 	}
 }
 
@@ -277,6 +294,7 @@ func BenchmarkHTTP_ToolsCall(b *testing.B) {
 	fixtures := []func(*testing.B) benchFixture{
 		benchSmallFixture,
 		benchMediumFixture,
+		benchLargeFixture,
 	}
 	tools := []struct {
 		name string
