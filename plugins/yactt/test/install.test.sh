@@ -130,6 +130,90 @@ test_non_macos_fails_clearly() {
 	assert_contains "${CASE_ROOT}/stderr" 'the yactt Claude Code plugin only supports macOS'
 }
 
+test_unchanged_agent_is_left_running() {
+	setup_case
+	run_installer
+	: > "${YACTT_TEST_LAUNCHCTL_LOG}"
+
+	run_installer
+
+	assert_contains "${YACTT_TEST_LAUNCHCTL_LOG}" "print gui/$(id -u)/com.kellenff.yactt.mcp"
+	assert_not_contains "${YACTT_TEST_LAUNCHCTL_LOG}" "bootstrap "
+	assert_not_contains "${YACTT_TEST_LAUNCHCTL_LOG}" "bootout "
+	assert_not_contains "${YACTT_TEST_LAUNCHCTL_LOG}" "kickstart "
+}
+
+test_changed_plist_is_reloaded() {
+	setup_case
+	run_installer
+	local plist="${HOME}/Library/LaunchAgents/com.kellenff.yactt.mcp.plist"
+	printf 'stale configuration\n' > "${plist}"
+	: > "${YACTT_TEST_LAUNCHCTL_LOG}"
+
+	run_installer
+
+	assert_contains "${YACTT_TEST_LAUNCHCTL_LOG}" "bootout gui/$(id -u)/com.kellenff.yactt.mcp"
+	assert_contains "${YACTT_TEST_LAUNCHCTL_LOG}" "bootstrap gui/$(id -u) ${plist}"
+	assert_contains "${plist}" '<string>--port=57812</string>'
+}
+
+test_failed_bootout_preserves_the_previous_plist_for_retry() {
+	setup_case
+	run_installer
+	local plist="${HOME}/Library/LaunchAgents/com.kellenff.yactt.mcp.plist"
+	cp "${plist}" "${CASE_ROOT}/original.plist"
+
+	export CLAUDE_PROJECT_DIR="${CASE_ROOT}/replacement & dev"
+	mkdir -p "${CLAUDE_PROJECT_DIR}/bin"
+	cp "${CASE_ROOT}/project & dev/bin/yactt" "${CLAUDE_PROJECT_DIR}/bin/yactt"
+	export YACTT_TEST_BOOTOUT_FAIL=1
+	: > "${YACTT_TEST_LAUNCHCTL_LOG}"
+
+	if run_installer; then
+		fail "installer succeeded despite a failed launchctl bootout"
+	fi
+	cmp -s "${plist}" "${CASE_ROOT}/original.plist" || fail "failed bootout replaced the working plist"
+	assert_contains "${YACTT_TEST_LAUNCHCTL_LOG}" "bootout gui/$(id -u)/com.kellenff.yactt.mcp"
+
+	export YACTT_TEST_BOOTOUT_FAIL=0
+	: > "${YACTT_TEST_LAUNCHCTL_LOG}"
+	run_installer
+	assert_contains "${YACTT_TEST_LAUNCHCTL_LOG}" "bootout gui/$(id -u)/com.kellenff.yactt.mcp"
+	assert_contains "${YACTT_TEST_LAUNCHCTL_LOG}" "bootstrap gui/$(id -u) ${plist}"
+	assert_contains "${plist}" 'replacement &amp; dev/bin/yactt</string>'
+}
+
+test_replaced_binary_kickstarts_unchanged_agent() {
+	setup_case
+	unset CLAUDE_PROJECT_DIR
+	# shellcheck disable=SC1090 -- the test intentionally sources the repository path.
+	source "${INSTALL_SCRIPT}"
+	mkdir -p "${INSTALL_DIR}"
+	cat > "${INSTALL_PATH}" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'yactt v1.2.3\n'
+SCRIPT
+	chmod +x "${INSTALL_PATH}"
+	install_launch_agent "${INSTALL_PATH}" 0
+	: > "${YACTT_TEST_LAUNCHCTL_LOG}"
+
+	latest_version() { printf '2.0.0\n'; }
+	installed_version() { printf '1.2.3\n'; }
+	download_and_install() {
+		cat > "${INSTALL_PATH}" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'yactt v2.0.0\n'
+SCRIPT
+		chmod +x "${INSTALL_PATH}"
+	}
+
+	main
+
+	assert_contains "${YACTT_TEST_LAUNCHCTL_LOG}" "kickstart -k gui/$(id -u)/com.kellenff.yactt.mcp"
+	assert_not_contains "${YACTT_TEST_LAUNCHCTL_LOG}" "bootout "
+	assert_not_contains "${YACTT_TEST_LAUNCHCTL_LOG}" "bootstrap "
+}
+
 failures=0
 run_test() {
 	local name="$1" status
@@ -147,6 +231,10 @@ run_test() {
 
 run_test test_initial_bootstrap_uses_local_binary
 run_test test_non_macos_fails_clearly
+run_test test_unchanged_agent_is_left_running
+run_test test_changed_plist_is_reloaded
+run_test test_failed_bootout_preserves_the_previous_plist_for_retry
+run_test test_replaced_binary_kickstarts_unchanged_agent
 
 if (( failures > 0 )); then
 	exit 1

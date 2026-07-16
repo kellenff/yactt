@@ -159,8 +159,8 @@ PLIST
 install_launch_agent() {
 	local binary="$1"
 	local binary_changed="${2:-0}"
-	local tmp
-	: "${binary_changed}"
+	local tmp plist_changed=0 loaded=0
+	local service="${LAUNCH_DOMAIN}/${LAUNCH_LABEL}"
 
 	mkdir -p "${LAUNCH_AGENT_DIR}" "${LOG_DIR}"
 	tmp=$(mktemp "${LAUNCH_AGENT_DIR}/.${LAUNCH_LABEL}.XXXXXX")
@@ -171,8 +171,31 @@ install_launch_agent() {
 		return 1
 	fi
 	chmod 0644 "${tmp}"
-	mv "${tmp}" "${LAUNCH_AGENT_PATH}"
-	launchctl bootstrap "${LAUNCH_DOMAIN}" "${LAUNCH_AGENT_PATH}"
+
+	if [[ -f "${LAUNCH_AGENT_PATH}" ]] && cmp -s "${tmp}" "${LAUNCH_AGENT_PATH}"; then
+		rm -f "${tmp}"
+	else
+		plist_changed=1
+	fi
+
+	if launchctl print "${service}" >/dev/null 2>&1; then
+		loaded=1
+	fi
+
+	if (( plist_changed )); then
+		if (( loaded )); then
+			if ! launchctl bootout "${service}"; then
+				rm -f "${tmp}"
+				return 1
+			fi
+		fi
+		mv "${tmp}" "${LAUNCH_AGENT_PATH}"
+		launchctl bootstrap "${LAUNCH_DOMAIN}" "${LAUNCH_AGENT_PATH}"
+	elif (( ! loaded )); then
+		launchctl bootstrap "${LAUNCH_DOMAIN}" "${LAUNCH_AGENT_PATH}"
+	elif (( binary_changed )); then
+		launchctl kickstart -k "${service}"
+	fi
 }
 
 download_and_install() {
