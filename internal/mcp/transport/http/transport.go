@@ -13,6 +13,7 @@ import (
 
 	"github.com/kellenff/yactt/internal/audit"
 	"github.com/kellenff/yactt/internal/mcp"
+	"github.com/kellenff/yactt/internal/project"
 	"github.com/kellenff/yactt/internal/registry"
 	"github.com/kellenff/yactt/internal/tool"
 )
@@ -40,6 +41,7 @@ type Server struct {
 	reg      *registry.Registry
 	auth     *AuthChecker
 	sessions *SessionManager
+	index    *project.Index // process-lifetime warm project index
 
 	mu        sync.Mutex
 	audit     *audit.Logger
@@ -83,9 +85,11 @@ func NewServer(cfg ServerConfig, reg *registry.Registry) *Server {
 // tools registered. The HTTP and audit hooks are nil because
 // the daemon lifecycle is different from stdio — we don't emit
 // a startup line and don't warn on trust-chain mismatch.
+// The returned Index is retained on s so Shutdown can ForceClose
+// pinned repos.
 func (s *Server) buildMCPServer() *mcp.Server {
 	srv := mcp.NewServer(s.cfg.ProtocolName, s.cfg.Version, s.cfg.ProtocolVer, io.Discard, nil)
-	tool.RegisterAllTools(srv, s.reg, nil, nil)
+	s.index = tool.RegisterAllTools(srv, s.reg, nil, nil)
 	return srv
 }
 
@@ -328,8 +332,9 @@ func (s *Server) ListenAndServe() error {
 }
 
 // Shutdown stops accepting new connections, drains in-flight
-// requests up to cfg.ShutdownGrace, and cancels sessions.
-// Idempotent.
+// requests up to cfg.ShutdownGrace, cancels sessions, and
+// ForceClose's the warm project index (reaping pinned LSP
+// children). Idempotent.
 func (s *Server) Shutdown(ctx context.Context) error {
 	var errs []error
 	if s.httpServer != nil {
@@ -338,6 +343,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 	}
 	s.sessions.Stop()
+	if s.index != nil {
+		if err := s.index.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		project.BindIndex(s.reg, nil)
+		s.index = nil
+	}
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}

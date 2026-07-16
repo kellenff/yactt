@@ -72,6 +72,12 @@ type Repo struct {
 	rootPkg       string
 	prov          domain.Provenance
 
+	// pinned marks a repo owned by project.Index. Close() is a
+	// no-op while pinned so tool handlers can keep their
+	// `defer repo.Close()` without tearing down a shared warm
+	// index; ForceClose() clears the pin and reaps LSP children.
+	pinned bool
+
 	// LSP subgraph (Tier 1). Each map is keyed by parser.Name; the keys
 	// present at any time are the languages whose server started
 	// successfully. Nil keys (or absent entries) mean "no server for
@@ -441,7 +447,40 @@ func (r *Repo) LSPForFile(path string) (*lsp.Client, string, string) {
 //
 // Callers should defer `r.Close()` right after `store.Load` so server
 // children are always reaped, regardless of the exit path.
+//
+// When the repo is Pin()'d (owned by project.Index), Close is a
+// no-op — the warm index outlives individual tool calls. Use
+// ForceClose to reap a pinned repo on eviction / shutdown.
 func (r *Repo) Close() error {
+	r.mu.RLock()
+	pinned := r.pinned
+	r.mu.RUnlock()
+	if pinned {
+		return nil
+	}
+	return r.closeLSP()
+}
+
+// Pin marks this repo as owned by an in-process warm index.
+// Subsequent Close() calls become no-ops until ForceClose.
+func (r *Repo) Pin() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pinned = true
+}
+
+// ForceClose clears the pin (if any) and reaps LSP children.
+// Used by project.Index on eviction and shutdown.
+func (r *Repo) ForceClose() error {
+	r.mu.Lock()
+	r.pinned = false
+	r.mu.Unlock()
+	return r.closeLSP()
+}
+
+func (r *Repo) closeLSP() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var firstErr error
 	for _, c := range r.lsp {
 		if c == nil {
