@@ -1,7 +1,6 @@
 ---
 name: using-yactt
-description: Use when working with Go, TypeScript, JavaScript, or Python source code and the yactt MCP server is available.
-Triggers on: explore the codebase, understand the architecture, what functions exist, who calls this function, what does X call, find the source of, find symbol definition, code navigation, codebase understanding, look up a function, where is X defined, where is X used, dead code, unused functions, high fan-out, high fan-in, refactor candidates, code quality audit, code hotspots, rename impact, blast radius, what breaks, AST-aware search, symbol search, call graph, file structure, repo map, what changed in this branch, PR impact.
+description: Use when working with Go, TypeScript, JavaScript, or Python source code
 ---
 
 # When to reach for yactt
