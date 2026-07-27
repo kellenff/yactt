@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added
+
+- **MUSL-linked Linux build targets.** Two new release artifacts:
+  `yactt_linux_amd64_musl.tar.gz` and `yactt_linux_arm64_musl.tar.gz`.
+  Built on each Linux runner via `apt-get install musl-tools` and
+  `CGO_ENABLED=1 CC=musl-gcc`, with `-extldflags=-static` for full
+  static linking — no dynamic linker dependency at all. Run natively
+  on Alpine, `gcr.io/distroless/static`, and `scratch` without
+  `libc6-compat` or any libc shim. Each musl tarball ships its own
+  SLSA Build Provenance attestation and entry in `SHA256SUMS`; the
+  release job's `gh attestation verify` loop picks them up alongside
+  the existing glibc, darwin, and windows artifacts.
+
+### Changed
+
+- **Bundled `Dockerfile` now consumes the musl arm64 artifact.**
+  Updated the download URL and `SHA256SUMS` grep to
+  `yactt_linux_arm64_musl.tar.gz`; dropped the `libc6-compat` apk
+  package since the musl binary needs nothing more than Alpine's
+  own musl libc.
+
 ## 0.0.14 — 2026-07-26
 
 ### Added

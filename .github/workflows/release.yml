@@ -18,20 +18,28 @@ permissions:
 
 jobs:
   build:
-    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }}/${{ matrix.libc }})
     # smacker/go-tree-sitter is cgo, so each non-host target needs its
     # native C toolchain. We run each matrix entry on its native runner
     # rather than cross-compiling (no usable cross-cgo toolchain on
     # GitHub-hosted runners for darwin/windows/linux-arm64).
+    #
+    # `libc` distinguishes glibc (default; what `ubuntu-latest` and
+    # `ubuntu-24.04-arm` ship) from musl (added via apt's `musl-tools`,
+    # produces statically-linked binaries that run on Alpine, distroless,
+    # and scratch without `libc6-compat`). Only Linux gets both flavors;
+    # macOS and Windows don't ship musl libc.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { goos: darwin,  goarch: amd64, runs-on: macos-15-intel }
-          - { goos: darwin,  goarch: arm64, runs-on: macos-15 }
-          - { goos: linux,   goarch: amd64, runs-on: ubuntu-latest }
-          - { goos: linux,   goarch: arm64, runs-on: ubuntu-24.04-arm }
-          - { goos: windows, goarch: amd64, runs-on: windows-latest }
+          - { goos: darwin,  goarch: amd64, runs-on: macos-15-intel,    libc: gnu  }
+          - { goos: darwin,  goarch: arm64, runs-on: macos-15,          libc: gnu  }
+          - { goos: linux,   goarch: amd64, runs-on: ubuntu-latest,     libc: gnu  }
+          - { goos: linux,   goarch: amd64, runs-on: ubuntu-latest,     libc: musl }
+          - { goos: linux,   goarch: arm64, runs-on: ubuntu-24.04-arm,  libc: gnu  }
+          - { goos: linux,   goarch: arm64, runs-on: ubuntu-24.04-arm,  libc: musl }
+          - { goos: windows, goarch: amd64, runs-on: windows-latest,    libc: gnu  }
     runs-on: ${{ matrix.runs-on }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -46,6 +54,17 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # musl-only: install musl-gcc wrapper on top of the host's glibc
+      # gcc so the cgo compiler driver emits binaries linked against
+      # musl libc. Combined with `-extldflags=-static` below, the output
+      # is a fully static binary — no dynamic linker dependency at all,
+      # so it runs in Alpine, distroless/static, and scratch without
+      # shipping a libc alongside. `musl-tools` is in Ubuntu's main repo
+      # (amd64 + arm64).
+      - name: install musl-tools (musl entries only)
+        if: ${{ matrix.libc == 'musl' && matrix.goos == 'linux' }}
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
       - name: build
         # All `${{ }}` interpolations use GitHub-controlled values
         # (matrix entries I defined; tag name from the trigger). The
@@ -54,6 +73,7 @@ jobs:
         env:
           GOOS:   ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          LIBC:   ${{ matrix.libc }}
           TAG:    ${{ github.ref_name }}
         shell: bash
         run: |
@@ -70,30 +90,66 @@ jobs:
           mkdir -p dist
           ext=""
           if [ "${GOOS}" = "windows" ]; then ext=".exe"; fi
-          binary="yactt_${GOOS}_${GOARCH}${ext}"
-          go build -trimpath \
-            -ldflags="-s -w -X main.version=${TAG}" \
-            -o "dist/${binary}" ./cmd/yactt
-          echo "built ${binary} (version=${TAG})"
+          suffix=""
+          # `libc=musl` namespacing on both the binary and the tarball.
+          # Glibc uses the bare `yactt_<os>_<arch>` form for backward
+          # compat with the v0.0.x releases that are already shipping
+          # in the wild; musl gets the `_musl` suffix. Downstream
+          # tooling (the bundled `Dockerfile`, install scripts) keys off
+          # the tarball name to pick the right artifact per host libc.
+          if [ "${LIBC}" = "musl" ]; then suffix="_musl"; fi
+          binary="yactt_${GOOS}_${GOARCH}${suffix}${ext}"
+          # CGO is required: smacker/go-tree-sitter's bindings.go does
+          # `// #include "bindings.h"`. For musl entries the apt-installed
+          # `musl-gcc` wrapper re-targets the host's gcc at musl libc
+          # instead of glibc; for non-musl entries Go's auto-detect
+          # picks the host's default compiler (gcc on Linux, clang on
+          # macOS, MSVC on Windows).
+          #
+          # `-extldflags=-static` is the lever that makes the musl
+          # binary fully static (no dynamic linker at all, so it runs
+          # in Alpine, distroless/static, and scratch). It's musl-only
+          # — MSVC's `link.exe` doesn't accept the flag and would
+          # fail the build.
+          ldflags="-s -w -X main.version=${TAG}"
+          if [ "${LIBC}" = "musl" ]; then
+            ldflags="${ldflags} -extldflags=-static"
+          fi
+          if [ "${LIBC}" = "musl" ]; then
+            CGO_ENABLED=1 CC=musl-gcc \
+              go build -trimpath \
+                -ldflags="${ldflags}" \
+                -o "dist/${binary}" ./cmd/yactt
+          else
+            CGO_ENABLED=1 \
+              go build -trimpath \
+                -ldflags="${ldflags}" \
+                -o "dist/${binary}" ./cmd/yactt
+          fi
+          echo "built ${binary} (version=${TAG}, libc=${LIBC})"
 
       - name: archive
         working-directory: dist
         env:
           GOOS:   ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          LIBC:   ${{ matrix.libc }}
         shell: bash
         run: |
           set -euo pipefail
           ext=""
           if [ "${GOOS}" = "windows" ]; then ext=".exe"; fi
-          binary="yactt_${GOOS}_${GOARCH}${ext}"
-          tar -czf "yactt_${GOOS}_${GOARCH}.tar.gz" "${binary}"
+          suffix=""
+          if [ "${LIBC}" = "musl" ]; then suffix="_musl"; fi
+          binary="yactt_${GOOS}_${GOARCH}${suffix}${ext}"
+          tarball="yactt_${GOOS}_${GOARCH}${suffix}.tar.gz"
+          tar -czf "${tarball}" "${binary}"
           rm "${binary}"
           ls -la
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: yactt-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: yactt-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.libc }}
           path: dist/*.tar.gz
           if-no-files-found: error
 
@@ -101,7 +157,7 @@ jobs:
       # an in-toto statement with the workflow's OIDC token via
       # Fulcio and registers it in GitHub's attestation store,
       # indexed by the tarball's SHA-256. Consumers verify with:
-      #   gh attestation verify yactt_<os>_<arch>.tar.gz -R kellenff/yactt
+      #   gh attestation verify yactt_<os>_<arch>[_musl].tar.gz -R kellenff/yactt
       # This proves "this binary was built from this repo at this
       # commit by this workflow" — closing the supply-chain gap
       # that TOFU + SHA256SUMS can't (they only catch corruption and
@@ -109,7 +165,7 @@ jobs:
       - name: SLSA build provenance
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
         with:
-          subject-path: dist/yactt_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz
+          subject-path: dist/yactt_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.libc == 'musl' && '_musl' || '' }}.tar.gz
 
   checksums:
     name: checksums
