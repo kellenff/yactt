@@ -129,7 +129,7 @@ yactt hybrid  /path/to/repo        # hybrid retrieval
 yactt mcp serve                    # MCP server on stdio
 ```
 
-The CLI is intentionally thin — `help`, `version`, `overview`, `chunk`, `hybrid`, `mcp serve`, `mcp serve --http`. Anything with logic lives under `internal/`.
+The CLI is intentionally thin — `help`, `version`, `overview`, `chunk`, `hybrid`, `mcp serve` (stdio), `mcp serve-http` (Streamable HTTP daemon). Anything with logic lives under `internal/`.
 
 ---
 
@@ -141,7 +141,7 @@ yactt ships two transports, sharing the same 21-tool surface. Pick one; the agen
 graph LR
   subgraph "Agent runtime"
     A[spawn on-demand] --> Y[yactt mcp serve]
-    B[long-lived daemon] --> Y2[yactt mcp serve --http :8080]
+    B[long-lived daemon] --> Y2[yactt mcp serve-http --port=8080]
   end
   Y --> M1["MCP<br/>stdio JSON-RPC"]
   Y2 --> M2["MCP<br/>Streamable HTTP"]
@@ -158,8 +158,23 @@ graph LR
 
 ```bash
 # Boot the daemon — survives agent restarts, context-window collapses
-yactt mcp serve --http :8080
-# yactt mcp serve listening on 127.0.0.1:8080 protocol=2025-03-26 registry=/Users/you/.cache/yactt/projects.json ...
+yactt mcp serve-http --port=8080
+# yactt mcp serve-http listening on 127.0.0.1:8080 protocol=2025-03-26 registry=/Users/you/.cache/yactt/projects.json ...
+```
+
+Full flag set (defaults in `cmd/yactt/main.go`):
+
+```text
+yactt mcp serve-http [options]
+
+  --port=<n>              TCP port to listen on (default 8080; 0 lets the kernel pick).
+  --bind=<addr>           Bind address (default 127.0.0.1; use 0.0.0.0 for non-loopback).
+  --auth-token=<token>    Require "Authorization: Bearer <token>" on every request.
+  --audit-log=<path>      Append one JSON line per tool call to <path> (mode 0600).
+  --registry=<path>       Registry file location (default $XDG_CACHE_HOME/yactt/projects.json).
+  --shutdown-grace=<dur>  Grace window for in-flight requests on SIGTERM (default 10s).
+  --max-sessions=<n>      Cap on concurrent sessions (default 256).
+  --idle-timeout=<dur>    Idle reap threshold (default 5m).
 ```
 
 Clients connect to two endpoints:
@@ -444,7 +459,7 @@ The trust strip above (`SLSA L3 · 21 tools · 6 languages · 1 dep · read-only
 - Multi-hop `query_graph` (Issue #9)
 - `detect_changes` git-ref diff impact (Issue #11)
 - `search_code` dedup + rank by enclosing symbol
-- **Persistent HTTP transport** — `yactt mcp serve --http :PORT` (2025-03-26 Streamable HTTP)
+- **Persistent HTTP transport** — `yactt mcp serve-http [--port=N]` (2025-03-26 Streamable HTTP)
 - **file:// URI migration** — every targeting tool takes a `file://` URI in `args.project`
 - **6 languages** — Go, TypeScript, JavaScript, Python, PHP, Rust (each with parsed-symbol tests)
 - SLSA Build Provenance Level 3 attestations on every release
