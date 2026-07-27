@@ -11,6 +11,21 @@ import (
 	"github.com/kellenff/yactt/internal/store/repofixture"
 )
 
+// invokeHybrid builds a fresh hybrid command, runs it with the given
+// args, and returns the error from Execute() plus the captured
+// stdout/stderr. Mirrors invokeChunk in chunk_test.go so the
+// argparse-level tests follow the same shape.
+func invokeHybrid(t *testing.T, args ...string) (string, string, error) {
+	t.Helper()
+	cmd := newCmdHybrid()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return out.String(), errOut.String(), err
+}
+
 // loadHybridFixture mirrors loadChunkFixture: load the repofixture
 // with no extras so the CLI tests share a single fixture pattern
 // with the chunk CLI tests.
@@ -102,59 +117,64 @@ func TestRunHybridPipeline_StructuralOnly(t *testing.T) {
 	}
 }
 
-// TestRunHybrid_RequiresRepo pins the --repo validation.
+// TestRunHybrid_RequiresRepo pins the --repo validation. Cobra
+// reports the missing-required-flag error in the form
+// `required flag(s) "repo" not set`.
 func TestRunHybrid_RequiresRepo(t *testing.T) {
-	err := runHybrid([]string{"--query", "x"})
+	_, _, err := invokeHybrid(t, "--query", "x")
 	if err == nil {
 		t.Fatal("expected error for missing --repo")
 	}
-	if !strings.Contains(err.Error(), "--repo") {
-		t.Errorf("error should mention --repo, got %v", err)
+	if !strings.Contains(err.Error(), "repo") {
+		t.Errorf("error should mention repo, got %v", err)
 	}
 }
 
 // TestRunHybrid_RequiresQuery pins the --query validation.
 func TestRunHybrid_RequiresQuery(t *testing.T) {
-	err := runHybrid([]string{"--repo", "/tmp"})
+	_, _, err := invokeHybrid(t, "--repo", "/tmp")
 	if err == nil {
 		t.Fatal("expected error for missing --query")
 	}
-	if !strings.Contains(err.Error(), "--query") {
-		t.Errorf("error should mention --query, got %v", err)
+	if !strings.Contains(err.Error(), "query") {
+		t.Errorf("error should mention query, got %v", err)
 	}
 }
 
 // TestRunHybrid_UnknownFlag pins flag validation.
 func TestRunHybrid_UnknownFlag(t *testing.T) {
-	err := runHybrid([]string{"--repo", "/tmp", "--query", "x", "--bogus"})
+	_, _, err := invokeHybrid(t, "--repo", "/tmp", "--query", "x", "--bogus")
 	if err == nil {
 		t.Fatal("expected error for unknown flag")
 	}
-	if !strings.Contains(err.Error(), "unknown flag") {
-		t.Errorf("error should mention unknown flag, got %v", err)
+	if !strings.Contains(err.Error(), "bogus") || !strings.Contains(err.Error(), "unknown") {
+		t.Errorf("error should mention unknown flag bogus, got %v", err)
 	}
 }
 
 // TestRunHybrid_HelpDoesNotError pins that --help is a clean exit.
+// In Cobra, --help short-circuits to a help print and Execute()
+// returns nil. We assert against the captured stdout/stderr buffers
+// so the help text is observable here too, not just visually.
 func TestRunHybrid_HelpDoesNotError(t *testing.T) {
-	var stderr bytes.Buffer
-	// redirect usage: capture it implicitly — runHybrid prints to
-	// os.Stdout for help, but we don't intercept it here. The
-	// contract is just "no error returned". A separate visual check
-	// is in the manual smoke script.
-	if err := runHybrid([]string{"--help"}); err != nil {
+	out, _, err := invokeHybrid(t, "--help")
+	if err != nil {
 		t.Fatalf("--help returned error: %v", err)
 	}
-	_ = stderr
+	if !strings.Contains(out, "hybrid") {
+		t.Errorf("--help stdout missing 'hybrid' marker: %q", out)
+	}
 }
 
 // TestRunHybrid_UnknownChannel pins the channel-list validation.
+// parseChannels runs in runHybrid; the error reaches Execute() as
+// a returned error from RunE.
 func TestRunHybrid_UnknownChannel(t *testing.T) {
-	err := runHybrid([]string{
+	_, _, err := invokeHybrid(t,
 		"--repo", "/tmp",
 		"--query", "x",
 		"--channels", "structural,bogus",
-	})
+	)
 	if err == nil {
 		t.Fatal("expected error for unknown channel")
 	}
