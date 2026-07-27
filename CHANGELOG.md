@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.0.14 — 2026-07-26
+
+### Added
+
+- **`Dockerfile` and `.containerignore`** for building the yactt MCP
+  HTTP daemon into a container image (Apple `container` / Docker;
+  linux/arm64). Defaults to the latest GitHub release; override with
+  `--build-arg YACTT_VERSION=vX.Y.Z` to pin a specific tag.
+
 ## 0.0.12 — 2026-07-20
 
 ### Added
