@@ -10,6 +10,8 @@
 >
 > ```bash
 > gh attestation verify yactt_darwin_arm64.tar.gz -R kellenff/yactt
+> # Linux/musl (Alpine, distroless, scratch) — statically linked, no glibc dependency
+> gh attestation verify yactt_linux_amd64_musl.tar.gz -R kellenff/yactt
 > ```
 
 yactt is an MCP server that gives an AI agent one parser-warm, URI-addressable view of code written in **Go, TypeScript, JavaScript, Python, PHP, and Rust**. It runs over persistent HTTP, so tree-sitter state survives agent restarts and context-window collapses — a 200k LOC Go monorepo stays parsed across sessions instead of paying 3-8s of reparse latency on every resume. Twenty-one tools, two direct dependencies (tree-sitter for parsing, Cobra for the CLI surface), read-only filesystem access, SLSA-L3 provenance. Paths are `file://` URIs, so the agent doesn't learn a new addressing dialect. *Yet Another Code Tree Tool*, in the GNU / YACC / WINE tradition; the name is tongue-in-cheek, the tool is serious.
@@ -117,10 +119,25 @@ For HTTP-capable clients, see **Transports** below.
 Download a binary tarball, or build from source:
 
 ```bash
-# macOS arm64 example
+# macOS arm64 (glibc)
 curl -fsSL https://github.com/kellenff/yactt/releases/latest/download/yactt_darwin_arm64.tar.gz \
   | tar -xz -C /usr/local/bin yactt_darwin_arm64 \
   && mv /usr/local/bin/yactt_darwin_arm64 /usr/local/bin/yactt
+
+# Linux amd64 on Alpine / distroless / scratch (musl, statically linked)
+curl -fsSL https://github.com/kellenff/yactt/releases/latest/download/yactt_linux_amd64_musl.tar.gz \
+  | tar -xz -C /usr/local/bin yactt_linux_amd64_musl \
+  && mv /usr/local/bin/yactt_linux_amd64_musl /usr/local/bin/yactt
+
+# Linux arm64 on Alpine / distroless / scratch (musl, statically linked)
+curl -fsSL https://github.com/kellenff/yactt/releases/latest/download/yactt_linux_arm64_musl.tar.gz \
+  | tar -xz -C /usr/local/bin yactt_linux_arm64_musl \
+  && mv /usr/local/bin/yactt_linux_arm64_musl /usr/local/bin/yactt
+
+# Linux glibc hosts (Debian, Ubuntu, RHEL, etc.) get the unsuffixed tarball
+curl -fsSL https://github.com/kellenff/yactt/releases/latest/download/yactt_linux_amd64.tar.gz \
+  | tar -xz -C /usr/local/bin yactt_linux_amd64 \
+  && mv /usr/local/bin/yactt_linux_amd64 /usr/local/bin/yactt
 
 # then
 yactt overview /path/to/repo        # tree dump as JSON
@@ -128,6 +145,15 @@ yactt chunk   /path/to/repo        # chunks for RAG ingestion
 yactt hybrid  /path/to/repo        # hybrid retrieval
 yactt mcp serve                    # MCP server on stdio
 ```
+
+**Picking the right Linux tarball.** Two glibc families get the bare
+`yactt_linux_<arch>.tar.gz` (apt/dnf/brew-managed Linux, dynamically
+linked to glibc). Anything musl-based — Alpine, `gcr.io/distroless/static`,
+`scratch` — should grab `yactt_linux_<arch>_musl.tar.gz`, which is
+statically linked (`CGO_ENABLED=1 CC=musl-gcc -extldflags=-static`) and
+ships with no dynamic linker dependency. The bundled `Dockerfile` uses
+the musl arm64 artifact and the resulting image runs on plain `alpine:latest`
+without `libc6-compat`.
 
 The CLI is intentionally thin — `help`, `version`, `overview`, `chunk`, `hybrid`, `mcp serve` (stdio), `mcp serve-http` (Streamable HTTP daemon). Anything with logic lives under `internal/`.
 
@@ -428,7 +454,8 @@ The trust strip above (`SLSA L3 · 21 tools · 6 languages · 2 deps · read-onl
 
 - **`SLSA L3`** — every release binary is signed and attested. Verify:
   ```bash
-  gh attestation verify yactt_darwin_arm64.tar.gz -R kellenff/yactt
+  gh attestation verify yactt_darwin_arm64.tar.gz      -R kellenff/yactt
+  gh attestation verify yactt_linux_amd64_musl.tar.gz  -R kellenff/yactt  # musl, statically linked
   ```
   The attestation payload is `provenance.intoto.jsonl`; its subject digest matches the SHA256 in the published `SHA256SUMS`. The upcoming SessionStart hook will run this verification at install time (today: SHA256 + TOFU; tomorrow: end-to-end provenance).
 
