@@ -11,7 +11,7 @@
     {
       "name": "yactt",
       "description": "Federated code intelligence for Go/TypeScript/JavaScript/Python. 21 MCP tools: explore, navigate, trace (call graph), impact (rename blast radius), quality (hotspots, dead code, cycles), and PR diff mapping.",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "author": {
         "name": "Kellen Frodelius-Fujimoto"
       },

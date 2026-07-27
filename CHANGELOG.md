@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.0.15 — 2026-07-26
+
 ### Added
 
 - **MUSL-linked Linux build targets.** Two new release artifacts:
