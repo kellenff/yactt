@@ -88,6 +88,11 @@ func DeleteProject(reg *registry.Registry) func(ctx context.Context, args json.R
 			return nil, fmt.Errorf("delete_project: registry: %w", err)
 		}
 
+		// Drop the in-process warm index entry so a subsequent
+		// Resolve against a re-indexed path cannot serve a
+		// ForceClose'd (or stale) *store.Repo.
+		project.EvictFor(reg, abs)
+
 		// Skip cache cleanup when the cache directory can't
 		// be resolved — nothing to remove. Caller still sees
 		// `cachePath` so they know what would have been

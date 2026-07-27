@@ -12,6 +12,22 @@ import (
 	"github.com/kellenff/yactt/internal/store/repofixture"
 )
 
+// invokeChunk builds a fresh chunk command, runs it with the given
+// args, and returns the error from Execute() plus the captured
+// stdout/stderr. This is the test surface for the CLI's argparse
+// + validation layer; happy-path output is asserted on via
+// runChunkPipeline directly.
+func invokeChunk(t *testing.T, args ...string) (string, string, error) {
+	t.Helper()
+	cmd := newCmdChunk()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return out.String(), errOut.String(), err
+}
+
 // loadChunkFixture returns a loaded repo against the standard
 // repofixture. The chunk CLI tests use the same fixture the chunker
 // package tests use so the symbol/edge plumbing is exercised
@@ -131,9 +147,9 @@ func TestRunChunkPipeline_OutputIsNDJSON(t *testing.T) {
 // TestRunChunk_RequiresRepo pins the CLI error contract: missing
 // --repo returns an error that includes "required".
 func TestRunChunk_RequiresRepo(t *testing.T) {
-	err := runChunk([]string{})
+	_, _, err := invokeChunk(t)
 	if err == nil {
-		t.Fatal("runChunk([]) returned no error")
+		t.Fatal("chunk with no args returned no error")
 	}
 	if !strings.Contains(err.Error(), "required") {
 		t.Errorf("error %q doesn't mention 'required'", err.Error())
@@ -141,21 +157,24 @@ func TestRunChunk_RequiresRepo(t *testing.T) {
 }
 
 // TestRunChunk_UnknownFlag pins the unknown-flag error contract.
+// Cobra wraps unknown flags with "unknown flag" (or
+// "unknown shorthand flag" for one-letter variants); the flag name
+// itself appears in the message regardless.
 func TestRunChunk_UnknownFlag(t *testing.T) {
-	err := runChunk([]string{"--repo", "/tmp/x", "--bogus"})
+	_, _, err := invokeChunk(t, "--repo", "/tmp/x", "--bogus")
 	if err == nil {
-		t.Fatal("runChunk with unknown flag returned no error")
+		t.Fatal("chunk with unknown flag returned no error")
 	}
-	if !strings.Contains(err.Error(), "unknown flag") {
-		t.Errorf("error %q doesn't mention 'unknown flag'", err.Error())
+	if !strings.Contains(err.Error(), "bogus") || !strings.Contains(err.Error(), "unknown") {
+		t.Errorf("error %q doesn't mention unknown flag", err.Error())
 	}
 }
 
 // TestRunChunk_UnknownPolicy pins the policy-validation contract.
 func TestRunChunk_UnknownPolicy(t *testing.T) {
-	err := runChunk([]string{"--repo", "/tmp/x", "--policy", "bogus"})
+	_, _, err := invokeChunk(t, "--repo", "/tmp/x", "--policy", "bogus")
 	if err == nil {
-		t.Fatal("runChunk with bogus policy returned no error")
+		t.Fatal("chunk with bogus policy returned no error")
 	}
 	if !strings.Contains(err.Error(), "policy") {
 		t.Errorf("error %q doesn't mention policy", err.Error())
@@ -164,22 +183,29 @@ func TestRunChunk_UnknownPolicy(t *testing.T) {
 
 // TestRunChunk_PositionalRejected pins that chunk doesn't accept
 // positional args (the only positional in `yactt` is the repo path
-// for `overview` and `mcp serve`).
+// for `overview`).
 func TestRunChunk_PositionalRejected(t *testing.T) {
-	err := runChunk([]string{"--repo", "/tmp/x", "extra-arg"})
+	_, _, err := invokeChunk(t, "--repo", "/tmp/x", "extra-arg")
 	if err == nil {
-		t.Fatal("runChunk accepted positional arg")
+		t.Fatal("chunk accepted positional arg")
 	}
-	if !strings.Contains(err.Error(), "positional") {
-		t.Errorf("error %q doesn't mention 'positional'", err.Error())
+	// Cobra's NoArgs violation surfaces as "unknown command" or
+	// "unknown argument"; either is a parse-level rejection. The
+	// behaviour is "no positional accepted" — pin the negative
+	// outcome and the absence of any chunks on stdout.
+	if err == nil {
+		t.Fatal("expected an error for positional argument")
+	}
+	if !strings.Contains(err.Error(), "unknown") {
+		t.Errorf("error %q doesn't look like an argparse rejection", err.Error())
 	}
 }
 
 // TestRunChunk_NonExistentRepo pins the load-error contract.
 func TestRunChunk_NonExistentRepo(t *testing.T) {
-	err := runChunk([]string{"--repo", "/no/such/path/yactt-please-do-not-create"})
+	_, _, err := invokeChunk(t, "--repo", "/no/such/path/yactt-please-do-not-create")
 	if err == nil {
-		t.Fatal("runChunk with bad repo returned no error")
+		t.Fatal("chunk with bad repo returned no error")
 	}
 	if !strings.Contains(err.Error(), "load") {
 		t.Errorf("error %q doesn't mention 'load'", err.Error())

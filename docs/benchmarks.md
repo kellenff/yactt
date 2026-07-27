@@ -27,6 +27,16 @@ go test -bench=. -benchmem ./internal/parser/...
 # A specific benchmark.
 go test -bench='^BenchmarkToolNodeGet' -benchmem ./internal/tool/...
 
+# HTTP MCP transport (small + medium project sizes).
+go test -bench='^BenchmarkHTTP' -benchmem ./internal/mcp/transport/http/...
+
+# External Go HTTP client path (real TCP listener).
+go test -bench='^BenchmarkHTTPClient' -benchmem ./internal/mcp/transport/http/...
+
+# Large real-world fixture only (fastify/fastify; clones once into
+# tests/fixtures/.cache/, then offline-safe).
+go test -bench='ToolsCall/large' -benchmem ./internal/mcp/transport/http/...
+
 # Heavy benchmarks (LoadFixture, ReparseOneFile) benefit from longer benchtime.
 go test -bench='^BenchmarkLoadFixture$' -benchtime=10x ./internal/store/...
 ```
@@ -63,6 +73,8 @@ PASS
 | `BenchmarkLocateSymbol` | `internal/store/` | By-ID lookup |
 | `BenchmarkEdgesByCallee` / `BenchmarkEdgesByCaller` / `BenchmarkImportsIn` | `internal/store/` | Persisted index accessors |
 | `BenchmarkDispatchToolsCall` / `BenchmarkDispatchToolsList` / `BenchmarkRegisterTool` | `internal/mcp/` | JSON-RPC dispatch + tool registry |
+| `BenchmarkHTTP_Initialize` / `BenchmarkHTTP_ToolsList` / `BenchmarkHTTP_ToolsCall` | `internal/mcp/transport/http/` | MCP over Streamable HTTP via `httptest` (`serve-http`); `ToolsCall` sweeps small (repofixture), medium (genfixture 100-file), and large (fastify/fastify @ pinned SHA) |
+| `BenchmarkHTTPClient_Initialize` / `BenchmarkHTTPClient_ToolsList` / `BenchmarkHTTPClient_ToolsCall` | `internal/mcp/transport/http/` | Same MCP surface through a dedicated `*http.Client` against a real loopback TCP listener (agent-harness shaped); same size matrix including large/fastify |
 | `BenchmarkToolTreeOverview` | `internal/tool/` | `tree_overview` handler |
 | `BenchmarkToolFindCode` / `BenchmarkToolFindSymbol` / `BenchmarkToolNodeEdges` / `BenchmarkToolFindReferencingSymbols` | `internal/tool/` | The navigation tools |
 | `BenchmarkToolNodeGet_signature` / `_body` / `_source` | `internal/tool/` | Layer materialisation; signature < body < source in cost |
@@ -142,11 +154,13 @@ this plugin?"
   loop is sequential. If you suspect a contention bug, write a
   `t.Parallel()` test or a stress harness — both are out of scope for
   these benches.
-- **Real repos.** Every bench uses an inline fixture (repofixture,
-  sample-go, or t.TempDir). The shape is small enough to be
-  deterministic and large enough to be representative. If you want to
-  bench against your own repo, copy a benchmark file and swap the
-  fixture loader.
+- **Real repos (except the pinned large fixture).** Most benches use
+  inline fixtures (repofixture, sample-go, or t.TempDir). The HTTP MCP
+  benches also include a **large** size: `fastify/fastify` at a pinned
+  SHA via `tests/fixtures/realrepo`, cached under
+  `tests/fixtures/.cache/` (gitignored). First run needs network +
+  `git`; later runs are offline. To bench against your own repo, copy
+  a benchmark file and swap the fixture loader.
 - **Tool-layer ID consistency regressions.** Each tool handler
   round-trips args through `json.RawMessage` literals, so a wire-
   schema rename surfaces as a parse error — not a silent miss. The

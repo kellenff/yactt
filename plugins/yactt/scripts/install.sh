@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Bootstraps the yactt binary from GitHub Releases. Runs on every
-# Claude Code SessionStart. No-ops when the installed version is
-# already current or when the project-local bin/yactt exists
-# (developer escape hatch).
+# Installs the verified yactt release and reconciles its persistent
+# macOS user LaunchAgent. Runs on every Claude Code SessionStart;
+# unchanged binaries and service configuration leave the warm HTTP
+# MCP daemon untouched. A project-local bin/yactt remains the
+# developer escape hatch and becomes the LaunchAgent executable.
 #
 # Install path: $XDG_HOME/bin/yactt if XDG_HOME is set, otherwise
-# $HOME/.local/bin/yactt. Both are XDG-conventional locations that
-# most shells have on PATH.
+# $HOME/.local/bin/yactt. The LaunchAgent always uses an absolute path.
 set -euo pipefail
 
 REPO="kellenff/yactt"
@@ -35,10 +35,15 @@ KNOWN_GOOD_FILE="${XDG_DATA_HOME:-${HOME}/.local/share}/yactt/known-good"
 CACHE_FILE="${XDG_CACHE_HOME:-${HOME}/.cache}/yactt/latest"
 CACHE_TTL=3600
 
-# --- developer escape hatch: project-local build wins ---
-if [[ -x "${CLAUDE_PROJECT_DIR:-}/bin/yactt" ]]; then
-	exit 0
-fi
+# --- persistent HTTP MCP LaunchAgent (macOS user domain) ---
+LAUNCH_LABEL="com.kellenff.yactt.mcp"
+HTTP_PORT=57812
+LAUNCH_AGENT_DIR="${HOME}/Library/LaunchAgents"
+LAUNCH_AGENT_PATH="${LAUNCH_AGENT_DIR}/${LAUNCH_LABEL}.plist"
+LOG_DIR="${HOME}/Library/Logs/yactt"
+STDOUT_LOG="${LOG_DIR}/mcp.stdout.log"
+STDERR_LOG="${LOG_DIR}/mcp.stderr.log"
+LAUNCH_DOMAIN="gui/$(id -u)"
 
 cache_age() {
 	local f="${1}"
@@ -49,8 +54,9 @@ cache_age() {
 }
 
 installed_version() {
-	command -v yactt >/dev/null 2>&1 || return 1
-	yactt version 2>/dev/null | awk '{print $2}' | sed 's/^v//'
+	local binary="${1:-${INSTALL_PATH}}"
+	[[ -x "${binary}" ]] || return 1
+	"${binary}" version 2>/dev/null | awk '{print $2}' | sed 's/^v//'
 }
 
 # Lightweight semver allowlist. Accepts:
@@ -74,7 +80,7 @@ latest_version() {
 		# Cache content invalid — fall through to the API.
 	fi
 	if ! command -v jq >/dev/null 2>&1; then
-		echo "yactt: 'jq' required for bootstrap (brew install jq / apt install jq)" >&2
+		echo "yactt: 'jq' required for bootstrap (brew install jq)" >&2
 		return 1
 	fi
 	local v
@@ -91,17 +97,106 @@ latest_version() {
 
 os_arch() {
 	local os arch
-	case "$(uname -s)" in
-		Darwin) os=darwin ;;
-		Linux) os=linux ;;
-		*) echo "yactt: unsupported OS $(uname -s) — skipping bootstrap" >&2; return 1 ;;
-	esac
+	os=$(uname -s)
+	if [[ "${os}" != "Darwin" ]]; then
+		echo "yactt: the yactt Claude Code plugin only supports macOS (found ${os})" >&2
+		return 1
+	fi
+
 	case "$(uname -m)" in
 		arm64 | aarch64) arch=arm64 ;;
 		x86_64 | amd64) arch=amd64 ;;
-		*) echo "yactt: unsupported arch $(uname -m) — skipping bootstrap" >&2; return 1 ;;
+		*) echo "yactt: unsupported macOS architecture $(uname -m)" >&2; return 1 ;;
 	esac
-	echo "${os}_${arch}"
+	echo "darwin_${arch}"
+}
+
+xml_escape() {
+	printf '%s' "$1" | sed \
+		-e 's/&/\&amp;/g' \
+		-e 's/</\&lt;/g' \
+		-e 's/>/\&gt;/g'
+}
+
+render_launch_agent() {
+	local binary="$1"
+	local binary_xml stdout_xml stderr_xml
+	binary_xml=$(xml_escape "${binary}")
+	stdout_xml=$(xml_escape "${STDOUT_LOG}")
+	stderr_xml=$(xml_escape "${STDERR_LOG}")
+
+	cat <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>${LAUNCH_LABEL}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>${binary_xml}</string>
+		<string>mcp</string>
+		<string>serve-http</string>
+		<string>--bind=127.0.0.1</string>
+		<string>--port=${HTTP_PORT}</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>StandardOutPath</key>
+	<string>${stdout_xml}</string>
+	<key>StandardErrorPath</key>
+	<string>${stderr_xml}</string>
+</dict>
+</plist>
+PLIST
+}
+
+install_launch_agent() {
+	local binary="$1"
+	local binary_changed="${2:-0}"
+	local tmp plist_changed=0 loaded=0
+	local service="${LAUNCH_DOMAIN}/${LAUNCH_LABEL}"
+
+	mkdir -p "${LAUNCH_AGENT_DIR}" "${LOG_DIR}"
+	tmp=$(mktemp "${LAUNCH_AGENT_DIR}/.${LAUNCH_LABEL}.XXXXXX")
+	render_launch_agent "${binary}" > "${tmp}"
+	if ! plutil -lint "${tmp}" >/dev/null; then
+		rm -f "${tmp}"
+		echo "yactt: generated LaunchAgent plist failed validation" >&2
+		return 1
+	fi
+	chmod 0644 "${tmp}"
+
+	if [[ -f "${LAUNCH_AGENT_PATH}" ]] && cmp -s "${tmp}" "${LAUNCH_AGENT_PATH}"; then
+		rm -f "${tmp}"
+	else
+		plist_changed=1
+	fi
+
+	if launchctl print "${service}" >/dev/null 2>&1; then
+		loaded=1
+	fi
+
+	if (( plist_changed )); then
+		if (( loaded )); then
+			if ! launchctl bootout "${service}"; then
+				rm -f "${tmp}"
+				return 1
+			fi
+		fi
+		mv "${tmp}" "${LAUNCH_AGENT_PATH}"
+		launchctl bootstrap "${LAUNCH_DOMAIN}" "${LAUNCH_AGENT_PATH}"
+	elif (( ! loaded )); then
+		launchctl bootstrap "${LAUNCH_DOMAIN}" "${LAUNCH_AGENT_PATH}"
+	elif (( binary_changed )); then
+		launchctl kickstart -k "${service}"
+	fi
 }
 
 download_and_install() {
@@ -164,9 +259,8 @@ download_and_install() {
 	mkdir -p "$(dirname "${KNOWN_GOOD_FILE}")"
 	printf '%s %s\n' "${version}" "${actual}" > "${KNOWN_GOOD_FILE}"
 
-	# PATH sanity check — soft warning, not fatal. The MCP server
-	# will fail to start if yactt is unreachable, which surfaces the
-	# problem loudly enough.
+	# PATH sanity check for direct CLI use. The LaunchAgent executes
+	# INSTALL_PATH directly and does not depend on the shell's PATH.
 	if ! command -v yactt >/dev/null 2>&1; then
 		echo "yactt: WARNING — ${INSTALL_DIR} is not on PATH." >&2
 		echo "         Add 'export PATH=\"${INSTALL_DIR}:\$PATH\"' to your shell rc." >&2
@@ -175,18 +269,31 @@ download_and_install() {
 
 main() {
 	local target
-	target=$(os_arch) || exit 0
-	local latest installed
+	target=$(os_arch) || return 1
+
+	local local_binary=""
+	if [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then
+		local_binary="${CLAUDE_PROJECT_DIR}/bin/yactt"
+	fi
+	if [[ -n "${local_binary}" && -x "${local_binary}" ]]; then
+		install_launch_agent "${local_binary}" 0
+		return
+	fi
+
+	local latest installed binary_changed=0
 	latest=$(latest_version) || {
 		echo "yactt: cannot reach GitHub Releases; plugin will not work until network is back" >&2
-		exit 1
+		return 1
 	}
-	installed=$(installed_version || true)
+	installed=$(installed_version "${INSTALL_PATH}" || true)
 
-	if [[ "${installed}" == "${latest}" ]]; then
-		exit 0
+	if [[ "${installed}" != "${latest}" ]]; then
+		download_and_install "${latest}" "${target}"
+		binary_changed=1
 	fi
-	download_and_install "${latest}" "${target}"
+	install_launch_agent "${INSTALL_PATH}" "${binary_changed}"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+	main "$@"
+fi

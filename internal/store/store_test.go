@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kellenff/yactt/internal/cache"
 	"github.com/kellenff/yactt/internal/parser"
 	"github.com/kellenff/yactt/internal/store"
 	"github.com/kellenff/yactt/internal/store/repofixture"
@@ -174,8 +175,10 @@ func TestCachedFileRereadsOnMtimeChange(t *testing.T) {
 		t.Fatalf("CachedFile initial: %v", err)
 	}
 
-	// Touch the file to advance its mtime; modify content to make the change observable.
-	time.Sleep(2 * time.Millisecond) // ensure the new mtime is strictly greater
+	// Modify content and force mtime strictly past the cached value.
+	// A short sleep is not enough under load (coarser FS clocks / busy
+	// runners can keep WriteFile inside the same mtime tick); Chtimes
+	// makes the invalidation contract deterministic.
 	original, err := os.ReadFile(fix.LoginPath)
 	if err != nil {
 		t.Fatal(err)
@@ -185,6 +188,10 @@ func TestCachedFileRereadsOnMtimeChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.WriteFile(fix.LoginPath, original, 0o644)
+	newMTime := time.Unix(0, f1.MTime).Add(time.Second)
+	if err := os.Chtimes(fix.LoginPath, newMTime, newMTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
 
 	f2, err := r.CachedFile(fix.LoginPath)
 	if err != nil {
@@ -195,6 +202,38 @@ func TestCachedFileRereadsOnMtimeChange(t *testing.T) {
 	}
 	if !strings.Contains(string(f2.Bytes), "LoginV2") {
 		t.Errorf("re-read content missing LoginV2: %q", f2.Bytes)
+	}
+}
+
+// TestCachedFile_TinyLRUUsesResidentFiles pins the warm-path contract:
+// Load fills Repo.files, and CachedFile must return that resident
+// *source.File even when the LRU is too small to hold the working set.
+// A tiny NewSized(1,1) cache stands in for "N > DefaultFileCap" without
+// materialising 50k files. chmod 000 makes any reparse fail ReadFile.
+func TestCachedFile_TinyLRUUsesResidentFiles(t *testing.T) {
+	r, fix := loadFixture(t)
+	r.SetCacheForTest(cache.NewSized(1, 1))
+
+	if err := os.Chmod(fix.LoginPath, 0o000); err != nil {
+		t.Fatalf("chmod 000: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(fix.LoginPath, 0o644) })
+
+	// Touch a second file first so the 1-slot LRU evicts LoginPath if
+	// anything PutFile's it — resident map must still serve LoginPath.
+	if _, err := r.CachedFile(fix.UserPath); err != nil {
+		t.Fatalf("CachedFile(user) priming LRU: %v", err)
+	}
+
+	f, err := r.CachedFile(fix.LoginPath)
+	if err != nil {
+		t.Fatalf("CachedFile after tiny-LRU eviction + chmod 000: %v (expected resident hit)", err)
+	}
+	if f.Root == nil {
+		t.Error("Root should be non-nil on resident hit")
+	}
+	if !strings.Contains(string(f.Bytes), "func Login") {
+		t.Errorf("resident bytes missing Login: %q", f.Bytes[:min(80, len(f.Bytes))])
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"github.com/kellenff/yactt/internal/audit"
 	"github.com/kellenff/yactt/internal/mcp"
 	"github.com/kellenff/yactt/internal/persisted"
+	"github.com/kellenff/yactt/internal/project"
 	"github.com/kellenff/yactt/internal/registry"
 )
 
@@ -12,8 +13,12 @@ import (
 // All 21 tools register here. The four registry tools
 // (list_projects, index_repository, index_status, delete_project)
 // work against the registry directly; the 15 code-intel tools
-// resolve their project URI through `reg` on every call (no
-// pre-loaded *store.Repo needed).
+// resolve their project URI through `reg` on every call.
+//
+// A process-lifetime project.Index is bound to `reg` so Resolve
+// reuses loaded *store.Repo values across tool calls (parser-warm
+// symbol tables + LSP clients). delete_project evicts from the
+// Index; index_repository refreshes it on a cold/reloaded walk.
 //
 // `emitStartup` and `warnTrust` are the audit + TOFU hooks used
 // by index_repository. They run at most once per process
@@ -24,7 +29,14 @@ import (
 // Extracted from cmd/yactt/main.go so the persistent HTTP
 // transport can share the wiring without duplicating the
 // descriptions.
-func RegisterAllTools(srv *mcp.Server, reg *registry.Registry, emitStartup func(audit.Startup) error, warnTrust func()) {
+//
+// The returned Index is the warm cache bound to `reg`. Callers
+// that shut down cleanly may Close it to reap pinned LSP
+// children; process exit also reaps them.
+func RegisterAllTools(srv *mcp.Server, reg *registry.Registry, emitStartup func(audit.Startup) error, warnTrust func()) *project.Index {
+	idx := project.NewIndex()
+	project.BindIndex(reg, idx)
+
 	// Four registry tools — all the server exposes, plus the 15
 	// code-intel tools below. There is no single-repo boot path;
 	// every code-intel tool resolves its project URI through `reg`.
@@ -34,7 +46,7 @@ func RegisterAllTools(srv *mcp.Server, reg *registry.Registry, emitStartup func(
 		Handler: ListProjects(reg),
 	})
 	srv.RegisterTool(mcp.ToolDef{
-		Name: "index_repository", Description: "Required first call: walk a repo at `project` (file:// URI), write an entry to the registry, return the row. After this returns, the 15 code-intel tools appear in `tools/list`. Mode knob is accepted (only `full` is wired today). Emits a startup audit line on the first successful index per process.",
+		Name: "index_repository", Description: "Required first call: walk a repo at `project` (file:// URI), write an entry to the registry, return the row. After this returns, the 15 code-intel tools appear in `tools/list`. Mode knob is accepted (only `full` is wired today). Emits a startup audit line on the first successful index per process. Primes the in-process warm index so subsequent code-intel calls reuse the parsed graph.",
 		InputSchema: IndexRepositorySchema, OutputSchema: IndexRepositoryOutputSchema,
 		Handler: IndexRepository(reg, emitStartup, warnTrust),
 	})
@@ -44,7 +56,7 @@ func RegisterAllTools(srv *mcp.Server, reg *registry.Registry, emitStartup func(
 		Handler: IndexStatus(reg),
 	})
 	srv.RegisterTool(mcp.ToolDef{
-		Name: "delete_project", Description: "Evict `project` (file:// URI) from the registry and remove its per-repo cache directory. Idempotent on missing rows — safe to retry on a stale or half-deleted entry.",
+		Name: "delete_project", Description: "Evict `project` (file:// URI) from the registry, remove its per-repo cache directory, and drop it from the in-process warm index. Idempotent on missing rows — safe to retry on a stale or half-deleted entry.",
 		InputSchema: DeleteProjectSchema, OutputSchema: DeleteProjectOutputSchema,
 		Handler: DeleteProject(reg),
 	})
@@ -112,6 +124,7 @@ func RegisterAllTools(srv *mcp.Server, reg *registry.Registry, emitStartup func(
 		"detect_changes":           detectChanges,
 	}
 	RegisterPersistedQuery(srv, toolFuncs)
+	return idx
 }
 
 // RegisterPersistedQuery wires the persisted_query tool onto the

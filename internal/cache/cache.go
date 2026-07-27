@@ -23,11 +23,16 @@ import (
 // ErrMiss is returned by lookup functions when no live entry exists.
 var ErrMiss = errors.New("cache: miss")
 
-// DefaultSizes are tuned for MVP. Each entry is a parsed file (a few KiB for
-// medium source files plus the CST); 256 entries fit a small repo comfortably.
+// DefaultSizes favour warm-path hit rate over a tight RSS budget.
+// Memory is cheap relative to tree-sitter reparse: a parsed source.File
+// is typically tens to hundreds of KiB, so tens of thousands of entries
+// still fit comfortably in a persistent HTTP daemon. DefaultFileCap is
+// aligned with store.DefaultMaxFiles (50_000) so one fully-loaded
+// monorepo's working set fits in the hot LRU; DefaultLayerCap is 4×
+// that for signature/body/source layers derived from those files.
 const (
-	DefaultFileCap     = 256
-	DefaultLayerCap    = 1024
+	DefaultFileCap     = 50_000
+	DefaultLayerCap    = 200_000
 	DefaultSemanticTTL = 5 * time.Minute
 	DefaultSummaryTTL  = 24 * time.Hour
 )

@@ -72,6 +72,12 @@ type Repo struct {
 	rootPkg       string
 	prov          domain.Provenance
 
+	// pinned marks a repo owned by project.Index. Close() is a
+	// no-op while pinned so tool handlers can keep their
+	// `defer repo.Close()` without tearing down a shared warm
+	// index; ForceClose() clears the pin and reaps LSP children.
+	pinned bool
+
 	// LSP subgraph (Tier 1). Each map is keyed by parser.Name; the keys
 	// present at any time are the languages whose server started
 	// successfully. Nil keys (or absent entries) mean "no server for
@@ -441,7 +447,52 @@ func (r *Repo) LSPForFile(path string) (*lsp.Client, string, string) {
 //
 // Callers should defer `r.Close()` right after `store.Load` so server
 // children are always reaped, regardless of the exit path.
+//
+// When the repo is Pin()'d (owned by project.Index), Close is a
+// no-op — the warm index outlives individual tool calls. Use
+// ForceClose to reap a pinned repo on eviction / shutdown.
 func (r *Repo) Close() error {
+	r.mu.RLock()
+	pinned := r.pinned
+	r.mu.RUnlock()
+	if pinned {
+		return nil
+	}
+	return r.closeLSP()
+}
+
+// Pin marks this repo as owned by an in-process warm index.
+// Subsequent Close() calls become no-ops until ForceClose.
+func (r *Repo) Pin() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pinned = true
+}
+
+// SetCacheForTest replaces the in-memory LRU. Test-only — used to
+// install a tiny fileCap so overflow / resident-map behaviour can be
+// exercised without materialising DefaultFileCap+1 source files.
+func (r *Repo) SetCacheForTest(c *cache.Cache) {
+	if c == nil {
+		c = cache.New()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cache = c
+}
+
+// ForceClose clears the pin (if any) and reaps LSP children.
+// Used by project.Index on eviction and shutdown.
+func (r *Repo) ForceClose() error {
+	r.mu.Lock()
+	r.pinned = false
+	r.mu.Unlock()
+	return r.closeLSP()
+}
+
+func (r *Repo) closeLSP() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var firstErr error
 	for _, c := range r.lsp {
 		if c == nil {
@@ -513,6 +564,16 @@ func PackagePath(root, p string) string {
 // CachedFile returns the parsed source.File for path, taking a fresh read if
 // the on-disk content has changed. Returns ErrNotFound for files outside the
 // repo.
+//
+// Lookup order:
+//  1. in-memory LRU (hot layer; capped at cache.DefaultFileCap)
+//  2. Load-resident r.files map (unbounded; every source file Load saw)
+//  3. source.LoadFile reparse
+//
+// Step 2 covers the gap where Load fills r.files but does not seed the
+// LRU, and callers like find_code walk every path via CachedFile. Without
+// the resident hit, an undersized LRU thrash-reparses with tree-sitter —
+// the fastify large HTTP bench paid ~200ms/op under the old 256-entry cap.
 func (r *Repo) CachedFile(path string) (*source.File, error) {
 	if !strings.HasPrefix(path, r.root) {
 		return nil, ErrNotFound
@@ -525,6 +586,14 @@ func (r *Repo) CachedFile(path string) (*source.File, error) {
 	if f, err := r.cache.GetFile(path, mtime); err == nil {
 		return f, nil
 	}
+	// Prefer the Load-resident map over a tree-sitter reparse.
+	r.mu.RLock()
+	if f, ok := r.files[path]; ok && f != nil && f.MTime == mtime {
+		r.mu.RUnlock()
+		r.cache.PutFile(f)
+		return f, nil
+	}
+	r.mu.RUnlock()
 	lang, lerr := parser.Detect(path)
 	if lerr != nil {
 		return nil, lerr

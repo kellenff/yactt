@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+## 0.0.14 — 2026-07-26
+
+### Added
+
+- **`Dockerfile` and `.containerignore`** for building the yactt MCP
+  HTTP daemon into a container image (Apple `container` / Docker;
+  linux/arm64). Defaults to the latest GitHub release; override with
+  `--build-arg YACTT_VERSION=vX.Y.Z` to pin a specific tag.
+
+## 0.0.12 — 2026-07-20
+
+### Added
+
+- **Persistent in-process project indexing.** `RegisterAllTools` binds a
+  `project.Index` to the registry so `project.Resolve` reuses a pinned
+  `*store.Repo` (symbol table, call-edge graph, LSP clients) across tool
+  calls. `index_repository` primes the Index; `delete_project` evicts it.
+  Callers keep `defer repo.Close()` — Close is a no-op on pinned repos;
+  ForceClose runs on eviction / daemon shutdown. This is the parser-warm
+  path for `yactt mcp serve` / `mcp serve-http` that the file:// migration
+  deferred when it moved to per-call Resolve.
+- **Persistent macOS MCP service (Claude Code plugin).** SessionStart
+  installs/reconciles a user LaunchAgent that runs `yactt mcp serve-http`,
+  points Claude at the warm HTTP endpoint, and only restarts when the
+  binary or plist changes.
+- HTTP MCP benchmarks for small/medium projects, external Go HTTP clients,
+  and a fastify fixture.
+
+### Changed
+
+- Default LRU cache caps raised for monorepo-scale workloads.
+- `CachedFile` no longer reparses already-warm files.
+
+### Fixed
+
+- Plugin release detection uses the absolute install path so LaunchAgent
+  reconciliation stays stable across upgrades.
+
+## 0.0.11 — 2026-07-14
+
 ### Breaking changes (MCP project-reference migration)
 
 The optional positional path argument on `yactt mcp serve` is

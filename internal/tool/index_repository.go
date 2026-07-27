@@ -154,6 +154,20 @@ func IndexRepository(reg *registry.Registry, emitStartup func(audit.Startup) err
 				if _, serr := os.Stat(cacheDir); serr == nil {
 					newest, werr := newestMTime(abs)
 					if werr == nil && !newest.After(existing.IndexedAt) {
+						// Disk cache is fresh. If the in-process
+						// Index doesn't yet hold this path (daemon
+						// just started, or BindIndex raced), prime
+						// it from the disk cache so the next
+						// code-intel call is a warm hit — without
+						// flipping Reloaded to true.
+						if idx := project.IndexFor(reg); idx != nil {
+							if _, ok := idx.Get(abs); !ok {
+								if warm, _, lerr := store.Load(abs, registry.LoadOptsWithDiskCache(abs)...); lerr == nil {
+									project.PutFor(reg, warm)
+									_ = warm.Close()
+								}
+							}
+						}
 						return &IndexRepositoryResult{
 							Entry:    existing,
 							Warnings: 0,
@@ -165,10 +179,13 @@ func IndexRepository(reg *registry.Registry, emitStartup func(audit.Startup) err
 		}
 
 		// One-shot store.Load to count files + detect languages.
+		// Also primes the in-process warm Index (when bound) so
+		// the next code-intel Resolve is a hit.
 		repo, errs, lerr := store.Load(abs, registry.LoadOptsWithDiskCache(abs)...)
 		if lerr != nil {
 			return nil, fmt.Errorf("index_repository: load: %w", lerr)
 		}
+		project.PutFor(reg, repo)
 		// Audit + TOFU emit on the first successful index per
 		// process. Memoised by `once`; both closures are
 		// nil-safe so tests can pass nil and skip these

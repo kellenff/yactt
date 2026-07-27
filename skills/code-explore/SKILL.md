@@ -1,6 +1,6 @@
 ---
+name: code-explore
 description: Use when exploring, understanding, summarizing, or reviewing a Go/TypeScript/JavaScript/Python codebase.
-Triggers on: explore the codebase, navigate code, understand the architecture, who calls this function, what does X call, find callers, find callees, look up a symbol, find symbol definition, where is X used, trace the call chain, dead code, unused functions, high fan-out, refactor candidates, code quality audit, code hotspots, rename impact, blast radius, what will break, AST-aware search, call graph, review my changes, PR review impact. Walks the tree with YACTT (tree_overview), drills into symbols (find_symbol, node_get), traces references (node_edges, find_referencing_symbols), and assesses rename impact (edit_impact).
 ---
 
 # Code exploration with yactt
