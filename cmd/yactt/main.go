@@ -18,7 +18,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 )
 
@@ -30,12 +29,4 @@ var version = "dev"
 
 func main() {
 	os.Exit(Execute())
-}
-
-// runStartupLine prints the on-startup banner to stderr when audit
-// mode is active. The MCP server emits it once per process via the
-// emitStartup hook; the CLI version exists so the stderr capture in
-// tests doesn't have to mock os.Stderr to avoid the line.
-func runStartupLine(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format, args...)
 }

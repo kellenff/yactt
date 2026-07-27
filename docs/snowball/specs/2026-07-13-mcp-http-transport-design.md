@@ -293,7 +293,7 @@ End-to-end conformance test replays the canonical client session (`initialize �
 - **Registry file** — unchanged.
 - **Audit log** — additive only. `session_id` and `client_addr` are optional and absent in stdio mode. Existing scripts that parse the JSON line still work.
 - **Plugin configs** — no change to `.mcp.json`, the Claude plugin, the Pi extension, or the Junie extension. They continue to use stdio.
-- **Dependency surface** — `log/slog` is stdlib; no new module requires. The "1 dep" badge claim holds.
+- **Dependency surface** — `log/slog` is stdlib; no new module requires. The CLI parser migration (hand-rolled → Cobra) bumped the direct-dep count to 2 (tree-sitter + cobra), with two indirect deps (mousetrap, pflag). The README's trust strip and receipts were updated to match; the snake_case "1 dep" → "2 deps" is the only user-facing change. `govulncheck ./...` is clean.
 
 **Operator migration path:**
 
