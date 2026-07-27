@@ -2,7 +2,7 @@
 
 **Federated code intelligence for AI agents — lossless source, resolved semantics, MCP-native.**
 
-`SLSA L3` · `21 tools` · `6 languages` · `1 dep` · `read-only`
+`SLSA L3` · `21 tools` · `6 languages` · `2 deps` · `read-only`
 
 *Walk the tree, choose your layer.*
 
@@ -12,7 +12,7 @@
 > gh attestation verify yactt_darwin_arm64.tar.gz -R kellenff/yactt
 > ```
 
-yactt is an MCP server that gives an AI agent one parser-warm, URI-addressable view of code written in **Go, TypeScript, JavaScript, Python, PHP, and Rust**. It runs over persistent HTTP, so tree-sitter state survives agent restarts and context-window collapses — a 200k LOC Go monorepo stays parsed across sessions instead of paying 3-8s of reparse latency on every resume. Twenty-one tools, one tree-sitter dependency, read-only filesystem access, SLSA-L3 provenance. Paths are `file://` URIs, so the agent doesn't learn a new addressing dialect. *Yet Another Code Tree Tool*, in the GNU / YACC / WINE tradition; the name is tongue-in-cheek, the tool is serious.
+yactt is an MCP server that gives an AI agent one parser-warm, URI-addressable view of code written in **Go, TypeScript, JavaScript, Python, PHP, and Rust**. It runs over persistent HTTP, so tree-sitter state survives agent restarts and context-window collapses — a 200k LOC Go monorepo stays parsed across sessions instead of paying 3-8s of reparse latency on every resume. Twenty-one tools, two direct dependencies (tree-sitter for parsing, Cobra for the CLI surface), read-only filesystem access, SLSA-L3 provenance. Paths are `file://` URIs, so the agent doesn't learn a new addressing dialect. *Yet Another Code Tree Tool*, in the GNU / YACC / WINE tradition; the name is tongue-in-cheek, the tool is serious.
 
 ---
 
@@ -424,7 +424,7 @@ The on-disk cache layout is `$XDG_CACHE_HOME/yactt/<root-hash>/` per repo — so
 
 ## What's behind the badge row
 
-The trust strip above (`SLSA L3 · 21 tools · 6 languages · 1 dep · read-only`) is five claims. Each one has a receipt.
+The trust strip above (`SLSA L3 · 21 tools · 6 languages · 2 deps · read-only`) is five claims. Each one has a receipt.
 
 - **`SLSA L3`** — every release binary is signed and attested. Verify:
   ```bash
@@ -436,13 +436,22 @@ The trust strip above (`SLSA L3 · 21 tools · 6 languages · 1 dep · read-only
 
 - **`6 languages`** — `internal/parser/language.go:90` returns `[]Language{Go{}, TypeScript{}, JavaScript{}, Python{}, Rust{}, PHP{}}`. All six grammars are bundled in the single tree-sitter dep (subdirectories of `smacker/go-tree-sitter/python`, `.../php`, `.../rust`, `.../golang`, `.../javascript`, `.../typescript/typescript`). Each language has a parsed-symbols test (`internal/parser/parser_test.go:TestDetectPython`, `TestDetectRust`, `TestDetectPHP`, etc.).
 
-- **`1 dep`** — `go.mod`, in full:
+- **`2 deps`** — `go.mod`, in full:
   ```
   module github.com/kellenff/yactt
   go 1.26.5
-  require github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
+
+  require (
+  	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
+  	github.com/spf13/cobra v1.10.2
+  )
+
+  require (
+  	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+  	github.com/spf13/pflag v1.0.9 // indirect
+  )
   ```
-  The pseudo-version is a literal commit hash of upstream `smacker/go-tree-sitter`. All six grammar bindings yactt actually loads are subpackages of the same module and share the commit pin.
+  The tree-sitter pseudo-version is a literal commit hash of upstream `smacker/go-tree-sitter`. All six grammar bindings yactt actually loads are subpackages of the same module and share the commit pin. The CLI layer uses [Cobra](https://github.com/spf13/cobra) (and its pflag binding) for argument parsing, per-command help, and exit-code mapping — the same machinery used by kubectl, hugo, and gh. The two indirect deps are Cobra's own (mousetrap, pflag), so the total dep surface is the union of two well-known, well-reviewed Go modules and the four they pull in transitively. `govulncheck ./...` is clean as of this release.
 
 - **`read-only`** — the MCP surface exposes no write tools. `edit_impact` analyses renames; it does not apply them. The only paths yactt ever writes to are inside the disk cache directory (`$XDG_CACHE_HOME/yactt/<root-hash>/`) and the registry (`$XDG_CACHE_HOME/yactt/projects.json`). Both are user-scoped and never overlap a target repo. `yactt mcp serve` makes no outbound network calls except to spawn `gopls` / `typescript-language-server` / `pyright-langserver` as child processes.
 

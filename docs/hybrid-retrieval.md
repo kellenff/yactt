@@ -30,7 +30,7 @@ Plug your existing BM25 + vector backends alongside yactt's structural channel.
 The orchestrator fans the query out, then merges the three ranked lists via
 **reciprocal rank fusion (RRF)** with `k=60` (Cormack 2009 default).
 
-## End-to-end CLI (zero deps)
+## End-to-end CLI
 
 The reference orchestrator ships as `yactt hybrid`:
 
@@ -79,7 +79,10 @@ With `--explain` you get the per-channel decomposition:
 The CLI ships the **stdlib-only `BagOfTokens` reference vector backend** —
 good enough to demo the merge and run the benchmark, not competitive with a
 real embedding model. To wire a real vector backend, embed yactt as a Go
-library (see below) — the CLI stays zero-dep.
+library (see below). The CLI's argument parser is [Cobra](https://github.com/spf13/cobra);
+the two direct deps yactt pulls in (`smacker/go-tree-sitter` + `spf13/cobra`)
+and their two indirect deps (`mousetrap` + `pflag`) are listed in full in
+the [README's receipts section](https://github.com/kellenff/yactt#whats-behind-the-badge-row).
 
 ## Embedding yactt as a library (Go)
 

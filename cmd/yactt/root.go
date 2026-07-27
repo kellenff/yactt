@@ -29,7 +29,7 @@ Usage:
                                           See "yactt chunk --help" for options.
   yactt hybrid --repo <path> --query Q    Run hybrid retrieval (structural + BM25 + vector,
                                           merged with RRF). See "yactt hybrid --help".
-  yactt version                           Print version info.
+  yactt version                           Print version info (also: --version / -v flag).
   yactt help                              Show this message.
 
 Project references on the wire
@@ -49,24 +49,26 @@ for ` + "`project`" + ` (a one-release grace period). Stderr emits a
 deprecation notice every time it fires; remove it before v0.2.0.
 `
 
-var rootCmd = &cobra.Command{
-	Use:           "yactt",
-	Short:         "federated code intelligence for AI agents",
-	Long:          rootLong,
-	Version:       version,
-	SilenceUsage:  false,
-	SilenceErrors: true,
-	// No RunE: bare `yactt` and `yactt help` print help.
-}
+var rootCmd = newRootCmd()
 
-func init() {
-	rootCmd.SetVersionTemplate("yactt {{.Version}}\n")
-	rootCmd.AddCommand(
+func newRootCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:           "yactt",
+		Short:         "federated code intelligence for AI agents",
+		Long:          rootLong,
+		Version:       version,
+		SilenceUsage:  false,
+		SilenceErrors: true,
+		// No RunE: bare `yactt` and `yactt help` print help.
+	}
+	cmd.SetVersionTemplate("yactt {{.Version}}\n")
+	cmd.AddCommand(
 		newCmdOverview(),
 		newCmdChunk(),
 		newCmdHybrid(),
 		newCmdMCP(),
 	)
+	return cmd
 }
 
 // Execute runs the CLI and returns the process exit code. main() is
